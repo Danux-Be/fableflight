@@ -3570,6 +3570,8 @@ impl Game {
                         ui.add_space(8.0);
                         let t = if pad { t!("Places, airports and the weather are on the flight panel: Y + View, while you fly.", "Lieux, aéroports et météo sont sur le panneau de vol : Y + View, pendant le vol.") } else { t!("Places, airports and the weather are on the flight panel: Tab, while you fly.", "Lieux, aéroports et météo sont sur le panneau de vol : Tab, pendant le vol.") };
                         ui.label(RichText::new(t).size(12.0).color(DIM));
+                        // (CC BY 4.0 asks for the credit where the model is used.)
+                        ui.label(RichText::new(t!("Regional jet: \"Airplane CRJ-900\" by artoud (Sketchfab), CC BY 4.0, livery removed.", "Jet régional : « Airplane CRJ-900 » par artoud (Sketchfab), CC BY 4.0, livrée retirée.")).size(10.5).color(DIM));
                     }
                 }
                 ui.add_space(6.0);

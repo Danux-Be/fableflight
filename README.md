@@ -47,5 +47,8 @@ The clock can follow real time too ("Real time" above the day sliders): the sun 
 
 Settings (language, sound, camera, HUD, anti-aliasing) are kept in `settings.json` in the config folder (`~/.config/fablegame` on Linux).
 
+# Credits
+The airport and live traffic's regional jet is "Airplane CRJ-900 Cityjet" by artoud (CityJet Training) on [Sketchfab](https://sketchfab.com/3d-models/airplane-crj-900-cityjet-02c4fa44604243c2bb48db64506a39af), licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Changed: its texture baked into vertex colours, the CityJet livery removed (the traffic paints its own made-up liveries), the cabin windows rebuilt as geometry, split into body, fin and gear (`assets/blender/crj900_traffic.py`).
+
 # Contributions
 Please contribute anything if you want to! Improvements to flight sim realism, graphics, optimization, UI, and especially plane models are needed! (((=

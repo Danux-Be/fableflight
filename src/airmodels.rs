@@ -60,7 +60,8 @@ pub struct Type {
 pub const TYPES: [Type; N_TYPES] = [
     Type { name: "light single", len: 8.3, span: 11.0, rf: 0.62, nose: 2.3, door: 0.4, cy: 1.45, sill: 0.9, v_app: 33.0, v_rot: 29.0, accel: 1.9, jet: false, tip: Vec3::new(5.5, 2.25, 0.3), tail: Vec3::new(0.0, 2.7, 5.7), lamp: Vec3::new(2.6, 2.2, -0.2) },
     Type { name: "business jet", len: 15.2, span: 15.9, rf: 0.86, nose: 6.6, door: 4.2, cy: 1.75, sill: 1.1, v_app: 58.0, v_rot: 56.0, accel: 2.6, jet: true, tip: Vec3::new(7.95, 1.9, 1.9), tail: Vec3::new(0.0, 4.5, 8.0), lamp: Vec3::new(1.2, 1.2, -1.0) },
-    Type { name: "regional jet", len: 32.5, span: 23.2, rf: 1.35, nose: 15.0, door: 12.2, cy: 2.5, sill: 1.6, v_app: 68.0, v_rot: 68.0, accel: 2.3, jet: true, tip: Vec3::new(11.6, 2.6, 4.2), tail: Vec3::new(0.0, 7.5, 16.6), lamp: Vec3::new(1.9, 1.8, -2.0) },
+    // (A CRJ-900: see `crj900`.)
+    Type { name: "regional jet", len: 36.2, span: 23.2, rf: 1.38, nose: 19.77, door: 16.6, cy: 2.76, sill: 1.6, v_app: 72.0, v_rot: 76.0, accel: 2.3, jet: true, tip: Vec3::new(11.58, 3.19, 2.95), tail: Vec3::new(0.0, 7.04, 15.6), lamp: Vec3::new(2.2, 2.0, -2.6) },
     Type { name: "narrow-body", len: 37.6, span: 35.8, rf: 1.98, nose: 16.4, door: 12.6, cy: 3.5, sill: 3.4, v_app: 72.0, v_rot: 75.0, accel: 2.2, jet: true, tip: Vec3::new(17.9, 4.6, 5.6), tail: Vec3::new(0.0, 11.8, 20.4), lamp: Vec3::new(3.2, 2.9, -2.5) },
     Type { name: "wide-body", len: 63.7, span: 60.9, rf: 3.1, nose: 27.5, door: 21.5, cy: 5.3, sill: 4.9, v_app: 76.0, v_rot: 82.0, accel: 1.9, jet: true, tip: Vec3::new(30.4, 7.4, 11.0), tail: Vec3::new(0.0, 18.5, 35.0), lamp: Vec3::new(5.0, 4.4, -4.0) },
 ];
@@ -236,6 +237,34 @@ struct Spec {
     /// nose wheel ahead of the origin; main gear half track; wheel radius
     gear: (f32, f32, f32),
     high_wing: bool,
+}
+
+/// The regional jet: a CRJ-900, made from "Airplane CRJ-900 Cityjet" by
+/// artoud (CityJet Training) on Sketchfab, CC BY 4.0, with its texture baked
+/// into vertex colours and its livery taken off (see
+/// assets/blender/crj900_traffic.py, which wrote assets/crj900.bin.gz): body,
+/// fin and winglets (painted in the airline's colour), gear.
+fn crj900() -> [Mesh; 3] {
+    use std::io::Read;
+    let mut data = Vec::new();
+    flate2::read::GzDecoder::new(&include_bytes!("../assets/crj900.bin.gz")[..]).read_to_end(&mut data).expect("crj900 model");
+    let mut at = 0;
+    let mut u32_ = |d: &[u8]| {
+        let v = u32::from_le_bytes(d[at..at + 4].try_into().unwrap());
+        at += 4;
+        v
+    };
+    let mut out: [Mesh; 3] = Default::default();
+    for mesh in &mut out {
+        let (nv, ni) = (u32_(&data) as usize, u32_(&data) as usize);
+        for _ in 0..nv {
+            let f: Vec<f32> = (0..10).map(|_| f32::from_bits(u32_(&data))).collect();
+            mesh.0.push(MeshVertex { pos: [f[0], f[1], f[2]], nrm: [f[3], f[4], f[5]], col: [f[6], f[7], f[8], f[9]] });
+        }
+        mesh.1 = (0..ni).map(|_| u32_(&data)).collect();
+    }
+    assert_eq!(at, data.len(), "crj900.bin: trailing bytes");
+    out
 }
 
 fn aircraft(s: &Spec) -> [Mesh; 3] {
@@ -537,7 +566,7 @@ pub fn build() -> Vec<Mesh> {
     ];
     let mut out = Vec::with_capacity(COUNT);
     for s in &specs {
-        out.extend(aircraft(s));
+        out.extend(if s.t == 2 { crj900() } else { aircraft(s) });
     }
     out.push(papi());
     out.extend(sock());
@@ -547,4 +576,30 @@ pub fn build() -> Vec<Mesh> {
     debug_assert_eq!(out.len(), COUNT);
     let _ = (PI, Vec2::ZERO);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_regional_jet_is_the_crj900_and_fits_its_type() {
+        let [body, livery, gear] = crj900();
+        for (v, i) in [&body, &livery, &gear] {
+            assert!(!v.is_empty() && i.len() % 3 == 0 && i.iter().all(|&k| (k as usize) < v.len()));
+        }
+        let ty = TYPES[2];
+        let all = || body.0.iter().chain(&livery.0).chain(&gear.0);
+        let (zmin, zmax) = all().fold((f32::MAX, f32::MIN), |m, v| (m.0.min(v.pos[2]), m.1.max(v.pos[2])));
+        let (ymin, ymax) = all().fold((f32::MAX, f32::MIN), |m, v| (m.0.min(v.pos[1]), m.1.max(v.pos[1])));
+        let xmax = all().fold(0.0f32, |m, v| m.max(v.pos[0].abs()));
+        // Forward is -Z: the nose is `nose` ahead of the origin, the length and span as the type says.
+        assert!((-zmin - ty.nose).abs() < 0.1 && (zmax - zmin - ty.len).abs() < 0.1, "{zmin} {zmax}");
+        assert!((2.0 * xmax - ty.span).abs() < 0.1, "{xmax}");
+        // The wheels on the ground, the fin as tall as the tail light.
+        assert!(ymin.abs() < 0.05 && (ymax - ty.tail.y).abs() < 0.1, "{ymin} {ymax}");
+        // Glass (the windows), paint (taking the livery's tint) and fixed colours.
+        assert!(body.0.iter().filter(|v| v.col[3] == 0.5).count() > 200);
+        assert!(livery.0.iter().all(|v| v.col[3] == 0.0 || v.col[3] == 0.5));
+    }
 }
