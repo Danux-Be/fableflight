@@ -8,7 +8,8 @@ use crate::roads::RoadNet;
 use crate::trees::{lod_span, tree_jit, NearCell, TreeDim, Under, CARDS, CARD_RANGE, IMP_DIST, LODS, LOD_DIST, LOD_JITTER, TREE_SPECIES, VARIANTS};
 use crate::sources::{Job, JobResult, Loader, DATA_ZOOM, GRID, GV};
 use glam::{DMat4, DVec3, DVec4, Vec3};
-use std::collections::{HashMap, VecDeque};
+use crate::fasthash::FastMap;
+use std::collections::VecDeque;
 
 struct Tile {
     center: DVec3,
@@ -176,8 +177,8 @@ pub struct World {
     /// flat ground everywhere tiles have not loaded, at this height (for tests)
     pub flat: Option<f64>,
     loader: Loader,
-    tiles: HashMap<TileId, Slot>,
-    builds: HashMap<TileId, BSlot>,
+    tiles: FastMap<TileId, Slot>,
+    builds: FastMap<TileId, BSlot>,
     frame: u64,
     in_flight: usize,
     pub max_zoom: u8,
@@ -209,7 +210,7 @@ pub struct World {
     pub stats: (usize, usize, usize), // drawn tiles, loading, building tiles
     last_update: Option<std::time::Instant>,
     uploads: VecDeque<Upload>,
-    fields: HashMap<u32, FSlot>,
+    fields: FastMap<u32, FSlot>,
     /// photorealistic 3D tiles near the aircraft (taken out while it updates)
     photo: Option<Box<crate::tiles3d::Photo>>,
     /// the waves (their CPU copy, so what floats rides what is drawn)
@@ -233,7 +234,7 @@ impl Frustum {
 impl World {
     pub fn new(loader: Loader, max_zoom: u8) -> Self {
         let photo = Some(Box::new(crate::tiles3d::Photo::new(loader.src.google.clone(), Some(loader.src.clone()))));
-        Self { photo, flat: None, loader, tiles: HashMap::new(), builds: HashMap::new(), frame: 0, in_flight: 0, max_zoom, lod_k: 0.62, reach_k: 1.0, city_k: 1.0, tree_far: 3200.0, tree_imp_k: 1.0, cars: (1.0, 2200.0, 1100.0), buildings_on: true, draw: Vec::new(), draw_shore: Vec::new(), draw_b: Vec::new(), wanted: Vec::new(), in_view: Vec::new(), frustum: None, craters: Vec::new(), tree_dims: Vec::new(), tick: 0, stats: (0, 0, 0), last_update: None, uploads: VecDeque::new(), fields: HashMap::new(), ocean: crate::ocean::Ocean::new() }
+        Self { photo, flat: None, loader, tiles: FastMap::default(), builds: FastMap::default(), frame: 0, in_flight: 0, max_zoom, lod_k: 0.62, reach_k: 1.0, city_k: 1.0, tree_far: 3200.0, tree_imp_k: 1.0, cars: (1.0, 2200.0, 1100.0), buildings_on: true, draw: Vec::new(), draw_shore: Vec::new(), draw_b: Vec::new(), wanted: Vec::new(), in_view: Vec::new(), frustum: None, craters: Vec::new(), tree_dims: Vec::new(), tick: 0, stats: (0, 0, 0), last_update: None, uploads: VecDeque::new(), fields: FastMap::default(), ocean: crate::ocean::Ocean::new() }
     }
 
     /// Height of the ground (or water surface) at a lat/lon: the top of the
@@ -425,10 +426,12 @@ impl World {
     /// Height of our own terrain surface (or water surface) at a lat/lon, from
     /// the most detailed tile currently loaded there.
     pub fn terrain_ground(&self, lat: f64, lon: f64) -> Option<Ground> {
+        let (mx, my) = (geo::lon_to_merc_x(lon).rem_euclid(1.0), geo::lat_to_merc_y(lat));
         for z in (2..=self.max_zoom).rev() {
-            let id = TileId::at(lat, lon, z);
+            let id = TileId::at_merc(mx, my, z);
             if let Some(Slot::Ready(t)) = self.tiles.get(&id) {
-                let (u, v) = id.frac(lat, lon);
+                let n = (1u64 << z) as f64;
+                let (u, v) = (mx * n - id.x as f64, my * n - id.y as f64);
                 let (x, y) = ((u * GRID as f64).clamp(0.0, GRID as f64 - 1e-6), (v * GRID as f64).clamp(0.0, GRID as f64 - 1e-6));
                 let (x0, y0) = (x as usize, y as usize);
                 let (fx, fy) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32);
@@ -1062,7 +1065,8 @@ impl World {
 
     /// Zoom of the most detailed terrain tile loaded at a spot.
     pub fn ground_zoom(&self, lat: f64, lon: f64) -> Option<u8> {
-        (2..=self.max_zoom).rev().find(|z| matches!(self.tiles.get(&TileId::at(lat, lon, *z)), Some(Slot::Ready(_))))
+        let (mx, my) = (geo::lon_to_merc_x(lon).rem_euclid(1.0), geo::lat_to_merc_y(lat));
+        (2..=self.max_zoom).rev().find(|z| matches!(self.tiles.get(&TileId::at_merc(mx, my, *z)), Some(Slot::Ready(_))))
     }
 
     /// The nearest airfield that is loaded, within `r` metres.
