@@ -66,9 +66,16 @@ impl TileId {
         (a, (self.x - (a.x << d)) as f64 / n, (self.y - (a.y << d)) as f64 / n, 1.0 / n)
     }
     pub fn at(lat: f64, lon: f64, z: u8) -> TileId {
+        Self::at_merc(lon_to_merc_x(lon).rem_euclid(1.0), lat_to_merc_y(lat), z)
+    }
+    /// The tile at zoom `z` holding a point already in mercator units (x wrapped
+    /// to 0..1). Looking a place up at several zooms converts it once, not per
+    /// zoom (the conversion is a tan and an asinh).
+    #[inline]
+    pub fn at_merc(mx: f64, my: f64, z: u8) -> TileId {
         let n = (1u64 << z) as f64;
-        let x = (lon_to_merc_x(lon).rem_euclid(1.0) * n).floor().min(n - 1.0);
-        let y = (lat_to_merc_y(lat) * n).floor().clamp(0.0, n - 1.0);
+        let x = (mx * n).floor().min(n - 1.0);
+        let y = (my * n).floor().clamp(0.0, n - 1.0);
         TileId::new(z, x as u32, y as u32)
     }
     /// Fractional position of a lat/lon inside this tile (0..1, y down).
