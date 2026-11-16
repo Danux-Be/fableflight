@@ -228,12 +228,12 @@ use crate::i18n::tr;
 use crate::padui::{self, Hint};
 use egui::{Color32, RichText, Stroke};
 
-pub const ACCENT: Color32 = Color32::from_rgb(255, 196, 64);
+pub const ACCENT: Color32 = Color32::from_rgb(72, 184, 255);
 /// dark text on the accent colour
-pub const ON_ACCENT: Color32 = Color32::from_rgb(24, 18, 4);
+pub const ON_ACCENT: Color32 = Color32::from_rgb(3, 14, 28);
 pub const TEXT: Color32 = Color32::from_rgb(232, 235, 240);
 pub const DIM: Color32 = Color32::from_rgb(150, 158, 170);
-pub const PANEL: Color32 = Color32::from_rgba_premultiplied(9, 12, 17, 228);
+pub const PANEL: Color32 = Color32::from_rgba_premultiplied(7, 11, 18, 224);
 /// the see-through glass of the flight panel, over the running game
 pub const GLASS: Color32 = Color32::from_rgba_premultiplied(5, 8, 12, 140);
 
