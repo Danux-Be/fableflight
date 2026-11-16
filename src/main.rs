@@ -72,12 +72,13 @@ enum PauseAct {
     /// start at an airport: which, on final approach (else on the runway)
     Airport(u32, bool),
     Globe,
+    Photo,
     Quit,
 }
 
 use crash::Crash;
 use damage::Tear;
-use glam::{DMat4, DQuat, DVec2, DVec3, Mat4, Vec2, Vec3};
+use glam::{DMat3, DMat4, DQuat, DVec2, DVec3, Mat4, Vec2, Vec3};
 use i18n::{t, tr};
 use padui::Hint;
 use plane::{Controls, Plane};
@@ -184,6 +185,57 @@ impl Loaded {
     }
 }
 
+/// The photo mode (F10): a free camera, the moment held still, and a few
+/// settings for the picture.
+#[derive(Clone, Debug)]
+struct PhotoMode {
+    /// the camera: where (world), which way (-Z forward, Y up), focal length
+    pos: DVec3,
+    q: DQuat,
+    fov: f64,
+    /// riding with the aircraft: the camera in its body frame
+    follow: bool,
+    off: DVec3,
+    q_rel: DQuat,
+    /// exposure (stops), vignette (0..1), filter (0 natural, 1 black and white, 2 sepia, 3 vivid)
+    ev: f32,
+    vignette: f32,
+    filter: u8,
+    grid: bool,
+    /// the clock runs (else the moment holds still)
+    run: bool,
+    /// the settings panel is up; the next frame is taken without it (the shot)
+    panel: bool,
+    taking: bool,
+    /// the last picture saved, and when
+    saved: Option<(String, f64)>,
+    /// what to put back on the way out: view, look angles, HUD
+    before: (u8, f64, f64, bool),
+}
+impl PhotoMode {
+    const FILTERS: [(&'static str, &'static str); 4] = [("Natural", "Naturel"), ("Black and white", "Noir et blanc"), ("Sepia", "Sépia"), ("Vivid", "Vif")];
+}
+
+/// Where a picture taken now goes: the pictures folder, FableFlight, the date
+/// and time (UTC) in the name.
+fn photo_path() -> PathBuf {
+    let dir = dirs::picture_dir().or_else(|| dirs::home_dir().map(|h| h.join("Pictures"))).unwrap_or_default().join("FableFlight");
+    let _ = std::fs::create_dir_all(&dir);
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let (days, s) = ((secs / 86_400) as i64, secs % 86_400);
+    // Days since 1970 to a civil date (H. Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + (m <= 2) as i64;
+    dir.join(format!("fableflight-{y:04}{m:02}{d:02}-{:02}{:02}{:02}.png", s / 3600, s / 60 % 60, s % 60))
+}
+
 struct Args {
     lat: f64,
     lon: f64,
@@ -241,6 +293,8 @@ struct Args {
     photo_detail: Option<gmaps::Detail>,
     cam: Option<(f64, f64, f64)>,
     cockpit: bool,
+    /// --photo seconds[,filter[,stops[,take after]]]: into the photo mode (scripted screenshots)
+    photo: Option<(f64, u8, f32, f64)>,
     /// cockpit vertical field of view (deg)
     fov: Option<f32>,
     mute: bool,
@@ -295,6 +349,7 @@ fn parse_args() -> Args {
         shots: Vec::new(),
         record: None,
         crash_at: None,
+        photo: None,
         boost_at: None,
         stage_at: None,
         engines: None,
@@ -430,6 +485,12 @@ fn parse_args() -> Args {
                 let p: Vec<f64> = v.get(i + 1).map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default();
                 if p.len() == 3 {
                     a.cam = Some((p[0], p[1], p[2]));
+                }
+            }
+            "--photo" => {
+                let p: Vec<f64> = v.get(i + 1).map(|s| s.split(',').filter_map(|x| x.parse().ok()).collect()).unwrap_or_default();
+                if let Some(&t) = p.first() {
+                    a.photo = Some((t, p.get(1).copied().unwrap_or(0.0) as u8, p.get(2).copied().unwrap_or(0.0) as f32, p.get(3).copied().unwrap_or(-1.0)));
                 }
             }
             "--shot" => {
@@ -721,6 +782,14 @@ struct Game {
     wreck_t: f64,
     wreck_seen: f64,
     start_rx: Option<std::sync::mpsc::Receiver<(f64, f64, f64)>>,
+    /// the photo mode, while it is on
+    photo: Option<PhotoMode>,
+    /// the camera as last drawn: where, looking which way, which way up
+    view_axes: (DVec3, DVec3, DVec3),
+    /// --photo: enter the photo mode at this time (s), with this filter and exposure
+    photo_at: Option<(f64, u8, f32, f64)>,
+    /// --photo: take a picture at this time (s)
+    photo_take: Option<f64>,
     name_rx: Option<std::sync::mpsc::Receiver<String>>,
     last_click: f64,
     n_cars: usize,
@@ -877,7 +946,7 @@ impl Game {
             g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
-            start_rx: None, name_rx: None, last_click: -10.0, n_cars: 0, city_glow: 0.0, skyglow: Default::default(), gauges: gauges::Gauges::new(&plane, secs.to_bits()), plane,
+            start_rx: None, photo: None, view_axes: (DVec3::ZERO, DVec3::NEG_Z, DVec3::Y), photo_at: args.photo, photo_take: None, name_rx: None, last_click: -10.0, n_cars: 0, city_glow: 0.0, skyglow: Default::default(), gauges: gauges::Gauges::new(&plane, secs.to_bits()), plane,
             airport_rx: None, hold_spot: None,
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
@@ -1253,7 +1322,196 @@ impl Game {
         db.near(lat.to_degrees(), lon.to_degrees(), 150_000.0).into_iter().find(|(i, _)| { let a = &db.apts[*i as usize]; a.any_paved() && a.longest() > 700.0 }).map(|x| x.0)
     }
 
+    /// Into the photo mode, from the camera as it is now, or back out to the
+    /// view, look angles and HUD there were before.
+    fn toggle_photo(&mut self) {
+        if let Some(p) = self.photo.take() {
+            (self.cam_mode, self.cam_yaw, self.cam_pitch, self.show_hud) = p.before;
+            self.head_live = false;
+            return;
+        }
+        if self.mode != Mode::Fly {
+            return;
+        }
+        let (cam, dir, up) = self.view_axes;
+        let right = dir.cross(up).normalize_or_zero();
+        let up = right.cross(dir).normalize_or_zero();
+        let q = DQuat::from_mat3(&DMat3::from_cols(right, up, -dir)).normalize();
+        let fov = if self.cam_mode == 1 { (60.0 / self.head.zoom).clamp(10.0, 100.0) } else { 60.0 };
+        let before = (self.cam_mode, self.cam_yaw, self.cam_pitch, self.show_hud);
+        self.photo = Some(PhotoMode { pos: cam, q, fov, follow: false, off: DVec3::ZERO, q_rel: DQuat::IDENTITY, ev: 0.0, vignette: 0.35, filter: 0, grid: false, run: false, panel: true, taking: false, saved: None, before });
+        // (The outside view's drawing: no cockpit-only shortcuts.)
+        self.cam_mode = 0;
+        self.show_hud = false;
+    }
+
+    /// The photo camera this frame: flown by the keys (real time, the moment
+    /// may be held still), riding with the aircraft when told to.
+    fn photo_camera(&mut self, dt: f64) -> (DVec3, DVec3, DVec3, f32) {
+        let k = |c: KeyCode| self.keys.contains(&c) as i32 as f64;
+        let fwd = k(KeyCode::KeyW) - k(KeyCode::KeyS);
+        let side = k(KeyCode::KeyD) - k(KeyCode::KeyA);
+        let vert = k(KeyCode::KeyE) - k(KeyCode::KeyQ);
+        let roll = k(KeyCode::KeyC) - k(KeyCode::KeyZ);
+        let fast = k(KeyCode::ShiftLeft).max(k(KeyCode::ShiftRight));
+        let slow = k(KeyCode::ControlLeft).max(k(KeyCode::ControlRight));
+        let speed = 6.0 * if fast > 0.0 { 8.0 } else if slow > 0.0 { 0.15 } else { 1.0 };
+        let (base, rot) = (self.plane.model_pos(), self.plane.rot);
+        let p = self.photo.as_mut().unwrap();
+        if p.follow {
+            p.pos = base + rot * p.off;
+            p.q = rot * p.q_rel;
+        }
+        let f = p.q * DVec3::NEG_Z;
+        let r = p.q * DVec3::X;
+        let up_w = p.pos.normalize();
+        p.pos += (f * fwd + r * side + up_w * vert) * speed * dt;
+        if roll != 0.0 {
+            p.q = (DQuat::from_axis_angle(f, roll * 0.8 * dt) * p.q).normalize();
+        }
+        // (Never under the ground.)
+        let (la, lo, h) = geo::pos_to_lla(p.pos);
+        if let Some(g) = self.world.ground(la, lo) {
+            if h < g.h + 1.0 {
+                p.pos += up_w * (g.h + 1.0 - h);
+            }
+        }
+        if p.follow {
+            p.off = rot.inverse() * (p.pos - base);
+            p.q_rel = rot.inverse() * p.q;
+        }
+        (p.pos, p.q * DVec3::NEG_Z, p.q * DVec3::Y, p.fov.to_radians() as f32)
+    }
+
+    /// Mouse drag in the photo mode: turn about the vertical (the horizon
+    /// stays level) and tilt about the camera's right.
+    fn photo_look(&mut self, dx: f64, dy: f64) {
+        let rot = self.plane.rot;
+        let Some(p) = self.photo.as_mut() else { return };
+        let k = 0.004 * p.fov / 60.0;
+        let up_w = p.pos.normalize();
+        let r = p.q * DVec3::X;
+        p.q = (DQuat::from_axis_angle(up_w, -dx * k) * DQuat::from_axis_angle(r, -dy * k) * p.q).normalize();
+        if p.follow {
+            p.q_rel = rot.inverse() * p.q;
+        }
+    }
+
+    /// The camera back to the aircraft: behind it and a little above, looking at it.
+    fn photo_recentre(&mut self) {
+        let (base, f, up) = (self.plane.model_pos(), self.plane.forward(), self.plane.pos.normalize());
+        let d = self.spec.cam_dist.max(8.0);
+        let pos = base - f * d + up * (d * 0.25);
+        let dir = (base - pos).normalize();
+        let right = dir.cross(up).normalize_or_zero();
+        let q = DQuat::from_mat3(&DMat3::from_cols(right, right.cross(dir), -dir)).normalize();
+        let rot = self.plane.rot;
+        if let Some(p) = self.photo.as_mut() {
+            (p.pos, p.q) = (pos, q);
+            p.off = rot.inverse() * (pos - base);
+            p.q_rel = rot.inverse() * q;
+        }
+    }
+
+    /// Takes the picture: the next frame, without the panel, into the pictures folder.
+    fn take_photo(&mut self) {
+        let path = photo_path();
+        if let Some(p) = self.photo.as_mut() {
+            p.taking = true;
+            p.saved = Some((path.display().to_string(), self.real));
+        }
+        self.shots.insert(0, (0.0, path, None));
+    }
+
+    /// The photo mode's settings, the rule-of-thirds grid, and the keys.
+    fn photo_panel(&mut self, ctx: &egui::Context) {
+        use egui::{Color32, RichText};
+        let Some(p) = self.photo.as_ref() else { return };
+        if p.taking {
+            return;
+        }
+        let screen = ctx.content_rect();
+        if p.grid {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            let st = egui::Stroke::new(1.0, Color32::from_white_alpha(90));
+            for k in 1..3 {
+                let (x, y) = (screen.left() + screen.width() * k as f32 / 3.0, screen.top() + screen.height() * k as f32 / 3.0);
+                painter.line_segment([egui::pos2(x, screen.top()), egui::pos2(x, screen.bottom())], st);
+                painter.line_segment([egui::pos2(screen.left(), y), egui::pos2(screen.right(), y)], st);
+            }
+        }
+        if !p.panel {
+            return;
+        }
+        let local = (self.utc + geo::pos_to_lla(self.plane.pos).1.to_degrees() / 15.0).rem_euclid(24.0);
+        let mut hour = local;
+        let mut take = false;
+        let mut recentre = false;
+        let mut quit = false;
+        let mut p = p.clone();
+        egui::Window::new(t!("PHOTO MODE", "MODE PHOTO")).anchor(egui::Align2::RIGHT_TOP, [-14.0, 14.0]).resizable(false).collapsible(false).default_width(270.0).show(ctx, |ui| {
+            let dim = |s: &str| RichText::new(s.to_string()).size(11.5).color(Color32::from_gray(160));
+            if ui.button(RichText::new(t!("Take the picture (F12)", "Prendre la photo (F12)")).strong()).clicked() {
+                take = true;
+            }
+            if let Some((path, t)) = &p.saved {
+                if self.real - t < 6.0 {
+                    ui.label(dim(&t!("Saved: {}", "Enregistrée : {}", path)));
+                }
+            }
+            ui.separator();
+            ui.add(egui::Slider::new(&mut p.fov, 10.0..=100.0).text(t!("field of view °", "champ de vision °")).fixed_decimals(0));
+            ui.add(egui::Slider::new(&mut p.ev, -3.0..=3.0).text(t!("exposure (stops)", "exposition (IL)")).fixed_decimals(1));
+            ui.add(egui::Slider::new(&mut p.vignette, 0.0..=1.5).text(t!("vignette", "vignettage")).fixed_decimals(2));
+            egui::ComboBox::from_label(t!("filter", "filtre")).selected_text(if i18n::is_fr() { PhotoMode::FILTERS[p.filter as usize].1 } else { PhotoMode::FILTERS[p.filter as usize].0 }).show_ui(ui, |ui| {
+                for (k, (en, fr)) in PhotoMode::FILTERS.iter().enumerate() {
+                    ui.selectable_value(&mut p.filter, k as u8, if i18n::is_fr() { *fr } else { *en });
+                }
+            });
+            ui.add(egui::Slider::new(&mut hour, 0.0..=23.99).text(t!("time of day", "heure locale")).custom_formatter(|v, _| menu::hhmm(v)));
+            ui.checkbox(&mut p.grid, t!("Rule-of-thirds grid", "Grille des tiers"));
+            ui.checkbox(&mut p.run, t!("Let time run", "Laisser le temps s'écouler"));
+            ui.checkbox(&mut p.follow, t!("Ride with the aircraft", "Suivre l'avion"));
+            if ui.button(t!("Back to the aircraft", "Recentrer sur l'avion")).clicked() {
+                recentre = true;
+            }
+            ui.separator();
+            ui.label(dim(t!("W A S D move · Q E down / up · Z C roll · Shift fast, Ctrl slow · drag to look · wheel: zoom · H hides this · F10 or Esc: back to flying", "Z Q S D (W A S D) déplacer · A E (Q E) descendre / monter · W C (Z C) inclinaison · Maj vite, Ctrl lent · glisser pour regarder · molette : zoom · H masque ce panneau · F10 ou Échap : reprendre le vol")));
+            if ui.button(t!("Back to flying", "Reprendre le vol")).clicked() {
+                quit = true;
+            }
+        });
+        if (hour - local).abs() > 1e-6 {
+            self.wx.real_time = false;
+            self.utc = (self.utc + hour - local).rem_euclid(24.0);
+        }
+        let rot = self.plane.rot;
+        let base = self.plane.model_pos();
+        if let Some(cur) = self.photo.as_mut() {
+            if p.follow && !cur.follow {
+                p.off = rot.inverse() * (cur.pos - base);
+                p.q_rel = rot.inverse() * cur.q;
+            }
+            // (The camera itself is only moved by the camera code.)
+            (p.pos, p.q) = (cur.pos, cur.q);
+            *cur = p;
+        }
+        if recentre {
+            self.photo_recentre();
+        }
+        if take {
+            self.take_photo();
+        }
+        if quit {
+            self.toggle_photo();
+        }
+    }
+
     fn controls(&mut self, dt: f64) -> Controls {
+        // (In the photo mode the keys fly the camera, not the aircraft.)
+        if self.photo.is_some() {
+            return Controls { brake: self.parking_brake, ..Default::default() };
+        }
         let k = |c: KeyCode| self.keys.contains(&c);
         let ax = |pos: bool, neg: bool| (pos as i32 - neg as i32) as f64;
         let mut c = Controls {
@@ -2084,6 +2342,23 @@ impl Game {
             }
             return;
         }
+        if self.photo.is_some() {
+            match code {
+                KeyCode::F10 | KeyCode::Escape => self.toggle_photo(),
+                KeyCode::F12 | KeyCode::Enter | KeyCode::NumpadEnter => self.take_photo(),
+                KeyCode::KeyH => {
+                    if let Some(p) = self.photo.as_mut() {
+                        p.panel = !p.panel;
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+        if code == KeyCode::F10 && !self.pause_open {
+            self.toggle_photo();
+            return;
+        }
         if self.pause_open {
             // The pause menu has the keyboard (and the game is stopped) until it closes.
             match code {
@@ -2749,7 +3024,22 @@ impl Game {
                 self.pause_at = None;
             }
         }
-        let scale = if self.paused || in_menu || self.pause_open || self.real < self.hold { 0.0 } else { 1.0 };
+        if let Some((t, filter, ev, take)) = self.photo_at {
+            if self.real > t && self.mode == Mode::Fly {
+                self.photo_at = None;
+                self.photo_take = (take >= 0.0).then_some(self.real + take);
+                self.toggle_photo();
+                if let Some(p) = self.photo.as_mut() {
+                    (p.filter, p.ev) = (filter.min(3), ev);
+                }
+            }
+        }
+        if self.photo_take.is_some_and(|t| self.real > t) {
+            self.photo_take = None;
+            self.take_photo();
+        }
+        let still = self.photo.as_ref().is_some_and(|p| !p.run);
+        let scale = if self.paused || in_menu || self.pause_open || self.real < self.hold || still { 0.0 } else { 1.0 };
         let dt = dt_real * scale;
         self.time += dt;
         if !in_menu {
@@ -3071,6 +3361,10 @@ impl Game {
                 self.doy = doy;
             }
             self.cam_pos = cam;
+        } else if self.photo.is_some() {
+            let (c, d, u, f) = self.photo_camera(dt_real);
+            (cam, dir, upv, fov) = (c, d, u, f);
+            self.cam_pos = cam;
         } else if self.crashed {
             let cr = self.crash.as_ref().unwrap();
             // After an impact up the side of a building, the wreck ends up in the street below.
@@ -3196,6 +3490,7 @@ impl Game {
             Some(g) if calt < g + 1.5 => cam + cam.normalize() * (g + 1.5 - calt),
             _ => cam,
         };
+        self.view_axes = (cam, dir, upv);
         let calt = geo::pos_to_lla(cam).2;
         let agl = calt - ground.unwrap_or(0.0);
         let scrape = if steps > 0 { (scrape_n as f32 / steps as f32 * 0.5).min(1.0) } else { 0.0 };
@@ -3266,7 +3561,7 @@ impl Game {
         // Exposure moves in stops through twilight (a straight blend opens up
         // far too early, washing the city out while the sky still glows).
         // Night stays a night photograph: dark walls, bright windows.
-        let exposure = (6.0f32.ln() + (0.5f32.ln() - 6.0f32.ln()) * day).exp() * if self.cam_mode == 1 && !self.crashed && !in_menu { 2f32.powf(self.head.adapt) } else { 1.0 };
+        let exposure = (6.0f32.ln() + (0.5f32.ln() - 6.0f32.ln()) * day).exp() * if self.cam_mode == 1 && !self.crashed && !in_menu && self.photo.is_none() { 2f32.powf(self.head.adapt) } else { 1.0 } * self.photo.as_ref().map_or(1.0, |p| 2f32.powf(p.ev));
         let v4 = |v: DVec3, w: f64| [v.x as f32, v.y as f32, v.z as f32, w as f32];
         let cam_right = dir.cross(upv).normalize();
         let cam_up = cam_right.cross(dir);
@@ -3348,6 +3643,7 @@ impl Game {
             foam: [[0.0; 4]; 16],
             start: [if in_menu { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
             quality: [0.0; 4],
+            pic: self.photo.as_ref().map_or([0.35, 0.0, 0.0, 0.0], |p| [p.vignette, p.filter as f32, 0.0, 0.0]),
             detail: [self.gfx.city_k(), self.gfx.tree_imp_k(), self.gfx.tree_far(), 0.0],
             glow_c: glow[0],
             glow_e: glow[1],
@@ -3593,6 +3889,10 @@ impl Game {
             Some((t, _, _)) if self.real >= *t => {
                 // Logged with each scripted shot, for comparing builds.
                 log::info!("fps {:.1}", self.fps);
+                // (A photo's frame was drawn without the panel; it comes back now.)
+                if let Some(p) = self.photo.as_mut() {
+                    p.taking = false;
+                }
                 Some(self.shots.remove(0).1)
             }
             _ => None,
@@ -4399,6 +4699,9 @@ impl Game {
                         if menu::wide_button(ui, t!("Respawn in the air", "Réapparaître en vol"), Hint::of("R", ""), false, true).clicked() {
                             *act = Some(PauseAct::Respawn);
                         }
+                        if menu::wide_button(ui, t!("Photo mode", "Mode photo"), Hint::of("F10", ""), false, true).clicked() {
+                            *act = Some(PauseAct::Photo);
+                        }
                         if menu::wide_button(ui, t!("Back to the globe", "Retour au globe"), Hint::Text(t!("choose a new start", "choisir un nouveau départ")), false, true).clicked() {
                             *act = Some(PauseAct::Globe);
                         }
@@ -4864,6 +5167,7 @@ impl Game {
             if self.show_hud && self.radios.show {
                 self.nav_overlay(ctx, hdg);
             }
+            self.photo_panel(ctx);
             // Real traffic: a tag beside each aircraft within range.
             if let (true, Some((vp, cam))) = (self.show_hud && self.live.enabled(), self.live_view) {
                 let screen = ctx.content_rect();
@@ -5090,6 +5394,10 @@ impl Game {
                 self.start_airport(i, None, appr, true);
             }
             Some(PauseAct::Globe) => self.to_globe(),
+            Some(PauseAct::Photo) => {
+                self.set_pause_menu(false);
+                self.toggle_photo();
+            }
             Some(PauseAct::Quit) => self.quit = true,
             None => {}
         }
@@ -5238,6 +5546,10 @@ impl ApplicationHandler for App {
                         let h = g.window.inner_size().height.max(1) as f64;
                         g.menu.drag(position.x - x, position.y - y, h, 60f64.to_radians());
                     }
+                } else if g.drag && g.photo.is_some() {
+                    if let Some((x, y)) = g.last_cursor {
+                        g.photo_look(position.x - x, position.y - y);
+                    }
                 } else if g.drag && !g.pause_open {
                     if let Some((x, y)) = g.last_cursor {
                         // Zoomed in, the view turns slower under the mouse.
@@ -5255,6 +5567,8 @@ impl ApplicationHandler for App {
                 };
                 if g.mode == Mode::Menu {
                     g.menu.zoom(d);
+                } else if let Some(p) = g.photo.as_mut() {
+                    p.fov = (p.fov * (1.0 - d * 0.08)).clamp(10.0, 100.0);
                 } else if g.cam_mode == 1 && !g.crashed {
                     g.head.zoom_by(d);
                 } else {

@@ -68,6 +68,9 @@ struct Globals {
   // Graphics settings: cloud step length (1 = High), render resolution scale,
   // 1 / window width and height (what the tonemap writes).
   quality: vec4f,
+  // The picture (main.rs photo mode): vignette strength (0.35 normally), filter
+  // (0 natural, 1 black and white, 2 sepia, 3 vivid).
+  pic: vec4f,
   // Graphics settings: building level-of-detail distance factor, tree
   // impostor distance factor, how far out trees are drawn (m). 0 = High.
   detail: vec4f,

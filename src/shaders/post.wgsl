@@ -64,10 +64,18 @@ fn finish(scene: vec3f, in: FsIn) -> vec4f {
   // Lights bloom more at night, when the eye is dark-adapted.
   c = mix(c, bloom, mix(0.035, 0.06, smoothstep(1.0, 9.0, G.time.z)));
   c *= G.time.z;
-  // Gentle vignette.
+  // Gentle vignette (the photo mode sets how strong).
   let q = in.uv - 0.5;
-  c *= 1.0 - dot(q, q) * 0.35;
+  c *= max(1.0 - dot(q, q) * G.pic.x, 0.0);
   c = agx(c * AGX_EXPOSURE);
+  // The photo mode's filters, on the finished picture.
+  let f = u32(G.pic.y + 0.5);
+  if (f != 0u) {
+    let l = dot(c, vec3f(0.2126, 0.7152, 0.0722));
+    if (f == 1u) { c = vec3f(l); }
+    if (f == 2u) { c = clamp(vec3f(l * 1.07, l * 0.92, l * 0.72) + vec3f(0.03, 0.015, 0.0), vec3f(0.0), vec3f(1.0)); }
+    if (f == 3u) { c = clamp(mix(vec3f(l), c, 1.35), vec3f(0.0), vec3f(1.0)); }
+  }
   c += (ign(in.pos.xy + 17.0) - 0.5) / 255.0;
   return vec4f(c, 1.0);
 }

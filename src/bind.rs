@@ -135,6 +135,7 @@ pub const ACTIONS: &[Action] = &[
     act("heading_sync", KeyCode::KeyK, "Heading indicator to compass", "Recaler le conservateur de cap"),
     act("camera", KeyCode::KeyC, "Chase / cockpit camera", "Caméra extérieure / cockpit"),
     act("hud", KeyCode::KeyH, "Hide / show the HUD", "Masquer / afficher le HUD"),
+    act("photo", KeyCode::F10, "Photo mode", "Mode photo"),
     act("goto", KeyCode::KeyG, "Go to a place", "Aller à un lieu"),
     act("respawn", KeyCode::KeyR, "Respawn in the air", "Réapparaître en vol"),
     act("pause", KeyCode::KeyP, "Pause without the menu", "Pause sans le menu"),

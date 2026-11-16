@@ -151,6 +151,9 @@ pub struct Globals {
     /// graphics settings (set by the renderer): cloud step length (1 = High),
     /// render resolution scale, 1 / window width and height (the tonemap's output)
     pub quality: [f32; 4],
+    /// the picture (main.rs photo mode): vignette strength (0.35 normally),
+    /// filter (0 natural, 1 black and white, 2 sepia, 3 vivid)
+    pub pic: [f32; 4],
     /// graphics settings (graphics.rs): building LOD distance factor, tree
     /// impostor distance factor, how far out trees are drawn (m); 0 = High
     pub detail: [f32; 4],

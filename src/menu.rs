@@ -331,6 +331,7 @@ pub const CONTROLS: &[(&str, &[(&str, &str)])] = &[
         ("Mouse wheel", "camera distance / cockpit zoom"),
         ("H", "hide / show the HUD"),
         ("F12", "screenshot"),
+        ("F10", "photo mode: free camera, filters, time of day"),
     ]),
     ("WORLD", &[
         ("T / Y", "time of day forward / back"),

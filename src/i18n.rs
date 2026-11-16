@@ -163,6 +163,7 @@ fn fr(en: &str) -> Option<&'static str> {
         "thrust reversers, on the ground (hold)" => "inverseurs de poussée, au sol (maintenir)",
         "set the heading indicator to the compass" => "recaler le conservateur de cap sur le compas",
         "chase / cockpit camera" => "caméra extérieure / cockpit",
+        "photo mode: free camera, filters, time of day" => "mode photo : caméra libre, filtres, heure du jour",
         "look around" => "regarder autour",
         "camera distance / cockpit zoom" => "distance caméra / zoom cockpit",
         "hide / show the HUD" => "masquer / afficher le HUD",
