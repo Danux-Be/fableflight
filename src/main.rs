@@ -683,6 +683,8 @@ struct Game {
     /// where the middle of the view is, across the window (0..1; 0.5 but
     /// across several monitors, where it is on the menus' screen)
     view_cx: f64,
+    /// spread the window over the chosen monitors (X11) once it is up
+    span_pending: bool,
     gfx_applied: Option<graphics::Graphics>,
     /// where the aircraft was drawn last frame, relative to that frame's camera
     prev_plane: Mat4,
@@ -936,7 +938,7 @@ impl Game {
         let mut g = Self {
             gkey: src.google.key(), gkey_show: false, gm_logo: None, stills: vec![None; aircraft::ALL.len()], window, r, world, src, spec, model, piece_mesh, group_mesh, piece_cut, group_pivots, hangar: Vec::new(), building: Vec::new(), crashed: false, crash: None, crash_real: 0.0, egui_ctx, egui_state, keys: HashSet::new(), drag: false, last_cursor: None,
             cam_yaw: cy.to_radians(), cam_pitch: cp, cam_dist: cd, cam_mode: if args.cockpit { 1 } else { prefs.cam_mode }, cam_pos, cam_dir: -plane.forward(), cam_look: plane.pos, orbit: 0.0, cam_rise: 0.0, cam_clear_t: 0.0, cam_ang: None, cam_hold: 0.0,
-            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, display: args.display_settings(), x11: args.x11, view_cx: 0.5, gfx_applied: None, prev_plane: Mat4::IDENTITY, plane_box, lamps,
+            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, display: args.display_settings(), x11: args.x11, view_cx: 0.5, span_pending: args.display_settings().mode == display::Mode::Span, gfx_applied: None, prev_plane: Mat4::IDENTITY, plane_box, lamps,
             frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, goto_open: false, goto_text: String::new(), goto_rx: None,
             status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, parking_brake: false, cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
@@ -3292,6 +3294,15 @@ impl Game {
 
         // ---- camera
         self.apply_graphics();
+        // (Full screen over the chosen monitors, asked once the window is up: X11.)
+        #[cfg(target_os = "linux")]
+        if self.span_pending && self.frame > 3 {
+            self.span_pending = false;
+            let chosen = self.display.chosen(&display::layout(self.window.available_monitors()));
+            if let Err(e) = display::x11_cover(&self.window, &chosen) {
+                log::warn!("display: full screen over the monitors: {e}");
+            }
+        }
         let size = self.window.inner_size();
         let (w, h) = (size.width.max(1) as f32, size.height.max(1) as f32);
         // the size the scene is drawn at (graphics settings: render resolution)
@@ -4399,6 +4410,7 @@ impl Game {
     /// spanning the monitors needs a restart (Wayland, see display.rs).
     fn set_display(&mut self) {
         self.display.apply(&self.window);
+        self.span_pending = self.display.mode == display::Mode::Span;
         self.display.save();
         if self.display.mode == display::Mode::Span && !self.x11 && std::env::var_os("WAYLAND_DISPLAY").is_some() {
             self.status = t!("Restart the game to spread it over all the screens (Wayland).", "Relancez le jeu pour l'étendre sur tous les écrans (Wayland).").into();

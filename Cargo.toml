@@ -31,3 +31,8 @@ roxmltree = "0.20"
 
 [dev-dependencies]
 naga = { version = "=30.0.1", features = ["wgsl-in"] }
+
+# Spreading the window over all the monitors under X11 (display.rs); already
+# in the tree through winit.
+[target.'cfg(target_os = "linux")'.dependencies]
+x11rb = "0.13"

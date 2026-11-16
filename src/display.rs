@@ -8,9 +8,8 @@
 //! within `wide_hfov` (a flat 32:9 frustum at the usual vertical angle would
 //! be a fish-eye). A Wayland client cannot place its window, so on Wayland
 //! the game runs through XWayland in that mode (decided at start: see
-//! `wants_x11`). (Not the window manager's full screen over several monitors,
-//! `_NET_WM_FULLSCREEN_MONITORS`: KWin under Wayland then shows the window
-//! wrongly on each screen, though screenshots look right.) The view straight
+//! `wants_x11`), and the window is put over the monitors by hand (see
+//! `x11_cover`: KDE's full screen shows it wrongly). The view straight
 //! ahead goes on the menus' screen unless `centre_on_ui` is off.
 use std::path::PathBuf;
 use winit::window::{Fullscreen, Window};
@@ -180,6 +179,46 @@ pub fn span_box(screens: &[Screen]) -> Option<(winit::dpi::PhysicalPosition<i32>
         y1 = y1.max(m.y + m.h as i32);
     }
     (x1 > x0 && y1 > y0).then(|| (winit::dpi::PhysicalPosition::new(x0, y0), winit::dpi::PhysicalSize::new((x1 - x0) as u32, (y1 - y0) as u32)))
+}
+
+/// Under X11: puts the window over the chosen monitors once it is up, over
+/// the panels (kept above them), without the window manager's full screen,
+/// which KWin under Wayland shows wrongly over several monitors (each
+/// screen gets its own wrongly scaled copy, though screenshots look right).
+#[cfg(target_os = "linux")]
+pub fn x11_cover(w: &Window, chosen: &[Screen]) -> Result<(), String> {
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt as _, EventMask, PropMode};
+    use x11rb::wrapper::ConnectionExt as _;
+    let win = match w.window_handle().map_err(|e| e.to_string())?.as_raw() {
+        RawWindowHandle::Xlib(h) => h.window as u32,
+        RawWindowHandle::Xcb(h) => h.window.get(),
+        _ => return Ok(()),
+    };
+    let (p, s) = span_box(chosen).ok_or("no monitors")?;
+    let (conn, screen) = x11rb::connect(None).map_err(|e| e.to_string())?;
+    let root = conn.setup().roots[screen].root;
+    let atom = |n: &str| -> Result<u32, String> { Ok(conn.intern_atom(false, n.as_bytes()).map_err(|e| e.to_string())?.reply().map_err(|e| e.to_string())?.atom) };
+    let (state, above) = (atom("_NET_WM_STATE")?, atom("_NET_WM_STATE_ABOVE")?);
+    // (A hair short of opaque: KWin then composites the window rather than
+    // handing our buffer straight to each screen, which it gets wrong for a
+    // window over several of them; nothing shows.)
+    let opacity = atom("_NET_WM_WINDOW_OPACITY")?;
+    conn.change_property32(PropMode::REPLACE, win, opacity, AtomEnum::CARDINAL, &[0xFFFF_FFFE]).map_err(|e| e.to_string())?;
+    let ev = ClientMessageEvent::new(32, win, state, [1, above, 0, 1, 0]);
+    conn.send_event(false, root, EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY, ev).map_err(|e| e.to_string())?;
+    // (One row short of the screens' height: KWin takes a borderless window
+    // the size of the screens for an old-style full-screen one, and shows it
+    // over several monitors as a wrongly scaled copy on each.)
+    let h = s.height - 1;
+    conn.configure_window(win, &ConfigureWindowAux::new().x(p.x).y(p.y).width(s.width).height(h)).map_err(|e| e.to_string())?;
+    // (and as the window manager would have it asked, for one that only listens so)
+    let moveresize = atom("_NET_MOVERESIZE_WINDOW")?;
+    let ev = ClientMessageEvent::new(32, win, moveresize, [(0xF << 8) | (2 << 12), p.x as u32, p.y as u32, s.width, h]);
+    conn.send_event(false, root, EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY, ev).map_err(|e| e.to_string())?;
+    conn.flush().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Whether to run through X11 (XWayland) rather than Wayland: when the
