@@ -680,8 +680,9 @@ struct Game {
     display: display::Display,
     /// the game runs through X11 (XWayland), so the window can span the monitors
     x11: bool,
-    /// spread the window over the chosen monitors (X11) once it is up
-    span_pending: bool,
+    /// where the middle of the view is, across the window (0..1; 0.5 but
+    /// across several monitors, where it is on the menus' screen)
+    view_cx: f64,
     gfx_applied: Option<graphics::Graphics>,
     /// where the aircraft was drawn last frame, relative to that frame's camera
     prev_plane: Mat4,
@@ -935,7 +936,7 @@ impl Game {
         let mut g = Self {
             gkey: src.google.key(), gkey_show: false, gm_logo: None, stills: vec![None; aircraft::ALL.len()], window, r, world, src, spec, model, piece_mesh, group_mesh, piece_cut, group_pivots, hangar: Vec::new(), building: Vec::new(), crashed: false, crash: None, crash_real: 0.0, egui_ctx, egui_state, keys: HashSet::new(), drag: false, last_cursor: None,
             cam_yaw: cy.to_radians(), cam_pitch: cp, cam_dist: cd, cam_mode: if args.cockpit { 1 } else { prefs.cam_mode }, cam_pos, cam_dir: -plane.forward(), cam_look: plane.pos, orbit: 0.0, cam_rise: 0.0, cam_clear_t: 0.0, cam_ang: None, cam_hold: 0.0,
-            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, display: args.display_settings(), x11: args.x11, span_pending: args.x11, gfx_applied: None, prev_plane: Mat4::IDENTITY, plane_box, lamps,
+            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, display: args.display_settings(), x11: args.x11, view_cx: 0.5, gfx_applied: None, prev_plane: Mat4::IDENTITY, plane_box, lamps,
             frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, goto_open: false, goto_text: String::new(), goto_rx: None,
             status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, parking_brake: false, cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
@@ -2249,10 +2250,11 @@ impl Game {
     fn pad_pick_centre(&mut self) {
         let size = self.window.inner_size();
         let (w, h) = (size.width.max(1) as f64, size.height.max(1) as f64);
-        let near = self.menu.marker_near(w * 0.5, h * 0.5, 28.0 * self.window.scale_factor());
+        let cx = w * self.view_cx;
+        let near = self.menu.marker_near(cx, h * 0.5, 28.0 * self.window.scale_factor());
         if let Some(i) = near {
             self.choose_airport(i);
-        } else if let Some((lat, lon)) = self.menu.pick_at(w * 0.5, h * 0.5, w, h, 60f64.to_radians()) {
+        } else if let Some((lat, lon)) = self.menu.pick_at(cx, h * 0.5, w, h, 60f64.to_radians(), self.view_cx) {
             self.pick(lat, lon);
         }
     }
@@ -2467,6 +2469,15 @@ impl Game {
     /// Across several monitors: where the interface goes in the window
     /// (x, y, width, height in pixels): the chosen screen, else the system's
     /// main one if it is spanned, else the first spanned.
+    /// Where the middle of the view goes, across the window (0..1).
+    fn view_centre(&self, in_menu: bool) -> f64 {
+        if !(in_menu || self.display.centre_on_ui) {
+            return 0.5;
+        }
+        let w = self.window.inner_size().width.max(1) as f64;
+        self.ui_screen_rect().map_or(0.5, |r| ((r.0 + r.2 * 0.5) as f64 / w).clamp(0.0, 1.0))
+    }
+
     fn ui_screen_rect(&self) -> Option<(f32, f32, f32, f32)> {
         if self.display.mode != display::Mode::Span {
             return None;
@@ -3281,15 +3292,6 @@ impl Game {
 
         // ---- camera
         self.apply_graphics();
-        // (Full screen over the chosen monitors, asked once the window is up: X11.)
-        #[cfg(target_os = "linux")]
-        if self.span_pending && self.frame > 3 {
-            self.span_pending = false;
-            let chosen = self.display.chosen(&display::layout(self.window.available_monitors()));
-            if let Err(e) = display::x11_fullscreen_all(&self.window, &chosen) {
-                log::warn!("display: full screen over the monitors: {e}");
-            }
-        }
         let size = self.window.inner_size();
         let (w, h) = (size.width.max(1) as f32, size.height.max(1) as f32);
         // the size the scene is drawn at (graphics settings: render resolution)
@@ -3444,8 +3446,14 @@ impl Game {
 
         let near = if in_menu { (calt * 0.02).clamp(0.4, 20_000.0) as f32 } else if self.cam_mode == 1 && !self.crashed { 0.03f32 } else { 0.25f32 };
         // (Across wide monitors the horizontal angle is kept sane: display.rs.)
-        let fov = if in_menu { fov } else { display::fit_fov(fov, w / h, self.display.wide_hfov) };
-        let proj = perspective_rev(fov, w / h, near);
+        // The middle of the view goes on the menus' screen across several
+        // monitors (the globe always; in flight unless the view is to be
+        // centred on them all): the projection is shifted sideways.
+        self.view_cx = self.view_centre(in_menu);
+        let shift = (self.view_cx * 2.0 - 1.0) as f32;
+        let fov = if in_menu { fov } else { display::fit_fov(fov, w / h * (1.0 + shift.abs()), self.display.wide_hfov) };
+        let mut proj = perspective_rev(fov, w / h, near);
+        proj.z_axis.x = -shift;
         let view = look_to(Vec3::ZERO, dir.as_vec3(), upv.as_vec3());
         let vp = proj * view;
         // Temporal anti-aliasing: each frame is drawn a different fraction of
@@ -3866,7 +3874,7 @@ impl Game {
         let had_shots = shot.is_some() && self.shots.is_empty();
         let (skin_slots, skins) = if in_menu { (Vec::new(), Vec::new()) } else { self.destr.skin_draws() };
         self.r.stats[0] += now.elapsed().as_secs_f64();
-        self.r.render(Frame { g, tiles, details, photo, skins, skin_slots, fields, lights: air_lights, objs, insts, fall, near, casc_vp, shore: sf.step, shore_c, shore_tiles, psim, sim_steps: dt > 0.0, fluid, ocean: self.world.ocean.uniform(), egui: Some(ui), shot, logo: in_menu.then(|| self.window.scale_factor() as f32), cover, glow: glow_px });
+        self.r.render(Frame { g, tiles, details, photo, skins, skin_slots, fields, lights: air_lights, objs, insts, fall, near, casc_vp, shore: sf.step, shore_c, shore_tiles, psim, sim_steps: dt > 0.0, fluid, ocean: self.world.ocean.uniform(), egui: Some(ui), shot, logo: in_menu.then(|| (self.window.scale_factor() as f32, self.view_cx as f32)), cover, glow: glow_px });
         if (had_shots && std::env::args().any(|a| a == "--shot") && self.record.is_none()) || rec_done {
             self.quit = true;
         }
@@ -3887,7 +3895,7 @@ impl Game {
             use egui::{Align2, Color32, FontId, RichText};
             let ppp = ctx.pixels_per_point();
             // With a gamepad, X starts at the crosshair in the middle of the screen.
-            let aim = padui::active().then(|| egui::pos2(w * 0.5 / ppp, h * 0.5 / ppp));
+            let aim = padui::active().then(|| egui::pos2(w * self.view_cx as f32 / ppp, h * 0.5 / ppp));
             // Screen position of a place, if it is on the near side of the planet.
             let project = |lat: f64, lon: f64| -> Option<egui::Pos2> {
                 let p = geo::lla_to_pos(lat.to_radians(), lon.to_radians(), 0.0);
@@ -4391,7 +4399,6 @@ impl Game {
     /// spanning the monitors needs a restart (Wayland, see display.rs).
     fn set_display(&mut self) {
         self.display.apply(&self.window);
-        self.span_pending = self.display.mode == display::Mode::Span && self.x11;
         self.display.save();
         if self.display.mode == display::Mode::Span && !self.x11 && std::env::var_os("WAYLAND_DISPLAY").is_some() {
             self.status = t!("Restart the game to spread it over all the screens (Wayland).", "Relancez le jeu pour l'étendre sur tous les écrans (Wayland).").into();
@@ -4483,6 +4490,9 @@ impl Game {
                         }
                     });
                 });
+            }
+            if chosen.len() > 1 {
+                ui.checkbox(&mut self.display.centre_on_ui, t!("Straight ahead on that screen (else in the middle of all)", "Vue de face sur cet écran (sinon au milieu de tous)"));
             }
             ui.horizontal(|ui| {
                 ui.label(t!("Widest view", "Vue la plus large"));
@@ -5593,7 +5603,7 @@ impl ApplicationHandler for App {
                             } else {
                                 g.choose_airport(i);
                             }
-                        } else if let Some((lat, lon)) = g.menu.pick_at(x, y, w, h, 60f64.to_radians()) {
+                        } else if let Some((lat, lon)) = g.menu.pick_at(x, y, w, h, 60f64.to_radians(), g.view_cx) {
                             let double = g.real - g.last_click < 0.45;
                             g.last_click = g.real;
                             if double && g.menu.pick.is_some() {

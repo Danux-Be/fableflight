@@ -8,7 +8,10 @@
 //! within `wide_hfov` (a flat 32:9 frustum at the usual vertical angle would
 //! be a fish-eye). A Wayland client cannot place its window, so on Wayland
 //! the game runs through XWayland in that mode (decided at start: see
-//! `wants_x11`).
+//! `wants_x11`). (Not the window manager's full screen over several monitors,
+//! `_NET_WM_FULLSCREEN_MONITORS`: KWin under Wayland then shows the window
+//! wrongly on each screen, though screenshots look right.) The view straight
+//! ahead goes on the menus' screen unless `centre_on_ui` is off.
 use std::path::PathBuf;
 use winit::window::{Fullscreen, Window};
 
@@ -49,6 +52,9 @@ pub struct Display {
     pub screens: Vec<String>,
     /// across the monitors: the one the menus and instruments are on (None: the system's main one)
     pub ui_screen: Option<String>,
+    /// across the monitors: the view straight ahead is in the middle of that
+    /// screen (else in the middle of them all, as for three or five screens)
+    pub centre_on_ui: bool,
     /// across wide screens, the widest horizontal field of view (degrees)
     pub wide_hfov: f32,
 }
@@ -57,7 +63,7 @@ pub const WIDE_HFOV_DEFAULT: f32 = 110.0;
 
 impl Default for Display {
     fn default() -> Self {
-        Display { mode: Mode::Windowed, monitor: None, last_full: Mode::Fullscreen, screens: Vec::new(), ui_screen: None, wide_hfov: WIDE_HFOV_DEFAULT }
+        Display { mode: Mode::Windowed, monitor: None, last_full: Mode::Fullscreen, screens: Vec::new(), ui_screen: None, centre_on_ui: true, wide_hfov: WIDE_HFOV_DEFAULT }
     }
 }
 
@@ -76,13 +82,14 @@ impl Display {
             mode: j["mode"].as_str().and_then(Mode::parse).unwrap_or(d.mode),
             monitor: j["monitor"].as_str().map(str::to_string).filter(|s| !s.is_empty()),
             last_full: j["last_full"].as_str().and_then(Mode::parse).filter(|m| *m != Mode::Windowed).unwrap_or(d.last_full),
+            centre_on_ui: j["centre_on_ui"].as_bool().unwrap_or(d.centre_on_ui),
             ui_screen: j["ui_screen"].as_str().map(str::to_string).filter(|s| !s.is_empty()),
             screens: j["screens"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).take(32).collect()).unwrap_or_default(),
             wide_hfov: j["wide_hfov"].as_f64().filter(|x| x.is_finite()).map_or(d.wide_hfov, |x| (x as f32).clamp(70.0, 150.0)),
         }
     }
     fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({ "mode": self.mode.name(), "monitor": self.monitor, "last_full": self.last_full.name(), "screens": self.screens, "ui_screen": self.ui_screen, "wide_hfov": self.wide_hfov })
+        serde_json::json!({ "mode": self.mode.name(), "monitor": self.monitor, "last_full": self.last_full.name(), "screens": self.screens, "ui_screen": self.ui_screen, "centre_on_ui": self.centre_on_ui, "wide_hfov": self.wide_hfov })
     }
     pub fn save(&self) {
         let Some(p) = path() else { return };
@@ -175,50 +182,6 @@ pub fn span_box(screens: &[Screen]) -> Option<(winit::dpi::PhysicalPosition<i32>
     (x1 > x0 && y1 > y0).then(|| (winit::dpi::PhysicalPosition::new(x0, y0), winit::dpi::PhysicalSize::new((x1 - x0) as u32, (y1 - y0) as u32)))
 }
 
-/// Under X11: asks the window manager for full screen over all the monitors
-/// (EWMH `_NET_WM_FULLSCREEN_MONITORS`), so that the window covers them
-/// whole, panels included, as a full-screen game should.
-#[cfg(target_os = "linux")]
-pub fn x11_fullscreen_all(w: &Window, chosen: &[Screen]) -> Result<(), String> {
-    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use x11rb::connection::Connection;
-    use x11rb::protocol::xinerama::ConnectionExt as _;
-    use x11rb::protocol::xproto::{AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask};
-    let win = match w.window_handle().map_err(|e| e.to_string())?.as_raw() {
-        RawWindowHandle::Xlib(h) => h.window as u32,
-        RawWindowHandle::Xcb(h) => h.window.get(),
-        _ => return Err("not an X11 window".into()),
-    };
-    let (conn, screen) = x11rb::connect(None).map_err(|e| e.to_string())?;
-    let root = conn.setup().roots[screen].root;
-    // Xinerama's screens, which the hint counts in: the topmost, bottommost, leftmost and rightmost.
-    let all = conn.xinerama_query_screens().map_err(|e| e.to_string())?.reply().map_err(|e| e.to_string())?.screen_info;
-    // (Only the chosen monitors, found by where they are.)
-    let screens: Vec<(usize, &x11rb::protocol::xinerama::ScreenInfo)> = all.iter().enumerate().filter(|(_, s)| chosen.iter().any(|c| c.x == s.x_org as i32 && c.y == s.y_org as i32 && c.w == s.width as u32 && c.h == s.height as u32)).collect();
-    if screens.len() < 2 {
-        return Ok(());
-    }
-    let pick = |key: &dyn Fn(&x11rb::protocol::xinerama::ScreenInfo) -> i32, max: bool| -> u32 {
-        let it = screens.iter();
-        (if max { it.max_by_key(|(_, s)| key(s)) } else { it.min_by_key(|(_, s)| key(s)) }).map_or(0, |(i, _)| *i as u32)
-    };
-    let (top, bottom) = (pick(&|s| s.y_org as i32, false), pick(&|s| s.y_org as i32 + s.height as i32, true));
-    let (left, right) = (pick(&|s| s.x_org as i32, false), pick(&|s| s.x_org as i32 + s.width as i32, true));
-    let atom = |n: &str| -> Result<u32, String> { Ok(conn.intern_atom(false, n.as_bytes()).map_err(|e| e.to_string())?.reply().map_err(|e| e.to_string())?.atom) };
-    let (monitors, state, full) = (atom("_NET_WM_FULLSCREEN_MONITORS")?, atom("_NET_WM_STATE")?, atom("_NET_WM_STATE_FULLSCREEN")?);
-    let mask = EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY;
-    let send = |t: u32, data: [u32; 5]| -> Result<(), String> {
-        let ev = ClientMessageEvent::new(32, win, t, data);
-        conn.send_event(false, root, mask, ev).map_err(|e| e.to_string())?;
-        Ok(())
-    };
-    send(monitors, [top, bottom, left, right, 1])?;
-    send(state, [1, full, 0, 1, 0])?;
-    let _ = AtomEnum::NONE;
-    conn.flush().map_err(|e| e.to_string())?;
-    Ok(())
-}
-
 /// Whether to run through X11 (XWayland) rather than Wayland: when the
 /// window is to span the monitors, which only X11 lets a program arrange,
 /// and an X server is there.
@@ -244,7 +207,7 @@ mod tests {
 
     #[test]
     fn round_trip_and_toggle() {
-        let d = Display { mode: Mode::Span, monitor: Some("DP-3".into()), last_full: Mode::Span, screens: vec!["DP-3".into(), "HDMI-A-1".into()], ui_screen: Some("HDMI-A-1".into()), wide_hfov: 120.0 };
+        let d = Display { mode: Mode::Span, monitor: Some("DP-3".into()), last_full: Mode::Span, screens: vec!["DP-3".into(), "HDMI-A-1".into()], ui_screen: Some("HDMI-A-1".into()), centre_on_ui: false, wide_hfov: 120.0 };
         assert_eq!(Display::from_json(&d.to_json()), d);
         assert_eq!(Display::from_json(&serde_json::json!({ "wide_hfov": 999.0, "mode": "nope" })).wide_hfov, 150.0);
         let mut d = Display::default();
