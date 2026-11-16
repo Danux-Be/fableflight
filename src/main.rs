@@ -10,6 +10,7 @@ mod cars;
 mod crash;
 mod damage;
 mod destruct;
+mod fasthash;
 mod fetch;
 mod fluid;
 mod geo;
@@ -1154,6 +1155,7 @@ impl Game {
         self.flash.clear();
         self.crashed = false;
         self.cam_rise = 0.0;
+        self.cam_hold = 0.0;
         self.cam_ang = None;
         self.acc = 0.0;
         self.cam_pos = self.plane.pos - self.plane.forward() * self.spec.cam_dist;
@@ -1746,7 +1748,7 @@ impl Game {
         let amber = Color32::from_rgb(255, 196, 64);
         let red = Color32::from_rgb(255, 90, 60);
         let mono = |s: f32| FontId::monospace(s);
-        egui::Area::new(egui::Id::unique("nav_inst")).anchor(Align2::CENTER_BOTTOM, [0.0, -14.0]).show(ctx, |ui| {
+        egui::Area::new(egui::Id::unique("nav_inst")).anchor(Align2::CENTER_BOTTOM, [0.0, if self.crashed { -14.0 } else { -226.0 }]).show(ctx, |ui| {
             egui::Frame::new().fill(Color32::from_rgba_unmultiplied(8, 12, 18, 150)).corner_radius(6.0).inner_margin(8.0).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if let Some((st, r)) = &nav {
@@ -2919,6 +2921,9 @@ impl Game {
                     self.cam_ang = None;
                     self.cam_clear_t = 0.0;
                     self.cam_rise = 0.0;
+                    self.cam_hold = 0.0;
+                    // Look at the impact from the first frame, not wherever the chase camera was pointing.
+                    self.cam_look = site;
                     self.acc = 0.0;
                     break;
                 }
@@ -3100,6 +3105,26 @@ impl Game {
                     target = w * 0.6 + street * 0.4 + cr.up * (6.0 * (cr.size as f64).sqrt());
                     centre = w * 0.5 + street * 0.5;
                 }
+            }
+            // Stay on the crash. Whatever the wreckage does (a piece that falls
+            // on through ground that has not loaded yet, a fragment thrown a
+            // kilometre off), the camera keeps watching the impact: the point
+            // it looks at is kept on a leash round the spot, and never sinks
+            // below the street under it.
+            {
+                let (_, _, up_c) = geo::enu(cr.site);
+                let sz = (cr.size as f64).sqrt();
+                let leash = if cr.water || cr.wreck_centre().is_some() { 140.0 * sz } else { 40.0 * sz };
+                let clamp_to = |p: DVec3, lo: f64, hi: f64| {
+                    let off = p - street;
+                    let h = off.dot(up_c);
+                    let flat = off - up_c * h;
+                    let fl = flat.length();
+                    let flat = if fl > leash { flat * (leash / fl) } else { flat };
+                    street + flat + up_c * h.clamp(lo, hi)
+                };
+                target = clamp_to(target, 0.5, 10.0 * sz + 20.0);
+                centre = clamp_to(centre, 0.0, 2.0);
             }
             // A tower coming down: back off and watch all of it from the side.
             if let Some((mid, hgt)) = self.destr.focus().filter(|f| (f.0 - cr.site).length() < 800.0) {
@@ -3629,6 +3654,7 @@ impl Game {
     }
 
     /// The start screen drawn over the globe: labels, the chosen spot, and the panel.
+    #[allow(deprecated)]
     fn menu_ui(&mut self, vp: Mat4, cam: DVec3, w: f32, h: f32) -> (Vec<egui::ClippedPrimitive>, egui::TexturesDelta, f32) {
         let raw = self.egui_input();
         let mut go: Option<String> = None;
@@ -3688,7 +3714,7 @@ impl Game {
                         self.menu.markers.push((i, p.x * ppp, p.y * ppp));
                         let chosen = self.menu.airport == Some(i);
                         let hover = ctx.pointer_hover_pos().is_some_and(|h| (h - p).length() < 14.0 / ppp) || aim.is_some_and(|c| (c - p).length() < 28.0);
-                        let col = if chosen || hover { Color32::from_rgb(255, 196, 64) } else if a.kind == 2 { Color32::from_rgb(120, 200, 255) } else { Color32::from_rgb(170, 200, 220) };
+                        let col = if chosen || hover { menu::ACCENT } else if a.kind == 2 { Color32::from_rgb(120, 200, 255) } else { Color32::from_rgb(170, 200, 220) };
                         if hover {
                             painter.circle_stroke(p, 8.0, egui::Stroke::new(1.5, col));
                             label(p + egui::vec2(6.0, 14.0), &a.name.chars().take(40).collect::<String>(), 11.0, col);
@@ -3700,7 +3726,7 @@ impl Game {
             }
             if let Some((lat, lon)) = self.menu.pick {
                 if let Some(p) = project(lat, lon) {
-                    let accent = Color32::from_rgb(255, 196, 64);
+                    let accent = menu::ACCENT;
                     let pulse = 11.0 + 3.0 * (self.real * 3.0).sin() as f32;
                     painter.circle_stroke(p, pulse, egui::Stroke::new(2.0, accent));
                     painter.circle_filled(p, 3.5, accent);
@@ -3723,10 +3749,112 @@ impl Game {
             let screen = ctx.content_rect();
             let n_air = aircraft::ALL.len();
             let mut choose_air: Option<usize> = None;
+            // The frame round the globe, in the manner of Microsoft Flight
+            // Simulator's start screen: a navigation bar along the top, and on
+            // tall enough windows a strip along the bottom with the flight's
+            // summary and the FLY button. (The panels sit between them.)
+            const TOP_H: f32 = 56.0;
+            let tall = screen.height() >= 860.0;
+            let bot_pad = if tall { 66.0 } else { M };
+            let bot_res = bot_pad + 68.0;
+            let ready = self.menu.pick.is_some() && !self.menu.starting;
+            {
+                // soft dark gradients top and bottom, so the bars read over any imagery
+                let gp = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::unique("menu_gradient")));
+                let steps = 28;
+                for i in 0..steps {
+                    let f = 1.0 - i as f32 / steps as f32;
+                    let a = (170.0 * f * f) as u8;
+                    let hh = 7.0;
+                    gp.rect_filled(egui::Rect::from_min_size(egui::pos2(screen.left(), screen.top() + TOP_H + i as f32 * hh), egui::vec2(screen.width(), hh)), 0.0, Color32::from_black_alpha(a));
+                    if tall {
+                        gp.rect_filled(egui::Rect::from_min_size(egui::pos2(screen.left(), screen.bottom() - 150.0 - i as f32 * hh), egui::vec2(screen.width(), hh)), 0.0, Color32::from_black_alpha(a));
+                    }
+                }
+            }
+            egui::Area::new(egui::Id::unique("menu_top")).anchor(Align2::LEFT_TOP, [0.0, 0.0]).show(ctx, |ui| {
+                let (bar, _) = ui.allocate_exact_size(egui::vec2(screen.width(), TOP_H), egui::Sense::hover());
+                let p = ui.painter().clone();
+                p.rect_filled(bar, 0.0, Color32::from_rgba_unmultiplied(5, 9, 15, 205));
+                p.line_segment([bar.left_bottom(), bar.right_bottom()], egui::Stroke::new(1.0, Color32::from_white_alpha(26)));
+                // the wordmark
+                let cy = bar.center().y;
+                let a = p.text(egui::pos2(bar.left() + M, cy), Align2::LEFT_CENTER, "FABLE", FontId::proportional(21.0), Color32::WHITE);
+                p.text(egui::pos2(a.right() + 1.0, cy), Align2::LEFT_CENTER, "FLIGHT", FontId::proportional(21.0), ACCENT);
+                // the tabs, centred: the active one is underlined
+                let tabs: [(&str, bool, u8); 3] = [(t!("FREE FLIGHT", "VOL LIBRE"), !self.menu.show_controls, 0), (t!("SETTINGS", "RÉGLAGES"), self.menu.show_controls, 1), (t!("QUIT", "QUITTER"), false, 2)];
+                let tw = 150.0;
+                let x0 = bar.center().x - tw * tabs.len() as f32 * 0.5;
+                for (k, (label, active, id)) in tabs.iter().enumerate() {
+                    let r = egui::Rect::from_min_size(egui::pos2(x0 + tw * k as f32, bar.top()), egui::vec2(tw, TOP_H));
+                    let resp = ui.interact(r, egui::Id::new(("menu_tab", k)), egui::Sense::click());
+                    let col = if *active { Color32::WHITE } else if resp.hovered() { TEXT } else { DIM };
+                    p.text(r.center(), Align2::CENTER_CENTER, *label, FontId::proportional(14.5), col);
+                    if *active {
+                        p.rect_filled(egui::Rect::from_min_max(egui::pos2(r.left() + 34.0, r.bottom() - 3.0), egui::pos2(r.right() - 34.0, r.bottom())), 0.0, ACCENT);
+                    } else if resp.hovered() {
+                        p.rect_filled(egui::Rect::from_min_max(egui::pos2(r.left() + 52.0, r.bottom() - 2.0), egui::pos2(r.right() - 52.0, r.bottom())), 0.0, Color32::from_white_alpha(60));
+                    }
+                    if resp.clicked() {
+                        match *id {
+                            0 => self.menu.show_controls = false,
+                            1 => self.menu.show_controls = true,
+                            _ => self.quit = true,
+                        }
+                    }
+                }
+                // the clock of the place that will be flown, at the right
+                p.text(egui::pos2(bar.right() - M, cy - 8.0), Align2::RIGHT_CENTER, menu::hhmm(self.menu.hour), FontId::proportional(18.0), Color32::WHITE);
+                p.text(egui::pos2(bar.right() - M, cy + 11.0), Align2::RIGHT_CENTER, weather::date_label(self.doy), FontId::proportional(11.5), DIM);
+            });
+            if tall {
+                // the flight summary and the FLY button
+                let wx_text = self.wx.summary();
+                let air_name = aircraft::ALL[self.menu.aircraft.min(n_air - 1)].name;
+                let depart = if let Some(i) = self.menu.airport {
+                    let a = &airports::Db::get().apts[i as usize];
+                    format!("{}  {}", a.ident, a.name.chars().take(26).collect::<String>())
+                } else if self.menu.pick.is_some() && !self.menu.pick_name.is_empty() {
+                    self.menu.pick_name.chars().take(34).collect()
+                } else if self.menu.pick.is_some() {
+                    t!("Unnamed spot", "Lieu sans nom").to_string()
+                } else {
+                    t!("Choose on the globe", "Choisir sur le globe").to_string()
+                };
+                let when = menu::hhmm(self.menu.hour);
+                egui::Area::new(egui::Id::unique("menu_bottom")).anchor(Align2::LEFT_BOTTOM, [M, -50.0]).show(ctx, |ui| {
+                    let bw = screen.width() - 2.0 * M;
+                    let (bar, _) = ui.allocate_exact_size(egui::vec2(bw, 78.0), egui::Sense::hover());
+                    let p = ui.painter().clone();
+                    p.rect_filled(bar, 12.0, Color32::from_rgba_unmultiplied(6, 10, 16, 215));
+                    p.rect_stroke(bar, 12.0, egui::Stroke::new(1.0, Color32::from_white_alpha(24)), egui::StrokeKind::Inside);
+                    let fly_w = 230.0f32.min(bw * 0.3);
+                    let cells = [(t!("AIRCRAFT", "AVION"), air_name.to_string()), (t!("DEPARTURE", "DÉPART"), depart), (t!("TIME", "HEURE"), format!("{when} · {}", weather::date_label(self.doy))), (t!("WEATHER", "MÉTÉO"), wx_text)];
+                    let cw = (bw - fly_w - 24.0) / cells.len() as f32;
+                    for (k, (title, value)) in cells.iter().enumerate() {
+                        let x = bar.left() + 22.0 + cw * k as f32;
+                        if k > 0 {
+                            p.line_segment([egui::pos2(x - 12.0, bar.top() + 16.0), egui::pos2(x - 12.0, bar.bottom() - 16.0)], egui::Stroke::new(1.0, Color32::from_white_alpha(22)));
+                        }
+                        p.text(egui::pos2(x, bar.top() + 26.0), Align2::LEFT_CENTER, *title, FontId::proportional(11.0), DIM);
+                        let shown: String = value.chars().take(((cw - 24.0) / 8.5).max(8.0) as usize).collect();
+                        p.text(egui::pos2(x, bar.top() + 48.0), Align2::LEFT_CENTER, shown, FontId::proportional(16.0), Color32::WHITE);
+                    }
+                    let fly = egui::Rect::from_min_max(egui::pos2(bar.right() - fly_w - 10.0, bar.top() + 10.0), egui::pos2(bar.right() - 10.0, bar.bottom() - 10.0));
+                    let resp = ui.interact(fly, egui::Id::new("menu_fly"), egui::Sense::click());
+                    let fill = if !ready { Color32::from_rgb(40, 46, 56) } else if resp.hovered() { Color32::from_rgb(120, 206, 255) } else { ACCENT };
+                    p.rect_filled(fly, 9.0, fill);
+                    let label = if self.menu.starting { t!("PREPARING…", "PRÉPARATION…") } else { t!("FLY", "VOLER") };
+                    p.text(fly.center(), Align2::CENTER_CENTER, label, FontId::proportional(26.0), if ready { menu::ON_ACCENT } else { DIM });
+                    if resp.clicked() && ready {
+                        start = true;
+                    }
+                });
+            }
 
             // Top left: the aircraft window. Its name in the title bar with
             // arrows to the others, and a picture of it below.
-            let air = egui::Area::new(egui::Id::unique("menu_air")).anchor(Align2::LEFT_TOP, [M, M]).show(ctx, |ui| {
+            let air = egui::Area::new(egui::Id::unique("menu_air")).anchor(Align2::LEFT_TOP, [M, M + TOP_H]).show(ctx, |ui| {
                 ui.set_width(W);
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let spec = aircraft::ALL[self.menu.aircraft.min(n_air - 1)];
@@ -3774,9 +3902,9 @@ impl Game {
             // the chosen spot, take-off, settings and quit stay in view.
             let top = r.bottom() + 14.0;
             let foot_h = 42.0 + 6.0 + 34.0 + 6.0;
-            let body_h = (screen.bottom() - M - top - 40.0 - 28.0 - foot_h).max(120.0);
+            let body_h = (screen.bottom() - bot_res - top - foot_h).max(120.0);
             egui::Area::new(egui::Id::unique("menu")).anchor(Align2::LEFT_TOP, [M, top]).show(ctx, |ui| {
-                ui.set_max_height(screen.bottom() - M - top);
+                ui.set_max_height(screen.bottom() - bot_pad - top);
                 menu::panel().inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
                     ui.set_width(W - 32.0);
                     menu::window_title(ui, t!("START LOCATION", "LIEU DE DÉPART"));
@@ -3969,8 +4097,8 @@ impl Game {
             }
 
             // On the right: how the flight starts, the weather, the time.
-            let right_h = (screen.height() - M - 64.0 - 28.0).max(200.0);
-            egui::Area::new(egui::Id::unique("menu_setup")).anchor(Align2::RIGHT_TOP, [-M, M]).show(ctx, |ui| {
+            let right_h = (screen.height() - M - TOP_H - (bot_res - M + 4.0)).max(200.0);
+            egui::Area::new(egui::Id::unique("menu_setup")).anchor(Align2::RIGHT_TOP, [-M, M + TOP_H]).show(ctx, |ui| {
                 // (an area lays out in last frame's size: let it grow as sections open)
                 ui.set_max_height(right_h);
                 menu::panel().inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
@@ -4736,6 +4864,209 @@ impl Game {
         Some(out)
     }
 
+    /// The flight instruments drawn on the glass of the screen, in the manner
+    /// of a glass-cockpit primary flight display: a speed tape on the left, an
+    /// artificial horizon with a pitch ladder in the middle, an altitude tape
+    /// on the right, a heading ribbon over it, with the throttle and the
+    /// vertical speed in bars at either side. `ias` is in m/s, `alt` and `agl`
+    /// in metres, `vs` in m/s.
+    fn flight_hud(&self, ctx: &egui::Context, hdg: f64, ias: f64, alt: f64, vs: f64, agl: f64) {
+        use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Shape, Stroke, StrokeKind};
+        let p = &self.plane;
+        let (_, _, u) = geo::enu(p.pos);
+        let (fwd, right, up) = (p.forward(), p.right(), p.up());
+        let pitch = fwd.dot(u).clamp(-1.0, 1.0).asin().to_degrees() as f32;
+        let bank = (-right.dot(u)).atan2(up.dot(u)) as f32;
+        let ias_kt = (ias * 1.94384) as f32;
+        let gs_kt = (p.vel.length() * 1.94384) as f32;
+        let alt_ft = (alt * 3.28084) as f32;
+        let agl_ft = (agl.max(0.0) * 3.28084) as f32;
+        let vs_fpm = (vs * 196.85) as f32;
+        let hdg = hdg as f32;
+        let thr = (p.throttle as f32).clamp(0.0, 1.0);
+
+        let white = Color32::from_rgba_unmultiplied(255, 255, 255, 240);
+        let dim = Color32::from_rgba_unmultiplied(255, 255, 255, 150);
+        let faint = Color32::from_rgba_unmultiplied(255, 255, 255, 70);
+        let green = Color32::from_rgb(110, 235, 140);
+        let amber = Color32::from_rgb(255, 190, 60);
+        let red = Color32::from_rgb(255, 90, 60);
+        let cyan = menu::ACCENT;
+        let glass = Color32::from_rgba_unmultiplied(6, 10, 16, 150);
+        let box_fill = Color32::from_rgba_unmultiplied(4, 7, 12, 235);
+        let sky = Color32::from_rgb(34, 112, 190);
+        let ground = Color32::from_rgb(108, 74, 44);
+        let mono = |s: f32| FontId::monospace(s);
+
+        const W: f32 = 410.0;
+        const H: f32 = 200.0;
+        egui::Area::new(egui::Id::unique("flight_hud")).anchor(Align2::CENTER_BOTTOM, [0.0, -14.0]).interactable(false).show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(vec2(W, H), egui::Sense::hover());
+            let painter = ui.painter().clone();
+            let c = pos2(rect.center().x, rect.top() + 34.0 + 74.0);
+            let ar = Rect::from_center_size(c, vec2(196.0, 148.0));
+            let sr = Rect::from_min_size(pos2(ar.left() - 8.0 - 66.0, ar.top()), vec2(66.0, 148.0));
+            let tr = Rect::from_min_size(pos2(ar.right() + 8.0, ar.top()), vec2(66.0, 148.0));
+            let tb = Rect::from_min_size(pos2(sr.left() - 4.0 - 22.0, ar.top() + 14.0), vec2(22.0, 120.0));
+            let vr = Rect::from_min_size(pos2(tr.right() + 4.0, ar.top() + 14.0), vec2(22.0, 120.0));
+            let hr = Rect::from_min_size(pos2(ar.left(), rect.top()), vec2(196.0, 24.0));
+
+            // ---- the horizon
+            {
+                let ap = painter.with_clip_rect(ar);
+                ap.rect_filled(ar, 0.0, sky);
+                let (sn, cs) = (-bank).sin_cos();
+                let rot = |x: f32, y: f32| pos2(c.x + x * cs - y * sn, c.y + x * sn + y * cs);
+                const K: f32 = 3.6;
+                const L: f32 = 400.0;
+                let hy = pitch * K;
+                ap.add(Shape::convex_polygon(vec![rot(-L, hy), rot(L, hy), rot(L, hy + L), rot(-L, hy + L)], ground, Stroke::NONE));
+                ap.line_segment([rot(-L, hy), rot(L, hy)], Stroke::new(2.0, white));
+                for a in (-30i32..=30).step_by(5) {
+                    if a == 0 {
+                        continue;
+                    }
+                    let y = (pitch - a as f32) * K;
+                    if y.abs() > 130.0 {
+                        continue;
+                    }
+                    let half = if a % 10 == 0 { 28.0 } else { 14.0 };
+                    ap.line_segment([rot(-half, y), rot(half, y)], Stroke::new(1.5, white));
+                    if a % 10 == 0 {
+                        for sgn in [-1.0f32, 1.0] {
+                            ap.text(rot(sgn * (half + 12.0), y), Align2::CENTER_CENTER, format!("{}", a.abs()), mono(10.5), white);
+                        }
+                    }
+                }
+                // the bank scale, fixed, and the pointer that rides the horizon
+                const RR: f32 = 70.0;
+                for ang in [-45.0f32, -30.0, -20.0, -10.0, 0.0, 10.0, 20.0, 30.0, 45.0] {
+                    let (s, k) = ang.to_radians().sin_cos();
+                    let len = if ang % 30.0 == 0.0 { 9.0 } else { 5.0 };
+                    ap.line_segment([pos2(c.x + RR * s, c.y - RR * k), pos2(c.x + (RR - len) * s, c.y - (RR - len) * k)], Stroke::new(1.5, white));
+                }
+                ap.add(Shape::convex_polygon(vec![rot(0.0, -RR + 1.0), rot(-5.0, -RR + 11.0), rot(5.0, -RR + 11.0)], cyan, Stroke::NONE));
+                // the aircraft
+                let wing = Stroke::new(3.5, amber);
+                ap.line_segment([pos2(c.x - 54.0, c.y), pos2(c.x - 16.0, c.y)], wing);
+                ap.line_segment([pos2(c.x - 16.0, c.y), pos2(c.x - 16.0, c.y + 7.0)], wing);
+                ap.line_segment([pos2(c.x + 16.0, c.y), pos2(c.x + 54.0, c.y)], wing);
+                ap.line_segment([pos2(c.x + 16.0, c.y), pos2(c.x + 16.0, c.y + 7.0)], wing);
+                ap.circle_filled(c, 3.0, amber);
+            }
+            painter.rect_stroke(ar, 0.0, Stroke::new(1.5, faint), StrokeKind::Outside);
+
+            // ---- speed
+            {
+                painter.rect_filled(sr, 3.0, glass);
+                let tp = painter.with_clip_rect(sr);
+                const PPK: f32 = 3.0;
+                let lo = ((ias_kt - 26.0) / 10.0).floor() as i32 * 10;
+                for v in (lo..=lo + 60).step_by(10) {
+                    if v < 0 {
+                        continue;
+                    }
+                    let y = c.y - (v as f32 - ias_kt) * PPK;
+                    let long = v % 20 == 0;
+                    tp.line_segment([pos2(sr.right(), y), pos2(sr.right() - if long { 12.0 } else { 6.0 }, y)], Stroke::new(1.3, white));
+                    if long {
+                        tp.text(pos2(sr.right() - 16.0, y), Align2::RIGHT_CENTER, format!("{v}"), mono(12.0), dim);
+                    }
+                }
+                let col = if p.stalled { red } else if p.overspeed() > 0.0 || (p.flaps > 0.25 && p.ias() > p.vfe()) { amber } else { white };
+                let b = Rect::from_min_max(pos2(sr.left() + 2.0, c.y - 13.0), pos2(sr.right() + 6.0, c.y + 13.0));
+                painter.rect_filled(b, 3.0, box_fill);
+                painter.rect_stroke(b, 3.0, Stroke::new(1.2, col.gamma_multiply(0.7)), StrokeKind::Inside);
+                painter.text(pos2(b.center().x - 3.0, c.y), Align2::CENTER_CENTER, format!("{:.0}", ias_kt), mono(19.0), col);
+                painter.text(pos2(sr.center().x, sr.top() - 8.0), Align2::CENTER_CENTER, "IAS KT", mono(10.0), dim);
+                painter.text(pos2(sr.center().x, sr.bottom() + 9.0), Align2::CENTER_CENTER, format!("GS {:.0}", gs_kt), mono(11.0), dim);
+            }
+
+            // ---- altitude
+            {
+                painter.rect_filled(tr, 3.0, glass);
+                let tp = painter.with_clip_rect(tr);
+                const PPF: f32 = 0.30;
+                let lo = ((alt_ft - 260.0) / 100.0).floor() as i32 * 100;
+                for v in (lo..=lo + 600).step_by(100) {
+                    let y = c.y - (v as f32 - alt_ft) * PPF;
+                    let long = v % 200 == 0;
+                    tp.line_segment([pos2(tr.left(), y), pos2(tr.left() + if long { 12.0 } else { 6.0 }, y)], Stroke::new(1.3, white));
+                    if long {
+                        tp.text(pos2(tr.left() + 16.0, y), Align2::LEFT_CENTER, format!("{v}"), mono(12.0), dim);
+                    }
+                }
+                let b = Rect::from_min_max(pos2(tr.left() - 6.0, c.y - 13.0), pos2(tr.right() - 2.0, c.y + 13.0));
+                painter.rect_filled(b, 3.0, box_fill);
+                painter.rect_stroke(b, 3.0, Stroke::new(1.2, white.gamma_multiply(0.5)), StrokeKind::Inside);
+                painter.text(pos2(b.center().x + 3.0, c.y), Align2::CENTER_CENTER, format!("{:.0}", (alt_ft / 10.0).round() * 10.0), mono(19.0), white);
+                painter.text(pos2(tr.center().x, tr.top() - 8.0), Align2::CENTER_CENTER, "ALT FT", mono(10.0), dim);
+                let col = if agl_ft < 300.0 && !p.on_ground { amber } else { dim };
+                painter.text(pos2(tr.center().x, tr.bottom() + 9.0), Align2::CENTER_CENTER, format!("AGL {:.0}", agl_ft), mono(11.0), col);
+            }
+
+            // ---- vertical speed
+            {
+                painter.rect_filled(vr, 3.0, glass);
+                let y0 = vr.center().y;
+                let span = vr.height() * 0.5 - 8.0;
+                for k in [-2.0f32, -1.0, 0.0, 1.0, 2.0] {
+                    let y = y0 - k * span * 0.5;
+                    painter.line_segment([pos2(vr.left() + 2.0, y), pos2(vr.left() + if k == 0.0 { 12.0 } else { 7.0 }, y)], Stroke::new(1.2, dim));
+                    if k != 0.0 {
+                        painter.text(pos2(vr.right() - 5.0, y), Align2::CENTER_CENTER, format!("{}", k.abs() as i32), mono(9.5), dim);
+                    }
+                }
+                let y = y0 - (vs_fpm / 2000.0).clamp(-1.0, 1.0) * span;
+                let col = if vs_fpm < -1500.0 && agl_ft < 2500.0 { red } else if vs_fpm.abs() < 100.0 { white } else { green };
+                painter.line_segment([pos2(vr.left() + 2.0, y0), pos2(vr.left() + 2.0, y)], Stroke::new(2.0, col.gamma_multiply(0.45)));
+                painter.rect_filled(Rect::from_min_max(pos2(vr.left() + 2.0, y - 2.5), pos2(vr.right() - 2.0, y + 2.5)), 1.0, col);
+                painter.text(pos2(vr.center().x, vr.top() - 8.0), Align2::CENTER_CENTER, "VS", mono(10.0), dim);
+                painter.text(pos2(vr.center().x, vr.bottom() + 9.0), Align2::CENTER_CENTER, format!("{:+.0}", (vs_fpm / 10.0).round() * 10.0), mono(11.0), col);
+            }
+
+            // ---- throttle
+            {
+                painter.rect_filled(tb, 3.0, glass);
+                let inner = tb.shrink2(vec2(6.0, 5.0));
+                let h = inner.height() * thr;
+                let col = if p.running { cyan } else { red };
+                painter.rect_filled(Rect::from_min_max(pos2(inner.left(), inner.bottom() - h), inner.right_bottom()), 1.0, col.gamma_multiply(0.85));
+                painter.rect_stroke(inner, 1.0, Stroke::new(1.0, faint), StrokeKind::Inside);
+                painter.text(pos2(tb.center().x, tb.top() - 8.0), Align2::CENTER_CENTER, "THR", mono(10.0), dim);
+                painter.text(pos2(tb.center().x, tb.bottom() + 9.0), Align2::CENTER_CENTER, format!("{:.0}%", thr * 100.0), mono(11.0), dim);
+            }
+
+            // ---- heading ribbon
+            {
+                painter.rect_filled(hr, 3.0, glass);
+                let hp = painter.with_clip_rect(hr);
+                const PPD: f32 = 3.0;
+                let h0 = ((hdg - 34.0) / 5.0).floor() as i32 * 5;
+                for d in (h0..=h0 + 75).step_by(5) {
+                    let x = hr.center().x + (d as f32 - hdg) * PPD;
+                    let dd = d.rem_euclid(360);
+                    let long = dd % 10 == 0;
+                    hp.line_segment([pos2(x, hr.bottom()), pos2(x, hr.bottom() - if long { 8.0 } else { 4.0 })], Stroke::new(1.2, white));
+                    if long {
+                        let label = match dd {
+                            0 => "N".to_string(),
+                            90 => "E".to_string(),
+                            180 => "S".to_string(),
+                            270 => "W".to_string(),
+                            _ => format!("{:02}", dd / 10),
+                        };
+                        hp.text(pos2(x, hr.top() + 8.0), Align2::CENTER_CENTER, label, mono(11.0), if dd % 90 == 0 { cyan } else { dim });
+                    }
+                }
+                let b = Rect::from_center_size(pos2(hr.center().x, hr.center().y), vec2(46.0, 22.0));
+                painter.rect_filled(b, 3.0, box_fill);
+                painter.rect_stroke(b, 3.0, Stroke::new(1.2, white.gamma_multiply(0.5)), StrokeKind::Inside);
+                painter.text(b.center(), Align2::CENTER_CENTER, format!("{:03.0}°", hdg.rem_euclid(360.0).round() % 360.0), mono(14.0), white);
+            }
+        });
+    }
+
     fn ui(&mut self, agl: f64) -> (Vec<egui::ClippedPrimitive>, egui::TexturesDelta, f32) {
         let raw = self.egui_input();
         let (lat, lon, alt) = geo::pos_to_lla(self.plane.pos);
@@ -4779,12 +5110,12 @@ impl Game {
                 self.info_panel(ctx, &mut act, lat.to_degrees(), lon.to_degrees(), local, speed, alt, agl, hdg);
             }
             if self.show_hud {
+                if !self.crashed {
+                    self.flight_hud(ctx, hdg, speed, alt, vs, agl);
+                }
                 egui::Area::new(egui::Id::unique("hud")).anchor(Align2::LEFT_TOP, [14.0, 14.0]).show(ctx, |ui| {
                     panel.show(ui, |ui| {
-                        shadow(ui, format!("IAS {:>4.0} kt", speed * 1.94384), 20.0, white);
-                        shadow(ui, format!("ALT {:>5.0} ft", alt * 3.28084), 20.0, white);
-                        shadow(ui, format!("AGL {:>5.0} ft", agl.max(0.0) * 3.28084), 14.0, dim);
-                        shadow(ui, format!("HDG {:>4.0}°   VS {:>+6.0} fpm", hdg, vs * 196.85), 14.0, dim);
+                        // (speed, height, heading and climb rate are on the instruments below)
                         if wind_kt >= 0.5 {
                             shadow(ui, format!("TAS {:>3.0}  GS {:>3.0} kt   WIND {:03.0}°/{:.0}", tas * 1.94384, gs * 1.94384, self.wx.wind_from, wind_kt), 14.0, dim);
                         } else {
