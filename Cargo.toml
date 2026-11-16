@@ -31,3 +31,23 @@ roxmltree = "0.20"
 
 [dev-dependencies]
 naga = { version = "=30.0.1", features = ["wgsl-in"] }
+
+# Optimised builds: the simulation, the terrain and building generators and
+# the renderer's CPU side are all hot loops, and the shaders are untouched, so
+# nothing looks different. (Panics still unwind: a worker thread that hits bad
+# network data must not take the game down with it.)
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = false
+strip = "symbols"
+incremental = false
+
+# Debug builds are unplayable at opt-level 0: keep our code debuggable but run
+# the dependencies (wgpu, egui, image, flate2, naga) optimised.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
