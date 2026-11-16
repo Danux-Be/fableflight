@@ -8,6 +8,7 @@ mod aircraft;
 mod cockpit;
 mod cars;
 mod crash;
+mod display;
 mod damage;
 mod destruct;
 mod fetch;
@@ -184,6 +185,17 @@ impl Loaded {
     }
 }
 
+impl Args {
+    /// The display settings, with --display over the saved mode.
+    fn display_settings(&self) -> display::Display {
+        let mut d = display::Display::load();
+        if let Some(m) = self.display {
+            d.mode = m;
+        }
+        d
+    }
+}
+
 struct Args {
     lat: f64,
     lon: f64,
@@ -241,6 +253,10 @@ struct Args {
     photo_detail: Option<gmaps::Detail>,
     cam: Option<(f64, f64, f64)>,
     cockpit: bool,
+    /// --display: the window's mode for this run (else display.json)
+    display: Option<display::Mode>,
+    /// the event loop runs on X11 (set in main, see display::wants_x11)
+    x11: bool,
     /// cockpit vertical field of view (deg)
     fov: Option<f32>,
     mute: bool,
@@ -308,6 +324,8 @@ fn parse_args() -> Args {
         photo_detail: None,
         cam: None,
         cockpit: false,
+        display: None,
+        x11: false,
         fov: None,
         mute: false,
         lang: None,
@@ -448,6 +466,10 @@ fn parse_args() -> Args {
                     a.record = Some((PathBuf::from(f[0]), f[1].parse().unwrap_or(0.0), f[2].parse().unwrap_or(10.0)));
                 }
                 a.menu.get_or_insert(false);
+            }
+            "--display" => {
+                // windowed | fullscreen | span: for this run (else display.json)
+                a.display = v.get(i + 1).and_then(|s| display::Mode::parse(s));
             }
             "--no-vsync" => {
                 a.vsync = false;
@@ -654,6 +676,12 @@ struct Game {
     /// graphics settings (the pause menu's Graphics page; taa toggles with F2),
     /// and what was last handed to the renderer and world
     gfx: graphics::Graphics,
+    /// window, full screen or across the monitors (display.rs)
+    display: display::Display,
+    /// the game runs through X11 (XWayland), so the window can span the monitors
+    x11: bool,
+    /// spread the window over the chosen monitors (X11) once it is up
+    span_pending: bool,
     gfx_applied: Option<graphics::Graphics>,
     /// where the aircraft was drawn last frame, relative to that frame's camera
     prev_plane: Mat4,
@@ -907,7 +935,7 @@ impl Game {
         let mut g = Self {
             gkey: src.google.key(), gkey_show: false, gm_logo: None, stills: vec![None; aircraft::ALL.len()], window, r, world, src, spec, model, piece_mesh, group_mesh, piece_cut, group_pivots, hangar: Vec::new(), building: Vec::new(), crashed: false, crash: None, crash_real: 0.0, egui_ctx, egui_state, keys: HashSet::new(), drag: false, last_cursor: None,
             cam_yaw: cy.to_radians(), cam_pitch: cp, cam_dist: cd, cam_mode: if args.cockpit { 1 } else { prefs.cam_mode }, cam_pos, cam_dir: -plane.forward(), cam_look: plane.pos, orbit: 0.0, cam_rise: 0.0, cam_clear_t: 0.0, cam_ang: None, cam_hold: 0.0,
-            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, prev_plane: Mat4::IDENTITY, plane_box, lamps,
+            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, display: args.display_settings(), x11: args.x11, span_pending: args.x11, gfx_applied: None, prev_plane: Mat4::IDENTITY, plane_box, lamps,
             frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, goto_open: false, goto_text: String::new(), goto_rx: None,
             status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, parking_brake: false, cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
@@ -1267,7 +1295,8 @@ impl Game {
             Some(d) => (1.0 - (self.real - d) / Loading::FADE).clamp(0.0, 1.0) as f32,
             None => 1.0,
         };
-        let screen = ctx.content_rect();
+        // (The backdrop covers every screen; what is on it, the screen the interface is on.)
+        let (whole, screen) = (ctx.viewport_rect(), ctx.content_rect());
         let k = aircraft::ALL.iter().position(|s| std::ptr::eq(*s, self.spec)).unwrap_or(0);
         let spec = self.spec;
         let tex = self.stills[k]
@@ -1280,7 +1309,7 @@ impl Game {
         let fade = |c: Color32| c.gamma_multiply(a);
         egui::Area::new(egui::Id::unique("loading")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
             let p = ui.painter();
-            p.rect_filled(screen, 0.0, fade(Color32::from_rgb(8, 11, 16)));
+            p.rect_filled(whole, 0.0, fade(Color32::from_rgb(8, 11, 16)));
             let c = screen.center();
             // The aircraft, as on the start screen.
             let w = (screen.width() * 0.5).min(680.0);
@@ -2229,6 +2258,11 @@ impl Game {
     }
 
     fn key(&mut self, code: KeyCode) {
+        if code == KeyCode::F11 {
+            self.display.toggle();
+            self.set_display();
+            return;
+        }
         if self.mode == Mode::Menu {
             match code {
                 KeyCode::Escape if self.menu.show_controls => self.menu.show_controls = false,
@@ -2418,7 +2452,38 @@ impl Game {
         if padui::active() {
             raw.focused = true;
         }
+        // Across several monitors, the menus and instruments keep to one of
+        // them (else they sit across the gap between screens): egui lays out
+        // in what it takes for the screen less its "safe area".
+        if let Some(r) = self.ui_screen_rect() {
+            let ppp = self.window.scale_factor() as f32;
+            let s = self.window.inner_size();
+            let (w, h) = (s.width as f32, s.height as f32);
+            raw.safe_area_insets = Some(egui::SafeAreaInsets(egui::epaint::MarginF32 { left: r.0 / ppp, top: r.1 / ppp, right: (w - r.0 - r.2) / ppp, bottom: (h - r.1 - r.3) / ppp }));
+        }
         raw
+    }
+
+    /// Across several monitors: where the interface goes in the window
+    /// (x, y, width, height in pixels): the chosen screen, else the system's
+    /// main one if it is spanned, else the first spanned.
+    fn ui_screen_rect(&self) -> Option<(f32, f32, f32, f32)> {
+        if self.display.mode != display::Mode::Span {
+            return None;
+        }
+        let all = display::layout(self.window.available_monitors());
+        let chosen = self.display.chosen(&all);
+        if chosen.len() < 2 {
+            return None;
+        }
+        let (origin, _) = display::span_box(&chosen)?;
+        let primary = self.window.primary_monitor().and_then(|m| m.name());
+        let ui = chosen
+            .iter()
+            .find(|c| Some(&c.name) == self.display.ui_screen.as_ref())
+            .or_else(|| chosen.iter().find(|c| Some(&c.name) == primary.as_ref()))
+            .or_else(|| chosen.first())?;
+        Some(((ui.x - origin.x) as f32, (ui.y - origin.y) as f32, ui.w as f32, ui.h as f32))
     }
 
     /// At the start of a UI pass: a gamepad move out of a text box (the box
@@ -3216,6 +3281,15 @@ impl Game {
 
         // ---- camera
         self.apply_graphics();
+        // (Full screen over the chosen monitors, asked once the window is up: X11.)
+        #[cfg(target_os = "linux")]
+        if self.span_pending && self.frame > 3 {
+            self.span_pending = false;
+            let chosen = self.display.chosen(&display::layout(self.window.available_monitors()));
+            if let Err(e) = display::x11_fullscreen_all(&self.window, &chosen) {
+                log::warn!("display: full screen over the monitors: {e}");
+            }
+        }
         let size = self.window.inner_size();
         let (w, h) = (size.width.max(1) as f32, size.height.max(1) as f32);
         // the size the scene is drawn at (graphics settings: render resolution)
@@ -3369,6 +3443,8 @@ impl Game {
         self.update_audio(cam, fire, in_menu, &c, dt, scrape);
 
         let near = if in_menu { (calt * 0.02).clamp(0.4, 20_000.0) as f32 } else if self.cam_mode == 1 && !self.crashed { 0.03f32 } else { 0.25f32 };
+        // (Across wide monitors the horizontal angle is kept sane: display.rs.)
+        let fov = if in_menu { fov } else { display::fit_fov(fov, w / h, self.display.wide_hfov) };
         let proj = perspective_rev(fov, w / h, near);
         let view = look_to(Vec3::ZERO, dir.as_vec3(), upv.as_vec3());
         let vp = proj * view;
@@ -4311,7 +4387,123 @@ impl Game {
     }
 
     /// The graphics settings panel; saves what changes (applied next frame).
+    /// Puts the window as `display` says, keeps the choice, and says when
+    /// spanning the monitors needs a restart (Wayland, see display.rs).
+    fn set_display(&mut self) {
+        self.display.apply(&self.window);
+        self.span_pending = self.display.mode == display::Mode::Span && self.x11;
+        self.display.save();
+        if self.display.mode == display::Mode::Span && !self.x11 && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            self.status = t!("Restart the game to spread it over all the screens (Wayland).", "Relancez le jeu pour l'étendre sur tous les écrans (Wayland).").into();
+            self.status_until = self.real + 6.0;
+        }
+    }
+
+    /// Graphics, Display: window, full screen (which monitor) or all monitors.
+    fn display_settings(&mut self, ui: &mut egui::Ui) {
+        use display::Mode;
+        use egui::RichText;
+        menu::heading(ui, t!("DISPLAY", "AFFICHAGE"));
+        let before = self.display.clone();
+        ui.horizontal(|ui| {
+            for (m, en, fr) in [(Mode::Windowed, "Window", "Fenêtre"), (Mode::Fullscreen, "Full screen", "Plein écran"), (Mode::Span, "All screens", "Tous les écrans")] {
+                if ui.selectable_label(self.display.mode == m, if i18n::is_fr() { fr } else { en }).clicked() {
+                    self.display.mode = m;
+                    if m != Mode::Windowed {
+                        self.display.last_full = m;
+                    }
+                }
+            }
+        });
+        let monitors = display::Display::monitors(&self.window);
+        if self.display.mode == Mode::Fullscreen && monitors.len() > 1 {
+            let cur = self.display.monitor.clone();
+            let shown = monitors.iter().find(|(n, _)| Some(n) == cur.as_ref()).map(|m| m.1.clone()).unwrap_or_else(|| t!("This screen", "Cet écran").into());
+            egui::ComboBox::from_id_salt("monitor").selected_text(shown).width(240.0).show_ui(ui, |ui| {
+                if ui.selectable_label(cur.is_none(), t!("This screen", "Cet écran")).clicked() {
+                    self.display.monitor = None;
+                }
+                for (n, label) in &monitors {
+                    if ui.selectable_label(cur.as_ref() == Some(n), label).clicked() {
+                        self.display.monitor = Some(n.clone());
+                    }
+                }
+            });
+        }
+        if self.display.mode == Mode::Span {
+            // The monitors as the system lays them out: click one to take it in or leave it out.
+            let screens = display::layout(self.window.available_monitors());
+            let chosen = self.display.chosen(&screens);
+            if let Some((bp, bs)) = display::span_box(&screens) {
+                let k = (300.0 / bs.width as f32).min(130.0 / bs.height as f32);
+                let (area, _) = ui.allocate_exact_size(egui::vec2(bs.width as f32 * k, bs.height as f32 * k), egui::Sense::hover());
+                let mut toggle: Option<String> = None;
+                for sc in &screens {
+                    let r = egui::Rect::from_min_size(area.min + egui::vec2((sc.x - bp.x) as f32 * k, (sc.y - bp.y) as f32 * k), egui::vec2(sc.w as f32 * k, sc.h as f32 * k)).shrink(2.0);
+                    let resp = ui.interact(r, egui::Id::unique(("screen", &sc.name)), egui::Sense::click());
+                    let on = chosen.contains(sc);
+                    let p = ui.painter();
+                    p.rect_filled(r, 4.0, if on { menu::ACCENT.gamma_multiply(0.35) } else { egui::Color32::from_gray(40) });
+                    p.rect_stroke(r, 4.0, egui::Stroke::new(if resp.hovered() { 2.0 } else { 1.0 }, if on { menu::ACCENT } else { egui::Color32::from_gray(110) }), egui::StrokeKind::Inside);
+                    p.text(r.center(), egui::Align2::CENTER_CENTER, &sc.name, egui::FontId::proportional(11.0), egui::Color32::WHITE);
+                    if resp.clicked() {
+                        toggle = Some(sc.name.clone());
+                    }
+                }
+                if let Some(n) = toggle {
+                    let mut set: Vec<String> = chosen.iter().map(|c| c.name.clone()).collect();
+                    if let Some(i) = set.iter().position(|x| *x == n) {
+                        // (At least one stays.)
+                        if set.len() > 1 {
+                            set.remove(i);
+                        }
+                    } else {
+                        set.push(n);
+                    }
+                    self.display.screens = if set.len() == screens.len() { Vec::new() } else { set };
+                }
+                let ch = self.display.chosen(&screens);
+                if let Some((_, s)) = display::span_box(&ch) {
+                    ui.label(RichText::new(i18n::plural(ch.len() as u64, &format!("screen · {}×{}", s.width, s.height), &format!("screens · {}×{}", s.width, s.height), &format!("écran · {}×{}", s.width, s.height), &format!("écrans · {}×{}", s.width, s.height))).size(11.5).color(menu::DIM));
+                }
+            }
+            if chosen.len() > 1 {
+                let names: Vec<String> = self.display.chosen(&screens).iter().map(|c| c.name.clone()).collect();
+                let cur = self.display.ui_screen.clone().filter(|n| names.contains(n));
+                ui.horizontal(|ui| {
+                    ui.label(t!("Menus and instruments on", "Menus et instruments sur"));
+                    egui::ComboBox::from_id_salt("ui_screen").selected_text(cur.clone().unwrap_or_else(|| t!("the main screen", "l'écran principal").into())).show_ui(ui, |ui| {
+                        if ui.selectable_label(cur.is_none(), t!("the main screen", "l'écran principal")).clicked() {
+                            self.display.ui_screen = None;
+                        }
+                        for n in &names {
+                            if ui.selectable_label(cur.as_ref() == Some(n), n).clicked() {
+                                self.display.ui_screen = Some(n.clone());
+                            }
+                        }
+                    });
+                });
+            }
+            ui.horizontal(|ui| {
+                ui.label(t!("Widest view", "Vue la plus large"));
+                ui.add(egui::Slider::new(&mut self.display.wide_hfov, 70.0..=150.0).suffix("°").fixed_decimals(0));
+            });
+            ui.label(RichText::new(t!("Click the screens to use: one view across them. F11 goes back to a window.", "Cliquez les écrans à utiliser : une seule vue sur eux. F11 revient en fenêtre.")).size(11.5).color(menu::DIM));
+        } else {
+            ui.label(RichText::new(t!("F11 switches between the window and full screen.", "F11 bascule entre la fenêtre et le plein écran.")).size(11.5).color(menu::DIM));
+        }
+        if self.display != before {
+            if self.display.mode != before.mode || self.display.monitor != before.monitor || self.display.screens != before.screens {
+                self.set_display();
+            } else {
+                self.display.save();
+            }
+        }
+        ui.add_space(6.0);
+    }
+
     fn graphics_settings(&mut self, ui: &mut egui::Ui) {
+        self.display_settings(ui);
         let size = self.window.inner_size();
         if self.gfx.ui(ui, (size.width, size.height), self.fps) {
             self.gfx.save();
@@ -4431,8 +4623,10 @@ impl Game {
         use egui::{Align2, Color32, RichText};
         use menu::{Page, ACCENT, DIM, TEXT};
         // The backdrop dims the scene and keeps the mouse from the camera behind it.
-        let screen = ctx.content_rect();
-        egui::Area::new(egui::Id::unique("pause_dim")).order(egui::Order::Middle).fixed_pos(screen.min).show(ctx, |ui| {
+        let screen = ctx.viewport_rect();
+        // (Over every screen when the window spans several.)
+        egui::Area::new(egui::Id::unique("pause_dim")).order(egui::Order::Middle).constrain_to(screen).fixed_pos(screen.min).show(ctx, |ui| {
+            ui.set_clip_rect(screen);
             ui.allocate_response(screen.size(), egui::Sense::click());
             ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(130));
         });
@@ -5034,7 +5228,7 @@ impl Game {
             }
             // Real traffic: a tag beside each aircraft within range.
             if let (true, Some((vp, cam))) = (self.show_hud && self.live.enabled(), self.live_view) {
-                let screen = ctx.content_rect();
+                let screen = ctx.viewport_rect();
                 let painter = ctx.layer_painter(egui::LayerId::background());
                 for p in &self.live.planes {
                     let rel = p.pos - cam;
@@ -5278,10 +5472,23 @@ impl ApplicationHandler for App {
         if self.game.is_some() {
             return;
         }
-        let attrs = Window::default_attributes().with_title("Fable Flight").with_inner_size(winit::dpi::PhysicalSize::new(self.args.size.0, self.args.size.1));
+        let mut attrs = Window::default_attributes().with_title("Fable Flight").with_inner_size(winit::dpi::PhysicalSize::new(self.args.size.0, self.args.size.1));
+        // Across all monitors: made borderless over all of them from the start
+        // (a window manager may not let a mapped window grow past one screen).
+        if self.args.display_settings().mode == display::Mode::Span {
+            let d = self.args.display_settings();
+            if let Some((p, s)) = display::span_box(&d.chosen(&display::layout(el.available_monitors()))) {
+                attrs = attrs.with_decorations(false).with_position(p).with_inner_size(s);
+            }
+        }
         let window = Arc::new(el.create_window(attrs).expect("window"));
         match Game::new(window, &self.args) {
-            Ok(g) => self.game = Some(g),
+            Ok(g) => {
+                if g.display.mode != display::Mode::Windowed {
+                    g.display.apply(&g.window);
+                }
+                self.game = Some(g);
+            }
             Err(e) => {
                 eprintln!("failed to start: {e:#}");
                 el.exit();
@@ -5557,8 +5764,20 @@ fn main() -> anyhow::Result<()> {
     if let Some(i) = argv.iter().position(|a| a == "--jsbsim-compare") {
         std::process::exit(jsbsim_compare(argv.get(i + 1), argv.iter().position(|a| a == "--aircraft").and_then(|k| argv.get(k + 1))));
     }
-    let args = parse_args();
+    #[allow(unused_mut)]
+    let mut args = parse_args();
     i18n::set_lang(args.lang.or(settings::Settings::load().lang).unwrap_or_else(i18n::Lang::detect));
+    // Spanning the monitors takes X11 (XWayland) on a Wayland desktop: display.rs.
+    #[cfg(target_os = "linux")]
+    let el = if display::wants_x11(&args.display_settings()) {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        args.x11 = true;
+        log::info!("display: across all monitors, through X11");
+        EventLoop::builder().with_x11().build()?
+    } else {
+        EventLoop::new()?
+    };
+    #[cfg(not(target_os = "linux"))]
     let el = EventLoop::new()?;
     el.set_control_flow(ControlFlow::Poll);
     el.run_app(&mut App { args, game: None })?;
