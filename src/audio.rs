@@ -1970,7 +1970,7 @@ mod tests {
     /// `cargo test thunder_levels -- --nocapture`
     #[test]
     fn thunder_levels() {
-        let win = |x: &[[f32; 2]]| -> Vec<f32> { x.chunks(RATE as usize / 2).map(|c| (c.iter().map(|s| s[0] * s[0] + s[1] * s[1]).sum::<f32>() / (2 * c.len()) as f32)).collect() };
+        let win = |x: &[[f32; 2]]| -> Vec<f32> { x.chunks(RATE as usize / 2).map(|c| c.iter().map(|s| s[0] * s[0] + s[1] * s[1]).sum::<f32>() / (2 * c.len()) as f32).collect() };
         let mut got = Vec::new();
         for cabin in [0.0, 1.0] {
             let p = Params { cabin, ..flying() };

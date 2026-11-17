@@ -190,6 +190,94 @@ fn bridge_pieces(vt: &VecTile) -> Vec<Vec<[f32; 2]>> {
     vt.roads.iter().filter(|r| r.brunnel == 1 && r.class <= RC_RAIL && r.class != RC_PATH).flat_map(|r| clip(&r.pts, vt.extent)).collect()
 }
 
+fn point_in_ring(p: Vec2, ring: &[[f32; 2]]) -> bool {
+    let mut inside = false;
+    for w in ring.iter().zip(ring.iter().cycle().skip(1)).take(ring.len()) {
+        let (a, b) = (Vec2::from(*w.0), Vec2::from(*w.1));
+        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// Water and a short margin on either bank. Extending the bridge to dry ground
+/// prevents a visible road-to-deck gap at the waterline.
+fn over_water(rings: &[(&Vec<[f32; 2]>, [f32; 4])], p: Vec2, bank: f32) -> bool {
+    rings.iter().any(|(ring, bb)| {
+        if ring.len() < 3 || p.x < bb[0] - bank || p.y < bb[1] - bank || p.x > bb[2] + bank || p.y > bb[3] + bank { return false; }
+        point_in_ring(p, ring) || ring.iter().zip(ring.iter().cycle().skip(1)).take(ring.len()).any(|(a, b)| seg_dist(p, Vec2::from(*a), Vec2::from(*b)) <= bank)
+    })
+}
+
+/// Split a clipped road into water-crossing spans, sampled finely enough that
+/// shore transitions remain short and the deck can meet the approach cleanly.
+fn water_spans(piece: Vec<[f32; 2]>, vt: &VecTile, um: f32) -> Vec<(Vec<[f32; 2]>, bool)> {
+    if piece.len() < 2 || vt.water.is_empty() { return vec![(piece, false)]; }
+    let bank = 8.0 / um;
+    let mut waters = Vec::new();
+    for (class, rings) in &vt.water {
+        if *class == 1 { continue; } // coastline roads stay on shore
+        for ring in rings {
+            if ring.len() < 3 { continue; }
+            let bb = ring.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+            waters.push((ring, bb));
+        }
+    }
+    let road_bb = piece.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+    if !waters.iter().any(|(_, b)| b[0] <= road_bb[2] + bank && b[2] >= road_bb[0] - bank && b[1] <= road_bb[3] + bank && b[3] >= road_bb[1] - bank) {
+        return vec![(piece, false)];
+    }
+    let mut out = Vec::new();
+    let mut run = vec![piece[0]];
+    let mut run_bridge = None;
+    for w in piece.windows(2) {
+        let a = Vec2::from(w[0]);
+        let b = Vec2::from(w[1]);
+        let length = (b - a).length();
+        let steps = ((length * um / 7.0).ceil() as usize).max(1);
+        for j in 0..steps {
+            let t0 = j as f32 / steps as f32;
+            let t1 = (j + 1) as f32 / steps as f32;
+            let p0 = a.lerp(b, t0);
+            let p1 = a.lerp(b, t1);
+            let bridge = over_water(&waters, a.lerp(b, (t0 + t1) * 0.5), bank);
+            if let Some(old) = run_bridge {
+                if old != bridge {
+                    if run.len() > 1 { out.push((std::mem::replace(&mut run, vec![p0.into()]), old)); }
+                    run_bridge = Some(bridge);
+                }
+            } else {
+                run_bridge = Some(bridge);
+            }
+            if run.last().is_none_or(|p| (Vec2::from(*p) - p1).length_squared() > 1e-8) { run.push(p1.into()); }
+        }
+    }
+    if run.len() > 1 { out.push((run, run_bridge.unwrap_or(false))); }
+    if out.is_empty() { vec![(piece, false)] } else { out }
+}
+
+/// Remove terrain sampling noise and cap grades on ordinary roads. Both passes
+/// are constrained by distance so sparse map vertices cannot create ramps.
+fn grade_profile(ground: &[f32], cum: &[f32], max_grade: f32) -> Vec<f32> {
+    let mut z = ground.to_vec();
+    if z.len() < 3 { return z; }
+    let mut smooth = z.clone();
+    for i in 1..z.len() - 1 {
+        smooth[i] = (z[i - 1] + 2.0 * z[i] + z[i + 1]) * 0.25;
+    }
+    z = smooth;
+    for i in 1..z.len() {
+        let rise = max_grade * (cum[i] - cum[i - 1]);
+        z[i] = z[i].clamp(z[i - 1] - rise, z[i - 1] + rise);
+    }
+    for i in (0..z.len() - 1).rev() {
+        let rise = max_grade * (cum[i + 1] - cum[i]);
+        z[i] = z[i].clamp(z[i + 1] - rise, z[i + 1] + rise);
+    }
+    z
+}
+
 /// Follow a bridge onward from one of its ends - through other bridge pieces
 /// and across tile borders - to where it lands. Returns the extra length
 /// walked and the ground height at the landing.
@@ -289,6 +377,9 @@ fn junctions(vt: &VecTile, urban: bool, um: f32) -> Vec<Vec<([f32; 2], NodeInfo)
                 continue;
             }
             let (la, lb) = (&vt.roads[idx[x]], &vt.roads[idx[y]]);
+            // Roads on different map layers cross in projection but do not
+            // form an at-grade junction.
+            if la.layer != lb.layer { continue; }
             for wa in la.pts.windows(2) {
                 let (a, r) = (Vec2::from(wa[0]), Vec2::from(wa[1]) - Vec2::from(wa[0]));
                 if a.x.min(a.x + r.x) > bq[2] + tol || a.x.max(a.x + r.x) < bq[0] - tol || a.y.min(a.y + r.y) > bq[3] + tol || a.y.max(a.y + r.y) < bq[1] - tol {
@@ -397,7 +488,7 @@ fn near_line(pts: &[[f32; 2]], p: Vec2, r: f32) -> bool {
 fn redundant(vt: &VecTile, urban: bool, um: f32) -> Vec<bool> {
     let n = vt.roads.len();
     let mut skip = vec![false; n];
-    let ground = |l: &RoadLine| l.brunnel == 0 && l.class <= RC_SERVICE && l.pts.len() >= 2;
+    let ground = |l: &RoadLine| l.brunnel == 0 && l.layer == 0 && l.class <= RC_SERVICE && l.pts.len() >= 2;
     // half width of each carriageway, in tile units
     let hw: Vec<f32> = vt.roads.iter().map(|l| cfg(l, urban).drive * 0.5 / um).collect();
     let bb: Vec<[f32; 4]> = vt.roads.iter().map(|l| l.pts.iter().fold([f32::MAX, f32::MAX, f32::MIN, f32::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])).collect();
@@ -508,6 +599,40 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
     let junc = junctions(vt, urban, um);
     let mut n_lamps = 0usize;
 
+    // Fill the little wedges left where independently tessellated road ribbons
+    // meet. The through roads are drawn afterward so their lane paint continues
+    // across the apron without exposing terrain between the arms.
+    let mut pads: Vec<(Vec2, f32, u8)> = Vec::new();
+    for entries in &junc {
+        for (p, node) in entries.iter().filter(|(_, j)| j.legs >= 3) {
+            let p = Vec2::from(*p);
+            if let Some(existing) = pads.iter_mut().find(|(q, _, _)| (*q - p).length() < 3.0 / um) {
+                existing.1 = existing.1.max(node.half + 2.0);
+                existing.2 = existing.2.min(node.best);
+            } else {
+                pads.push((p, node.half + 2.0, node.best));
+            }
+        }
+    }
+    for (p, radius, class) in pads.into_iter().take(2048) {
+        let center = cx.pos(p.into(), cx.ground(p.into()) + 0.15);
+        let start = out.verts.len() as u32;
+        let kind = class as u32 | (yellow as u32) << 5 | (left as u32) << 13;
+        let vertex = |position: Vec3, across: f32| RoadVertex { pos: position.into(), q: [across, 0.0, radius, 1e4], kind: kind as f32 };
+        out.verts.push(vertex(center, 0.0));
+        let count = 16u32;
+        for i in 0..=count {
+            let a = i as f32 / count as f32 * std::f32::consts::TAU;
+            let offset = Vec2::new(a.cos(), a.sin()) * radius;
+            let position = cx.pos((p + offset / um).into(), cx.ground((p + offset / um).into()) + 0.15);
+            out.radius = out.radius.max(position.length());
+            out.verts.push(vertex(position, offset.x));
+        }
+        for i in 0..count {
+            out.idx.extend([start, start + i + 1, start + i + 2]);
+        }
+    }
+
     for li in order {
         if dup[li] {
             continue;
@@ -515,10 +640,12 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
         let line = &vt.roads[li];
         let cf = cfg(line, urban);
         let half = cf.drive * 0.5 + if cf.walk { 1.9 } else { 0.0 };
-        let is_bridge = line.brunnel == 1 && line.class != RC_PATH && line.class != RC_TRACK;
+        for piece in clip(&line.pts, ext) {
+          let spans = if line.brunnel == 0 { water_spans(piece, vt, um) } else { vec![(piece, false)] };
+          for (piece, auto_bridge) in spans {
+        let is_bridge = (line.brunnel == 1 || auto_bridge) && line.class != RC_PATH && line.class != RC_TRACK;
         let lit = urban && line.brunnel != 2 && line.class <= RC_MINOR && (cf.walk || (line.class <= RC_TRUNK && !line.ramp) || is_bridge);
         let kind = line.class as u32 | (line.oneway as u32) << 4 | (yellow as u32) << 5 | (cf.walk as u32) << 6 | (cf.lanes as u32) << 8 | (cf.parking as u32) << 12 | (left as u32) << 13 | (lit as u32) << 14;
-        for piece in clip(&line.pts, ext) {
             // Resample to at most ~9 m between points so the ribbon follows the ground.
             let mut pts: Vec<[f32; 2]> = Vec::new();
             let mut orig: Vec<usize> = Vec::new();
@@ -579,7 +706,7 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
             let side = |i: usize, s: f32, w: f32| [pts[i][0] + nrm[i].x * s * w / um, pts[i][1] + nrm[i].y * s * w / um];
 
             // Surface height along the centreline.
-            let bridge = line.brunnel == 1 && line.class != RC_PATH && line.class != RC_TRACK;
+            let bridge = (line.brunnel == 1 || auto_bridge) && line.class != RC_PATH && line.class != RC_TRACK;
             let mut zs: Vec<f32> = pts.iter().map(|p| cx.ground(*p)).collect();
             let mut pre = 0.0;
             if bridge {
@@ -591,9 +718,12 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
                 pre = ea;
                 for i in 0..n {
                     let t = (ea + cum[i]) / total;
-                    let clear = ((ea + cum[i]).min(total - ea - cum[i]) / 45.0).min(1.0) * 5.5;
+                    let clear = (std::f32::consts::PI * t).sin().max(0.0) * 6.0;
                     zs[i] = (za + (zb - za) * t + camber * 4.0 * t * (1.0 - t)).max(zs[i] + clear);
                 }
+            } else {
+                let grade = match line.class { RC_MOTORWAY => 0.06, RC_TRUNK => 0.08, RC_PRIMARY | RC_SECONDARY => 0.09, _ => 0.12 };
+                zs = grade_profile(&zs, &cum, grade);
             }
 
             if line.brunnel != 2 {
@@ -608,6 +738,8 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
                         mesh.poly(false, &[(c(i, 1.0, 0.0), [-half, al0]), (c(i, -1.0, 0.0), [half, al0]), (c(i + 1, -1.0, 0.0), [half, al1]), (c(i + 1, 1.0, 0.0), [-half, al1])], [0, 0, 0, K_DECK], sty, Some(upv));
                         for s in [1.0f32, -1.0] {
                             mesh.poly(false, &[(c(i, s, -thick), [al0, 0.0]), (c(i + 1, s, -thick), [al1, 0.0]), (c(i + 1, s, 0.9), [al1, 1.9]), (c(i, s, 0.9), [al0, 1.9])], grey, [90, 0, 120, 0], None);
+                            let cap = |k: usize, dz: f32| cx.pos(side(k, s, half), zs[k] + dz);
+                            mesh.poly(false, &[(cap(i, 0.92), [al0, 0.0]), (cap(i + 1, 0.92), [al1, 0.0]), (cap(i + 1, 1.08), [al1, 0.16]), (cap(i, 1.08), [al0, 0.16])], [172, 174, 173, K_PLAIN], [90, 0, 120, 0], None);
                         }
                         mesh.poly(false, &[(c(i, 1.0, -thick), [0.0, al0]), (c(i, -1.0, -thick), [1.0, al0]), (c(i + 1, -1.0, -thick), [1.0, al1]), (c(i + 1, 1.0, -thick), [0.0, al1])], grey, [90, 0, 120, 0], None);
                         let ring: Vec<[f32; 2]> = [side(i, 1.0, half), side(i, -1.0, half), side(i + 1, -1.0, half), side(i + 1, 1.0, half)].iter().map(|p| [p[0] / ext, p[1] / ext]).collect();
@@ -629,10 +761,28 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
                                 let m = cx.metres(pts[i]);
                                 let t = Vec2::new(nrm[i].y, -nrm[i].x).normalize_or_zero();
                                 let (a, b) = (nrm[i].normalize_or_zero() * (half * if sp > 100.0 { 0.9 } else { 0.55 }), t * if sp > 100.0 { 2.6 } else { 0.7 });
-                                mesh.boxm(cx, false, m, a, b, g - 3.0, zs[i] - thick, grey, [40, 0, 110, 0], None);
+                                mesh.boxm(cx, false, m, nrm[i].normalize_or_zero() * (half + 0.7), t * 2.1, zs[i] - thick - 0.18, zs[i] - thick + 0.22, [142, 141, 136, K_PLAIN], [40, 0, 110, 0], None);
+                                mesh.boxm(cx, false, m, a, b, g - 3.0, zs[i] - thick - 0.18, grey, [40, 0, 110, 0], None);
                             }
                             next += sp;
                         }
+                    }
+                    // Keep the deck shader's road markings at distance; a
+                    // slightly raised ribbon gives the close road pass a stable
+                    // surface through LOD changes without depth fighting.
+                    let v0 = out.verts.len() as u32;
+                    for i in 0..n {
+                        let endd = stops.iter().fold(1e4f32, |m, (s, j)| m.min((cum[i] - s).abs() - (j.half - half)));
+                        for side_sign in [1.0f32, -1.0] {
+                            let p = side(i, side_sign, half);
+                            let pos = cx.pos(p, zs[i] + 0.08);
+                            out.radius = out.radius.max(pos.length());
+                            out.verts.push(RoadVertex { pos: pos.into(), q: [-side_sign * half, pre + cum[i], half, endd], kind: kind as f32 });
+                        }
+                    }
+                    for i in 0..n as u32 - 1 {
+                        let a = v0 + i * 2;
+                        out.idx.extend([a, a + 1, a + 2, a + 1, a + 3, a + 2]);
                     }
                 } else {
                     // Ribbon on the ground: each edge takes its own height so it lies on slopes.
@@ -642,7 +792,7 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
                         let endd = stops.iter().fold(1e4f32, |m, (s, j)| m.min((cum[i] - s).abs() - (j.half - half)));
                         for s in [1.0f32, -1.0] {
                             let p = side(i, s, half);
-                            let pos = cx.pos(p, cx.ground(p) + 0.12);
+                            let pos = cx.pos(p, zs[i] + 0.12);
                             out.radius = out.radius.max(pos.length());
                             out.verts.push(RoadVertex { pos: pos.into(), q: [-s * half, cum[i], half, endd], kind: kind as f32 });
                         }
@@ -742,6 +892,7 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
                     keep_clear: stops.iter().map(|(s, j)| (*s, j.half + 6.5)).collect(),
                 });
             }
+          }
         }
     }
 

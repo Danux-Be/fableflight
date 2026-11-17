@@ -319,7 +319,8 @@ pub struct MeshData {
     pub idx: Vec<u32>,
     /// RGBA mip levels: width, height, texels
     pub mips: Vec<(u32, u32, Vec<u8>)>,
-    #[allow(dead_code)]
+    /// (where the tile sits; read by the tests)
+    #[cfg_attr(not(test), allow(dead_code))]
     origin: DVec3,
     col: ColMesh,
     copyright: Vec<String>,
@@ -666,7 +667,7 @@ fn node_matrix(n: &serde_json::Value) -> DMat4 {
 }
 
 /// A glTF binary tile: its triangles placed in our frame, its texture with mips.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn decode(glb: &[u8]) -> Result<MeshData> {
     decode_with(glb, None)
 }

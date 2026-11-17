@@ -6,11 +6,10 @@ use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
 
 pub const TEXT: &str = "FABLE FLIGHT";
 
-/// A bold system sans for the title (the UI borrows the system's fonts too).
+/// The title's face: the interface's condensed display bold.
 pub fn find_font() -> Option<Vec<u8>> {
-    let fc = std::process::Command::new("fc-match").args(["-f", "%{file}", "sans:weight=bold"]).output().ok().and_then(|o| String::from_utf8(o.stdout).ok());
-    let fallbacks = ["/usr/share/fonts/google-noto/NotoSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf", "C:/Windows/Fonts/segoeuib.ttf"];
-    fc.iter().map(|s| s.trim().to_string()).chain(fallbacks.iter().map(|s| s.to_string())).filter(|p| p.ends_with(".ttf") || p.ends_with(".otf")).find_map(|p| std::fs::read(p).ok())
+    // the interface's display face, bundled (menu.rs)
+    Some(crate::menu::FONT_DISPLAY.to_vec())
 }
 
 /// The title's coverage (0..255) on a `w` x `h` screen with UI scale
@@ -19,13 +18,13 @@ pub fn find_font() -> Option<Vec<u8>> {
 pub fn mask(font: &[u8], w: u32, h: u32, scale: f32, cx: f32) -> Vec<u8> {
     let mut out = vec![0u8; (w * h) as usize];
     let Ok(font) = FontRef::try_from_slice(font) else { return out };
-    let cap = 30.0 * scale;
+    let cap = 34.0 * scale;
     // Size the font so its capitals stand `cap` pixels tall.
     // (a PxScale is the font's ascent-to-descent height in pixels)
     let cap_units = font.outline(font.glyph_id('H')).map(|o| (o.bounds.max.y - o.bounds.min.y).abs()).unwrap_or(0.7 * font.height_unscaled());
     let px = PxScale::from(cap * font.height_unscaled() / cap_units.max(1.0));
     let sf = font.as_scaled(px);
-    let track = 0.32 * cap;
+    let track = 0.46 * cap;
     let mut x = 0.0;
     let mut prev = None;
     let mut glyphs = Vec::new();
@@ -41,7 +40,7 @@ pub fn mask(font: &[u8], w: u32, h: u32, scale: f32, cx: f32) -> Vec<u8> {
     let width = x - track;
     let x0 = w as f32 * cx - width * 0.5;
     // Capitals sit between `top` and `top + cap`.
-    let top = 30.0 * scale;
+    let top = 34.0 * scale;
     let base = top + cap;
     for (id, gx) in glyphs {
         let g = id.with_scale_and_position(px, point(x0 + gx, base));

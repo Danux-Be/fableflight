@@ -60,8 +60,8 @@ impl<'a> Pb<'a> {
 pub enum Val {
     Str(String),
     Num(f64),
-    #[allow(dead_code)]
-    Bool(bool),
+    /// a true or false (not kept: nothing reads one)
+    Bool,
 }
 impl Val {
     pub fn num(&self) -> Option<f64> {
@@ -161,7 +161,7 @@ fn decode_layer(b: &[u8], want: &[&str]) -> Option<(String, Layer)> {
 
 fn decode_value(b: &[u8]) -> Val {
     let mut pb = Pb::new(b);
-    let mut v = Val::Bool(false);
+    let mut v = Val::Bool;
     while !pb.done() {
         let key = pb.varint();
         v = match (key >> 3, key & 7) {
@@ -173,7 +173,10 @@ fn decode_value(b: &[u8]) -> Val {
                 let n = pb.varint();
                 Val::Num(((n >> 1) as i64 ^ -((n & 1) as i64)) as f64)
             }
-            (7, 0) => Val::Bool(pb.varint() != 0),
+            (7, 0) => {
+                pb.varint();
+                Val::Bool
+            }
             (_, w) => {
                 pb.skip(w);
                 v

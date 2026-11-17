@@ -658,6 +658,7 @@ fn relief(P: vec3f, N: vec3f, uv: vec2f, sp: f32) -> f32 {
 // as the tile does, so the lights never stop at the edge of what is loaded.
 const GLOW_CELLS = 128.0;   // cells across a building tile (~15 m at 40 deg)
 const GLOW_K = 0.0016;      // radiance of the brightest downtown (x sun_dir.w)
+const GLOBE_LIGHTS = 60.0;  // their gain on the start screen's globe, seen from orbit
 
 // The points of one level: cells 2^lv base cells across, each with at most
 // one light (chance p, carrying 1/p cells' worth) of random brightness and
@@ -725,7 +726,13 @@ fn city_glow(gq: vec2f, dens: f32, dcx: vec2f, dcy: vec2f, upn: vec3f) -> vec3f 
   if (t > 0.0) { col += glow_dots(gq, dens, J, u32(l0) + 1u) * t; }
   // A quarter of it as the warm light spilt on streets and walls between the points.
   col = col * 0.75 + vec3f(1.0, 0.62, 0.34) * dens * 0.25;
-  return col * (GLOW_K * G.sun_dir.w * night * (1.0 - cover));
+  // From orbit (the start screen's globe) a pixel spans whole towns: their
+  // average, as smooth as the Black Marble itself.
+  let gk = globe_k();
+  if (gk > 0.0) { col = mix(col, vec3f(1.0, 0.68, 0.40) * dens * 5.0, gk); }
+  // On the start screen's globe the night side is shown as in the long
+  // exposures the Black Marble was made from, against the day side's exposure.
+  return col * (GLOW_K * G.sun_dir.w * night * (1.0 - cover)) * mix(1.0, GLOBE_LIGHTS, globe_k());
 }
 
 // ------------------------------------------------------------ surface

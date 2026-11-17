@@ -210,7 +210,7 @@ impl Minimap {
                 let Some(label) = [-1.0, 1.0].into_iter().map(|sign| {
                     egui::Rect::from_center_size(midpoint + Vec2::new(0.0, sign * (galley.size().y * 0.5 + 8.0)), galley.size() + Vec2::new(6.0, 4.0))
                 }).find(|r| in_disc(*r, rect.center(), rect.width() * 0.5 - 6.0) && !occupied.iter().any(|other| other.intersects(*r))) else { continue; };
-                painter.rect_filled(label, 3.0, Color32::from_black_alpha(225));
+                painter.rect_filled(label, crate::menu::R_WIDGET, Color32::from_black_alpha(225));
                 painter.galley(label.min + Vec2::new(3.0, 2.0), galley, color);
                 occupied.push(label);
             }
@@ -274,7 +274,7 @@ impl Minimap {
                 .find(|r| in_disc(*r, rect.center(), rect.width() * 0.5 - 6.0) && !occupied.iter().any(|other| other.intersects(r.expand(3.0)))) else { continue };
             painter.circle_filled(point, 2.5, Color32::WHITE);
             painter.circle_stroke(point, 2.5, Stroke::new(1.0, Color32::from_gray(40)));
-            painter.rect_filled(label_rect, 3.0, Color32::from_black_alpha(185));
+            painter.rect_filled(label_rect, crate::menu::R_WIDGET, Color32::from_black_alpha(185));
             painter.galley(label_rect.min + Vec2::new(3.0, 1.0), galley, Color32::WHITE);
             occupied.push(label_rect);
             names.insert(name);
@@ -439,7 +439,7 @@ impl Minimap {
                 painter.line_segment([a, a + Vec2::new(60.0, 0.0)], Stroke::new(4.0, Color32::BLACK));
                 painter.line_segment([a, a + Vec2::new(60.0, 0.0)], Stroke::new(2.0, Color32::WHITE));
                 let label_rect = egui::Rect::from_center_size(a + Vec2::new(30.0, -13.0), Vec2::new(64.0, 18.0));
-                painter.rect_filled(label_rect, 3.0, Color32::from_black_alpha(190));
+                painter.rect_filled(label_rect, crate::menu::R_WIDGET, Color32::from_black_alpha(190));
                 painter.text(label_rect.center(), egui::Align2::CENTER_CENTER, distance_label(meters, crate::i18n::lang()), egui::FontId::proportional(12.0), Color32::WHITE);
                 clip_to_disc(ctx, painter.layer_id(), first_shape, center, radius);
                 // Bezel, with the north mark riding on it.
@@ -461,20 +461,24 @@ impl Minimap {
                 }
                 let hot = resize.hovered() || resize.dragged();
                 painter.circle_filled(knob, 7.0, Color32::from_black_alpha(220));
-                painter.circle_stroke(knob, 7.0, Stroke::new(1.5, if hot { Color32::from_rgb(255, 210, 70) } else { Color32::WHITE }));
-                // Controls sit under the disc.
-                egui::Frame::new().fill(Color32::from_black_alpha(210)).corner_radius(14.0).inner_margin(3.0).show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.x = 3.0;
-                    ui.spacing_mut().button_padding = Vec2::new(5.0, 4.0);
-                    ui.style_mut().override_font_id = Some(egui::FontId::proportional(12.0));
+                painter.circle_stroke(knob, 7.0, Stroke::new(1.5, if hot { crate::menu::ACCENT } else { Color32::WHITE }));
+                // Controls sit under the disc, on one glass strip: the two views as
+                // segmented choices, then zoom and hide.
+                egui::Frame::new().fill(crate::menu::GLASS).stroke(Stroke::new(1.0, crate::menu::LINE)).corner_radius(crate::menu::R_PANEL).inner_margin(4.0).show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
                     ui.horizontal(|ui| {
-                        let button = egui::Button::selectable(self.heading_up, if self.heading_up { crate::t!("Heading", "Cap") } else { crate::t!("North", "Nord") });
-                        if ui.add_sized([48.0, 24.0], button).on_hover_text(crate::t!("Toggle north up / heading up", "Basculer nord en haut / cap en haut")).clicked() { self.heading_up = !self.heading_up; }
-                        let button = egui::Button::selectable(self.plan, if self.plan { crate::t!("Map", "Plan") } else { "Satellite" });
-                        if ui.add_sized([62.0, 24.0], button).on_hover_text(crate::t!("Toggle satellite / map", "Basculer satellite / plan")).clicked() { self.plan = !self.plan; }
-                        if ui.add_enabled(self.zoom > 3, egui::Button::new("-").min_size(Vec2::splat(24.0))).on_hover_text(crate::t!("Zoom out", "D\u{00e9}zoomer")).clicked() { self.zoom -= 1; }
-                        if ui.add_enabled(self.zoom < 17, egui::Button::new("+").min_size(Vec2::splat(24.0))).on_hover_text(crate::t!("Zoom in", "Zoomer")).clicked() { self.zoom += 1; }
-                        if ui.add_sized([24.0, 24.0], egui::Button::new("x")).on_hover_text(crate::t!("Hide map (`)", "Masquer la carte (`)")).clicked() { self.visible = false; }
+                        crate::menu::segments(ui, |ui| {
+                            crate::menu::seg(ui, &mut self.heading_up, false, crate::t!("North", "Nord"));
+                            crate::menu::seg(ui, &mut self.heading_up, true, crate::t!("Heading", "Cap"));
+                        });
+                        crate::menu::segments(ui, |ui| {
+                            crate::menu::seg(ui, &mut self.plan, false, crate::t!("Photo", "Photo"));
+                            crate::menu::seg(ui, &mut self.plan, true, crate::t!("Map", "Plan"));
+                        });
+                        let b = |ui: &mut egui::Ui, on: bool, text: &str| ui.add_enabled(on, egui::Button::new(egui::RichText::new(text).font(crate::menu::data())).min_size(Vec2::new(30.0, 30.0)));
+                        if b(ui, self.zoom > 3, "−").on_hover_text(crate::t!("Zoom out", "D\u{00e9}zoomer")).clicked() { self.zoom -= 1; }
+                        if b(ui, self.zoom < 17, "+").on_hover_text(crate::t!("Zoom in", "Zoomer")).clicked() { self.zoom += 1; }
+                        if b(ui, true, "×").on_hover_text(crate::t!("Hide map (`)", "Masquer la carte (`)")).clicked() { self.visible = false; }
                     });
                 });
             });

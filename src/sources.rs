@@ -733,8 +733,6 @@ pub struct TerrainVertex {
 }
 
 pub struct TileData {
-    #[allow(dead_code)]
-    pub id: TileId,
     pub center: DVec3,
     pub radius: f64,
     pub verts: Vec<TerrainVertex>,
@@ -1232,7 +1230,6 @@ pub fn build_tile(src: &Sources, id: TileId) -> Result<TileData> {
         skirt(GRID, j);
     }
     Ok(TileData {
-        id,
         center,
         radius: radius + drop,
         verts,

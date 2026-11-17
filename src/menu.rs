@@ -111,8 +111,12 @@ pub struct Menu {
     pub press: Option<(f64, f64)>,
     pub dragged: f64,
     pub starting: bool,
-    /// the controls list beside the start panel
-    pub show_controls: bool,
+    /// which start screen is up: the main menu, the globe, the aircraft or the settings
+    pub screen: Screen,
+    /// where the aircraft screen goes back to (the main menu or the globe)
+    pub air_back: Screen,
+    /// the aircraft looked at on the aircraft screen (index into `aircraft::list()`)
+    pub air_view: usize,
     spin: f64,
     /// the chosen spot is this airport, and how to start there
     pub airport: Option<u32>,
@@ -125,8 +129,8 @@ pub struct Menu {
     pub markers: Vec<(u32, f32, f32)>,
     /// which aircraft to fly (index into `aircraft::list()`)
     pub aircraft: usize,
-    /// the hangar (every aircraft, and more to download) while it is open
-    pub hangar: Option<crate::hangar_ui::Tab>,
+    /// the aircraft screen's page: the aircraft you have, or more to download
+    pub air_tab: crate::hangar_ui::Tab,
     /// the collection entry picked out on its download page, what its search has, and whether it lists the unflyable ones too
     pub hangar_sel: Option<String>,
     pub hangar_find: String,
@@ -136,6 +140,44 @@ pub struct Menu {
     pub cold: bool,
     /// payload, as a fraction of the most the aircraft takes (None: as it comes)
     pub payload: Option<f64>,
+}
+
+/// The screens of the start menu. The game boots into `Main`; `Fly` is the
+/// globe (where to start, the conditions, take-off).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Screen {
+    Main,
+    Fly,
+    Aircraft,
+    Settings,
+}
+
+impl Screen {
+    /// `--menu-screen main|fly|aircraft|settings`
+    pub fn parse(s: &str) -> Option<Screen> {
+        Some(match s.trim().to_lowercase().as_str() {
+            "main" | "menu" | "home" => Screen::Main,
+            "fly" | "globe" | "start" => Screen::Fly,
+            "aircraft" | "hangar" | "planes" => Screen::Aircraft,
+            "settings" | "options" => Screen::Settings,
+            _ => return None,
+        })
+    }
+}
+
+/// A longitude for the globe's first view that has the sun on it: the
+/// subsolar longitude at `utc` (hours), pulled up to 35° towards the nearest
+/// of a few land-rich views, so it opens on lit continents rather than the
+/// night side or open ocean.
+pub fn day_side_lon(utc: f64) -> f64 {
+    let wrap = |x: f64| (x + 180.0).rem_euclid(360.0) - 180.0;
+    let sub = wrap(-15.0 * (utc - 12.0));
+    // the Americas, Europe and Africa, India, East Asia
+    let land = [-95.0, -60.0, 15.0, 78.0, 115.0];
+    let d = land.iter().map(|l| wrap(l - sub)).min_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap_or(0.0);
+    // (a little to the west of it: the afternoon side, the terminator on
+    // the eastern limb and the slow spin still on the day side for a while)
+    wrap(sub + d.clamp(-35.0, 35.0) - 15.0)
 }
 
 /// How to start at an airport chosen on the globe.
@@ -151,7 +193,7 @@ pub enum Start {
 
 impl Menu {
     pub fn new(lat: f64, lon: f64, hour: f64) -> Self {
-        Self { lat, lon, alt: 1.5e7, target_alt: 1.1e7, pick: None, pick_name: String::new(), search: String::new(), hour, press: None, dragged: 0.0, starting: false, show_controls: false, spin: 1.0, airport: None, start: Start::Runway, runway: None, start_agl: 450.0, markers: Vec::new(), aircraft: 0, hangar: None, hangar_sel: None, hangar_find: String::new(), hangar_all: false, fuel: 0.5, cold: false, payload: None }
+        Self { lat, lon, alt: 1.5e7, target_alt: 1.1e7, pick: None, pick_name: String::new(), search: String::new(), hour, press: None, dragged: 0.0, starting: false, screen: Screen::Main, air_back: Screen::Main, air_view: 0, spin: 1.0, airport: None, start: Start::Runway, runway: None, start_agl: 450.0, markers: Vec::new(), aircraft: 0, air_tab: crate::hangar_ui::Tab::Mine, hangar_sel: None, hangar_find: String::new(), hangar_all: false, fuel: 0.5, cold: false, payload: None }
     }
 
     pub fn look_at(&mut self, lat: f64, lon: f64, alt: f64) {
@@ -169,9 +211,10 @@ impl Menu {
 
     pub fn update(&mut self, dt: f64) {
         self.alt += (self.target_alt - self.alt) * (dt * 6.0).min(1.0);
-        // The globe drifts slowly until you touch it.
+        // The globe drifts slowly (0.3°/s, so the opening view stays on the
+        // day side for minutes) until you drag, zoom or pick on it.
         if self.spin > 0.0 && self.press.is_none() {
-            self.lon = (self.lon + dt * 2.0 * self.spin + 180.0).rem_euclid(360.0) - 180.0;
+            self.lon = (self.lon + dt * 0.3 * self.spin + 180.0).rem_euclid(360.0) - 180.0;
         }
     }
 
@@ -235,14 +278,275 @@ use crate::i18n::tr;
 use crate::padui::{self, Hint};
 use egui::{Color32, RichText, Stroke};
 
-pub const ACCENT: Color32 = Color32::from_rgb(255, 196, 64);
+// ---- type
+//
+// The interface's own faces, bundled (assets/fonts, SIL OFL) so every
+// machine sees the same thing: Barlow for reading, Barlow Condensed for the
+// display lines, IBM Plex Mono for numbers, coordinates, keys and readouts.
+// The system's sans stays behind them for any glyph they lack. See
+// `load_fonts` in main.rs.
+//
+// Every screen uses these roles and nothing else, so text of the same job
+// looks the same everywhere:
+//
+//   screen_title  display caps 44   SETTINGS, AIRCRAFT, PAUSED
+//   section_title display caps 15   card and panel headings, tracked
+//   page_title    SemiBold 28       a page's own heading (General, Cessna 172RG)
+//   item_title    SemiBold 17       the name of a thing (a start point, an airport)
+//   label         Medium 15         row labels, buttons, tabs, list names
+//   body          Regular 15        sentences
+//   caption       Regular 13        hints, notes, second lines (DIM)
+//   data          Plex Mono 13      numbers, coordinates, key names
+//
+// Writing: sentence case everywhere ("Camera and view"), except the two
+// display roles, which are set in capitals.
+
+/// The display family's name: Barlow Condensed Bold.
+pub const BOLD: &str = "bold";
+/// Barlow Medium: labels, buttons, list names.
+pub const MEDIUM: &str = "medium";
+/// Barlow SemiBold: headings and anything that must read as bold.
+pub const SEMIBOLD: &str = "semibold";
+
+pub const FONT_REGULAR: &[u8] = include_bytes!("../assets/fonts/Barlow-Regular.ttf");
+pub const FONT_MEDIUM: &[u8] = include_bytes!("../assets/fonts/Barlow-Medium.ttf");
+pub const FONT_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Barlow-SemiBold.ttf");
+pub const FONT_DISPLAY: &[u8] = include_bytes!("../assets/fonts/BarlowCondensed-Bold.ttf");
+pub const FONT_MONO: &[u8] = include_bytes!("../assets/fonts/IBMPlexMono-Medium.ttf");
+
+/// The display face (condensed bold) at a size: for the few one-off display
+/// sizes (FLY, the tile captions). Prefer the roles below.
+pub fn bold(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(BOLD.into()))
+}
+
+/// Medium weight at a size.
+pub fn medium(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(MEDIUM.into()))
+}
+
+/// SemiBold at a size.
+pub fn semibold(size: f32) -> egui::FontId {
+    egui::FontId::new(size, egui::FontFamily::Name(SEMIBOLD.into()))
+}
+
+pub fn screen_title() -> egui::FontId {
+    bold(44.0)
+}
+pub fn section_title() -> egui::FontId {
+    bold(15.0)
+}
+pub fn page_title() -> egui::FontId {
+    semibold(28.0)
+}
+pub fn item_title() -> egui::FontId {
+    semibold(17.0)
+}
+pub fn label() -> egui::FontId {
+    medium(15.0)
+}
+pub fn body() -> egui::FontId {
+    egui::FontId::proportional(15.0)
+}
+pub fn caption() -> egui::FontId {
+    egui::FontId::proportional(13.0)
+}
+pub fn data() -> egui::FontId {
+    egui::FontId::monospace(13.0)
+}
+
+/// A screen's title, in capitals (the sidebars, the pause menu).
+pub fn screen_heading(ui: &mut egui::Ui, s: &str) {
+    ui.label(RichText::new(s.to_uppercase()).font(screen_title()).color(Color32::WHITE).extra_letter_spacing(1.5));
+}
+
+/// A page's own heading and the line under it.
+pub fn page_heading(ui: &mut egui::Ui, title: &str, blurb: &str) {
+    ui.label(RichText::new(title).font(page_title()).color(Color32::WHITE));
+    if !blurb.is_empty() {
+        ui.label(RichText::new(blurb).font(body()).color(DIM));
+    }
+}
+
+/// A card's or panel's heading: display capitals, tracked.
+pub fn section_text(s: &str) -> RichText {
+    RichText::new(s.to_uppercase()).font(section_title()).color(Color32::WHITE).extra_letter_spacing(1.0)
+}
+
+// ---- colour
+//
+// One cool, night-sky dark, stepped in surfaces; one warm accent that means
+// "this is the thing to press, or the thing you are on". Everything else is
+// neutral so the yellow keeps its meaning.
+
+/// the UI accent: a warm aviation yellow
+pub const ACCENT: Color32 = Color32::from_rgb(245, 197, 24);
+/// the accent a step brighter, for a hovered primary button
+pub const ACCENT_HI: Color32 = Color32::from_rgb(255, 214, 72);
 /// dark text on the accent colour
-pub const ON_ACCENT: Color32 = Color32::from_rgb(24, 18, 4);
-pub const TEXT: Color32 = Color32::from_rgb(232, 235, 240);
-pub const DIM: Color32 = Color32::from_rgb(150, 158, 170);
-pub const PANEL: Color32 = Color32::from_rgba_premultiplied(9, 12, 17, 228);
+pub const ON_ACCENT: Color32 = Color32::from_rgb(26, 20, 2);
+/// Corner radius of panels, windows and frames: very sharp, not quite square.
+pub const R_PANEL: u8 = 3;
+/// Corner radius of buttons, chips, text fields, sliders, checkboxes, scroll bars.
+pub const R_WIDGET: u8 = 3;
+pub const TEXT: Color32 = Color32::from_rgb(232, 236, 242);
+pub const DIM: Color32 = Color32::from_rgb(146, 156, 171);
+/// quieter than DIM: credits, unchosen captions (still 4.5:1 on BG)
+pub const FAINT: Color32 = Color32::from_rgb(118, 128, 143);
+/// the full-screen backdrop
+pub const BG: Color32 = Color32::from_rgb(8, 11, 16);
+/// a card or group on the backdrop
+pub const SURFACE: Color32 = Color32::from_rgb(15, 19, 26);
+/// a control's resting fill (buttons, tracks)
+pub const RAISED: Color32 = Color32::from_rgb(28, 34, 44);
+/// a control under the pointer
+pub const RAISED_HI: Color32 = Color32::from_rgb(42, 50, 63);
+/// the chosen segment of a segmented control
+pub const CHOSEN: Color32 = Color32::from_rgb(66, 78, 98);
+/// hairlines: card edges, dividers
+pub const LINE: Color32 = Color32::from_rgba_premultiplied(26, 26, 26, 26);
+/// a firmer edge: control outlines, the rail's divider
+pub const LINE_HI: Color32 = Color32::from_rgba_premultiplied(44, 44, 44, 44);
+/// links
+pub const LINK: Color32 = Color32::from_rgb(132, 184, 255);
+pub const OK: Color32 = Color32::from_rgb(112, 214, 138);
+pub const BAD: Color32 = Color32::from_rgb(255, 122, 92);
+pub const PANEL: Color32 = Color32::from_rgba_premultiplied(9, 12, 17, 232);
 /// the see-through glass of the flight panel, over the running game
-pub const GLASS: Color32 = Color32::from_rgba_premultiplied(5, 8, 12, 140);
+pub const GLASS: Color32 = Color32::from_rgba_premultiplied(5, 8, 12, 150);
+
+/// Eases a hover (or any on/off state) in and out instead of snapping: 0..1.
+pub fn ease(ctx: &egui::Context, id: egui::Id, on: bool) -> f32 {
+    ctx.animate_bool_with_time_and_easing(id.with("ease"), on, 0.14, egui::emath::easing::cubic_out)
+}
+
+/// `a` towards `b` by `t`.
+pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    a.lerp_to_gamma(b, t.clamp(0.0, 1.0))
+}
+
+/// A soft round glow: `col` at the centre fading smoothly to nothing at
+/// radii `r` (an ellipse when the two differ). No banding: one mesh.
+pub fn glow(p: &egui::Painter, c: egui::Pos2, r: egui::Vec2, col: Color32) {
+    let n = 48;
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(c, col);
+    // eased fall-off: a few rings, each fainter
+    let rings = [(0.35, 0.72), (0.65, 0.32), (1.0, 0.0)];
+    for (k, a) in rings {
+        for i in 0..n {
+            let t = i as f32 / n as f32 * std::f32::consts::TAU;
+            mesh.colored_vertex(c + egui::vec2(t.cos() * r.x * k, t.sin() * r.y * k), col.gamma_multiply(a));
+        }
+    }
+    for i in 0..n as u32 {
+        let j = (i + 1) % n as u32;
+        mesh.add_triangle(0, 1 + i, 1 + j);
+        for ring in 0..2u32 {
+            let (a0, b0) = (1 + ring * n as u32, 1 + (ring + 1) * n as u32);
+            mesh.add_triangle(a0 + i, b0 + i, b0 + j);
+            mesh.add_triangle(a0 + i, b0 + j, a0 + j);
+        }
+    }
+    p.add(mesh);
+}
+
+/// A segmented control: a recessed track holding `seg`s side by side, the
+/// chosen one raised, its highlight sliding across when the choice changes.
+pub fn segments<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::new()
+        .fill(Color32::from_rgba_premultiplied(0, 0, 0, 70))
+        .stroke(Stroke::new(1.0, LINE))
+        .corner_radius(R_WIDGET + 1)
+        .inner_margin(3)
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            // A slot under the labels for the highlight, filled once the chosen segment is known.
+            let id = ui.next_auto_id().with("seg_slide");
+            let slot = ui.painter().add(egui::Shape::Noop);
+            ui.ctx().data_mut(|d| d.insert_temp::<Option<egui::Rect>>(seg_key(), None));
+            let r = ui.horizontal(|ui| add(ui)).inner;
+            if let Some(target) = ui.ctx().data(|d| d.get_temp::<Option<egui::Rect>>(seg_key())).flatten() {
+                // eased from where it was: it slides when the choice changes
+                let ctx = ui.ctx().clone();
+                let x0 = ctx.animate_value_with_time(id.with("x0"), target.left(), 0.18);
+                let x1 = ctx.animate_value_with_time(id.with("x1"), target.right(), 0.18);
+                let hr = egui::Rect::from_x_y_ranges(x0..=x1, target.y_range());
+                let fill = if ui.is_enabled() { CHOSEN } else { RAISED };
+                ui.painter().set(slot, egui::Shape::rect_filled(hr, R_WIDGET, fill));
+            }
+            r
+        })
+        .inner
+}
+
+/// Where a `seg` tells its `segments` track that it is the chosen one.
+fn seg_key() -> egui::Id {
+    egui::Id::unique("menu::segments chosen")
+}
+
+/// One choice of a `segments` control, like `selectable_value`.
+pub fn seg<T: PartialEq>(ui: &mut egui::Ui, current: &mut T, value: T, text: &str) -> egui::Response {
+    let on = *current == value;
+    let g = ui.painter().layout_no_wrap(text.to_string(), label(), TEXT);
+    let size = egui::vec2(g.size().x + 26.0, 28.0);
+    let (rect, mut resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, ui.is_enabled(), on, text));
+    if on {
+        ui.ctx().data_mut(|d| d.insert_temp::<Option<egui::Rect>>(seg_key(), Some(rect)));
+    }
+    let lit = ease(ui.ctx(), resp.id, (resp.hovered() || resp.has_focus()) && !on);
+    let p = ui.painter();
+    if lit > 0.0 {
+        p.rect_filled(rect, R_WIDGET, Color32::from_white_alpha((10.0 * lit) as u8));
+    }
+    let col = if !ui.is_enabled() { FAINT } else if on { Color32::WHITE } else { mix(DIM, TEXT, lit) };
+    p.galley(rect.center() - g.size() * 0.5, g, col);
+    if resp.clicked() && !on {
+        *current = value;
+        resp.mark_changed();
+    }
+    resp
+}
+
+/// An on/off switch reading only "On" or "Off": the row it sits in says what it is.
+pub fn switch(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
+    let t = if *on { crate::t!("On", "Activé") } else { crate::t!("Off", "Désactivé") };
+    toggle(ui, on, t)
+}
+
+/// An on/off switch with its label after it, in place of a checkbox.
+pub fn toggle(ui: &mut egui::Ui, on: &mut bool, text: impl Into<egui::WidgetText>) -> egui::Response {
+    let text: egui::WidgetText = text.into();
+    let galley = text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::FontSelection::FontId(body()));
+    let (w, h) = (34.0, 18.0);
+    let size = egui::vec2(w + if galley.size().x > 0.0 { 10.0 + galley.size().x } else { 0.0 }, 24.0f32.max(galley.size().y));
+    let (rect, mut resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    if resp.clicked() {
+        *on = !*on;
+        resp.mark_changed();
+    }
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, galley.text()));
+    let t = ui.ctx().animate_bool_with_time_and_easing(resp.id.with("knob"), *on, 0.16, egui::emath::easing::cubic_out);
+    let lit = ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
+    let en = ui.is_enabled();
+    let track = egui::Rect::from_min_size(egui::pos2(rect.left(), rect.center().y - h * 0.5), egui::vec2(w, h));
+    let p = ui.painter();
+    let off_fill = mix(RAISED, RAISED_HI, lit);
+    let on_fill = if lit > 0.0 { mix(ACCENT, ACCENT_HI, lit) } else { ACCENT };
+    let fill = mix(off_fill, on_fill, t);
+    p.rect_filled(track, h * 0.5, if en { fill } else { fill.gamma_multiply(0.45) });
+    p.rect_stroke(track, h * 0.5, Stroke::new(1.0, mix(LINE_HI, Color32::TRANSPARENT, t)), egui::StrokeKind::Inside);
+    let r = h * 0.5 - 3.0;
+    let cx = egui::lerp((track.left() + 3.0 + r)..=(track.right() - 3.0 - r), t);
+    let knob = mix(Color32::from_rgb(196, 204, 216), ON_ACCENT, t);
+    p.circle_filled(egui::pos2(cx, track.center().y), r, if en { knob } else { knob.gamma_multiply(0.5) });
+    if galley.size().x > 0.0 {
+        let col = if en { mix(DIM.lerp_to_gamma(TEXT, 0.55), TEXT, lit.max(t * 0.6)) } else { FAINT };
+        p.galley(egui::pos2(track.right() + 10.0, rect.center().y - galley.size().y * 0.5), galley, col);
+    }
+    resp
+}
 
 /// Pages of the in-flight panels: the flight panel (Tab) runs beside the
 /// game; the pause menu (Esc) stops it.
@@ -253,16 +557,16 @@ pub enum Page {
     Radio,
     Weather,
     Game,
+    /// the settings screen (settings_ui.rs), over the paused game
     Settings,
-    Graphics,
+    /// the keyboard and gamepad reference
     Controls,
-    Bindings,
     Failures,
 }
 
 impl Page {
     pub const INFO: [Page; 4] = [Page::Flight, Page::Places, Page::Radio, Page::Weather];
-    pub const PAUSE: [Page; 6] = [Page::Game, Page::Settings, Page::Graphics, Page::Controls, Page::Bindings, Page::Failures];
+    pub const PAUSE: [Page; 4] = [Page::Game, Page::Settings, Page::Controls, Page::Failures];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -272,9 +576,7 @@ impl Page {
             Page::Weather => "Weather",
             Page::Game => "Game",
             Page::Settings => "Settings",
-            Page::Graphics => "Graphics",
             Page::Controls => "Controls",
-            Page::Bindings => "Bindings",
             Page::Failures => "Failures",
         }
     }
@@ -375,89 +677,211 @@ pub const CONTROLS: &[(&str, &[(&str, &str)])] = &[
 ]),
 ];
 
-/// The one look shared by every panel: dark glass, amber accent, roomy widgets.
+/// The one look shared by every panel: dark glass, yellow accent, roomy widgets.
 pub fn apply_theme(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
     ctx.all_styles_mut(|s| {
         use egui::{FontFamily, FontId, TextStyle};
         s.text_styles = [
-            (TextStyle::Small, FontId::new(11.0, FontFamily::Proportional)),
-            (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
-            (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
-            (TextStyle::Heading, FontId::new(20.0, FontFamily::Proportional)),
+            (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
+            (TextStyle::Body, FontId::new(15.0, FontFamily::Proportional)),
+            (TextStyle::Button, FontId::new(14.5, FontFamily::Name(MEDIUM.into()))),
+            (TextStyle::Heading, FontId::new(21.0, FontFamily::Name(SEMIBOLD.into()))),
             (TextStyle::Monospace, FontId::new(13.0, FontFamily::Monospace)),
         ]
         .into();
         s.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        s.spacing.button_padding = egui::vec2(10.0, 5.0);
+        s.spacing.button_padding = egui::vec2(12.0, 5.0);
         s.spacing.slider_width = 200.0;
-        s.spacing.interact_size.y = 24.0;
+        s.spacing.slider_rail_height = 4.0;
+        s.spacing.interact_size.y = 26.0;
+        s.spacing.icon_width = 16.0;
+        s.spacing.icon_width_inner = 9.0;
+        s.spacing.icon_spacing = 8.0;
+        s.spacing.scroll = egui::style::ScrollStyle { bar_width: 6.0, floating_allocated_width: 4.0, ..egui::style::ScrollStyle::floating() };
+        s.animation_time = 0.14;
         let v = &mut s.visuals;
         v.dark_mode = true;
         v.window_fill = PANEL;
         v.panel_fill = PANEL;
-        v.window_corner_radius = 10.into();
-        v.window_stroke = Stroke::new(1.0, Color32::from_white_alpha(22));
-        v.extreme_bg_color = Color32::from_rgb(16, 20, 27);
+        v.window_corner_radius = R_PANEL.into();
+        v.menu_corner_radius = R_PANEL.into();
+        v.window_stroke = Stroke::new(1.0, LINE_HI);
+        v.extreme_bg_color = Color32::from_rgb(11, 14, 20);
+        v.text_edit_bg_color = Some(Color32::from_rgb(11, 14, 20));
         v.faint_bg_color = Color32::from_white_alpha(6);
         v.slider_trailing_fill = true;
+        // (selected chips, the slider's trail and selected text)
         v.selection.bg_fill = ACCENT;
         v.selection.stroke = Stroke::new(1.5, ON_ACCENT);
-        v.hyperlink_color = ACCENT;
+        // links in a calm blue: yellow is for the thing to press
+        v.hyperlink_color = LINK;
+        v.text_cursor.stroke = Stroke::new(2.0, ACCENT);
         v.interact_cursor = Some(egui::CursorIcon::PointingHand);
+        v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.6 };
         let w = &mut v.widgets;
         w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
-        w.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_white_alpha(20));
+        w.noninteractive.bg_stroke = Stroke::new(1.0, LINE);
         for (st, bg, fg) in [
-            (&mut w.inactive, Color32::from_rgb(34, 40, 50), Color32::from_rgb(222, 226, 232)),
-            (&mut w.hovered, Color32::from_rgb(50, 59, 73), Color32::WHITE),
-            (&mut w.active, Color32::from_rgb(66, 78, 96), Color32::WHITE),
-            (&mut w.open, Color32::from_rgb(50, 59, 73), Color32::WHITE),
+            (&mut w.inactive, RAISED, Color32::from_rgb(222, 227, 234)),
+            (&mut w.hovered, RAISED_HI, Color32::WHITE),
+            (&mut w.active, CHOSEN, Color32::WHITE),
+            (&mut w.open, RAISED_HI, Color32::WHITE),
         ] {
             st.bg_fill = bg;
             st.weak_bg_fill = bg;
             st.fg_stroke = Stroke::new(1.5, fg);
-            st.corner_radius = 6.into();
+            st.corner_radius = R_WIDGET.into();
+            st.expansion = 0.0;
         }
-        w.inactive.bg_stroke = Stroke::NONE;
-        w.hovered.bg_stroke = Stroke::new(1.0, ACCENT.gamma_multiply(0.6));
+        // a hairline edge so controls (text fields, boxes, buttons) read on any card
+        w.inactive.bg_stroke = Stroke::new(1.0, LINE_HI);
+        w.hovered.bg_stroke = Stroke::new(1.0, Color32::from_white_alpha(70));
         w.active.bg_stroke = Stroke::new(1.0, ACCENT);
+        w.open.bg_stroke = Stroke::new(1.0, LINE_HI);
     });
 }
 
 /// A panel frame in the shared style.
 pub fn panel() -> egui::Frame {
-    egui::Frame::new().fill(PANEL).corner_radius(12.0).inner_margin(20.0).stroke(Stroke::new(1.0, Color32::from_white_alpha(18))).shadow(egui::Shadow { offset: [0, 6], blur: 24, spread: 0, color: Color32::from_black_alpha(110) })
+    egui::Frame::new().fill(PANEL).corner_radius(R_PANEL).inner_margin(20.0).stroke(Stroke::new(1.0, LINE_HI)).shadow(egui::Shadow { offset: [0, 10], blur: 32, spread: 0, color: Color32::from_black_alpha(120) })
+}
+
+/// A key or the gamepad's buttons, right-aligned at `right` on a row.
+fn paint_hint(p: &egui::Painter, hint: Hint, right: f32, y: f32, pad_h: f32, col: Color32) {
+    match hint {
+        Hint::Text(h) => {
+            // a key's name in the instrument face; a few words in the reading one
+            let font = if h.contains(' ') { egui::FontId::proportional(13.0) } else { egui::FontId::monospace(11.0) };
+            p.text(egui::pos2(right, y), egui::Align2::RIGHT_CENTER, h, font, col);
+        }
+        Hint::Pad(spec) => {
+            let x = right - padui::spec_width(p, spec, pad_h);
+            padui::paint_spec(p, x, y, spec, pad_h, col);
+        }
+        Hint::None => {}
+    }
 }
 
 /// A full-width menu button; the primary one is filled with the accent
-/// colour. Its hint (a key, or the gamepad's buttons) sits after the text.
+/// colour, its label in the display face. Its hint (a key, or the gamepad's
+/// buttons) sits at its right end. A disabled primary keeps its shape as an
+/// outline, so it reads as "not yet" rather than as broken.
 pub fn wide_button(ui: &mut egui::Ui, text: &str, hint: Hint, primary: bool, enabled: bool) -> egui::Response {
-    let w = ui.available_width();
-    let (fill, col) = if !enabled {
-        (Color32::from_rgb(40, 44, 50), Color32::from_rgb(110, 114, 120))
-    } else if primary {
-        (ACCENT, ON_ACCENT)
+    let h = if primary { 46.0 } else { 36.0 };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h), if enabled { egui::Sense::click() } else { egui::Sense::hover() });
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, text));
+    let lit = ease(ui.ctx(), resp.id, enabled && (resp.hovered() || resp.has_focus()));
+    let p = ui.painter();
+    let (font, col, hc) = if primary {
+        if enabled {
+            p.rect_filled(rect, R_WIDGET, mix(ACCENT, ACCENT_HI, lit));
+            (bold(21.0), ON_ACCENT, ON_ACCENT.gamma_multiply(0.65))
+        } else {
+            p.rect_stroke(rect, R_WIDGET, Stroke::new(1.0, ACCENT.gamma_multiply(0.3)), egui::StrokeKind::Inside);
+            (bold(21.0), ACCENT.gamma_multiply(0.42), FAINT)
+        }
     } else {
-        (Color32::from_rgb(34, 40, 50), TEXT)
+        p.rect_filled(rect, R_WIDGET, mix(RAISED, RAISED_HI, lit));
+        p.rect_stroke(rect, R_WIDGET, Stroke::new(1.0, mix(LINE_HI, Color32::from_white_alpha(60), lit)), egui::StrokeKind::Inside);
+        (label(), if enabled { mix(TEXT, Color32::WHITE, lit) } else { FAINT }, DIM)
     };
+    let spacing = if primary { 1.5 } else { 0.0 };
+    let label = if primary { text.to_uppercase() } else { text.to_string() };
     let mut job = egui::text::LayoutJob::default();
-    let font = egui::FontId::proportional(if primary { 17.0 } else { 15.0 });
-    job.append(text, 0.0, egui::TextFormat { font_id: font, color: col, ..Default::default() });
-    let hc = if primary { ON_ACCENT.gamma_multiply(0.7) } else { DIM };
-    if let Hint::Text(hint) = hint {
-        job.append(&format!("   {hint}"), 0.0, egui::TextFormat { font_id: egui::FontId::proportional(12.0), color: hc, ..Default::default() });
-    }
-    let btn = egui::Button::new(job).fill(fill).corner_radius(8.0).min_size(egui::vec2(w, if primary { 42.0 } else { 34.0 }));
-    let resp = ui.add_enabled(enabled, btn);
-    if let Hint::Pad(spec) = hint {
-        // The buttons, right-aligned in the button.
-        let h = if primary { 22.0 } else { 19.0 };
-        let p = ui.painter().with_clip_rect(resp.rect);
-        let x = resp.rect.right() - 10.0 - padui::spec_width(&p, spec, h);
-        padui::paint_spec(&p, x, resp.rect.center().y, spec, h, hc);
-    }
+    job.append(&label, 0.0, egui::TextFormat { font_id: font, color: col, extra_letter_spacing: spacing, ..Default::default() });
+    let g = p.layout_job(job);
+    let at = if primary { egui::pos2(rect.center().x - (g.size().x - spacing) * 0.5, rect.center().y - g.size().y * 0.5) } else { egui::pos2(rect.left() + 14.0, rect.center().y - g.size().y * 0.5) };
+    p.galley(at, g, col);
+    paint_hint(p, hint, rect.right() - 12.0, rect.center().y, if primary { 22.0 } else { 19.0 }, hc);
     resp
+}
+
+/// The flight toolbar's icons, drawn in one line weight.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Icon {
+    Flight,
+    GoTo,
+    Radio,
+    Weather,
+    Map,
+    Camera,
+    Pause,
+}
+
+/// Draws an icon `s` points across, centred on `c`.
+pub fn icon(p: &egui::Painter, which: Icon, c: egui::Pos2, s: f32, col: Color32) {
+    use egui::{pos2, vec2};
+    let st = Stroke::new(1.7, col);
+    let u = s * 0.5;
+    let arc = |c: egui::Pos2, r: f32, a0: f32, a1: f32| -> Vec<egui::Pos2> { (0..=16).map(|i| { let a = a0 + (a1 - a0) * i as f32 / 16.0; c + vec2(a.cos(), a.sin()) * r }).collect() };
+    match which {
+        // an aeroplane seen from above
+        Icon::Flight => {
+            let pts = [(0.0, -1.0), (0.12, -0.75), (0.12, -0.2), (0.95, 0.2), (0.95, 0.35), (0.12, 0.15), (0.1, 0.65), (0.4, 0.85), (0.4, 0.95), (0.0, 0.85)];
+            let mut v: Vec<egui::Pos2> = pts.iter().map(|&(x, y)| c + vec2(x, y) * u).collect();
+            v.extend(pts.iter().rev().skip(1).take(pts.len() - 2).map(|&(x, y)| c + vec2(-x, y) * u));
+            p.add(egui::Shape::closed_line(v, st));
+        }
+        // a map pin
+        Icon::GoTo => {
+            let top = c - vec2(0.0, u * 0.25);
+            let mut v = arc(top, u * 0.6, std::f32::consts::PI * 0.8, std::f32::consts::PI * 2.2);
+            v.push(c + vec2(0.0, u));
+            v.insert(0, c + vec2(0.0, u));
+            p.add(egui::Shape::line(v, st));
+            p.circle_stroke(top, u * 0.22, st);
+        }
+        // a mast and its waves
+        Icon::Radio => {
+            p.line_segment([c - vec2(0.0, u * 0.1), c + vec2(0.0, u)], st);
+            p.circle_filled(c - vec2(0.0, u * 0.15), u * 0.14, col);
+            let pi = std::f32::consts::PI;
+            for r in [0.45, 0.85] {
+                // to the right, and to the left
+                p.add(egui::Shape::line(arc(c - vec2(0.0, u * 0.15), u * r, -0.75, 0.75), st));
+                p.add(egui::Shape::line(arc(c - vec2(0.0, u * 0.15), u * r, pi - 0.75, pi + 0.75), st));
+            }
+        }
+        // a cloud
+        Icon::Weather => {
+            let b = c + vec2(0.0, u * 0.35);
+            let mut v = vec![pos2(b.x - u * 0.9, b.y)];
+            v.extend(arc(b + vec2(-u * 0.5, -u * 0.25), u * 0.38, std::f32::consts::PI * 0.75, std::f32::consts::PI * 1.5));
+            v.extend(arc(b + vec2(0.05 * u, -u * 0.55), u * 0.5, std::f32::consts::PI * 1.1, std::f32::consts::PI * 1.95));
+            v.extend(arc(b + vec2(u * 0.55, -u * 0.2), u * 0.36, -std::f32::consts::PI * 0.4, std::f32::consts::PI * 0.4));
+            v.push(pos2(b.x + u * 0.9, b.y + u * 0.08));
+            v.push(pos2(b.x - u * 0.9, b.y + u * 0.08));
+            v.push(pos2(b.x - u * 0.9, b.y));
+            p.add(egui::Shape::line(v, st));
+        }
+        // a folded map
+        Icon::Map => {
+            let xs = [-0.9, -0.3, 0.3, 0.9];
+            let ys = [(-0.7, 0.8), (-0.85, 0.65), (-0.7, 0.8), (-0.85, 0.65)];
+            let top: Vec<egui::Pos2> = xs.iter().zip(ys).map(|(&x, (t, _))| c + vec2(x, t) * u).collect();
+            let bot: Vec<egui::Pos2> = xs.iter().zip(ys).map(|(&x, (_, b))| c + vec2(x, b) * u).collect();
+            let mut v = top.clone();
+            v.extend(bot.iter().rev());
+            p.add(egui::Shape::closed_line(v, st));
+            for k in 1..3 {
+                p.line_segment([top[k], bot[k]], st);
+            }
+        }
+        // a camera
+        Icon::Camera => {
+            let r = egui::Rect::from_center_size(c + vec2(0.0, u * 0.1), vec2(s, s * 0.66));
+            p.rect_stroke(r, 2.0, st, egui::StrokeKind::Middle);
+            p.line_segment([pos2(c.x - u * 0.35, r.top() - u * 0.2), pos2(c.x + u * 0.35, r.top() - u * 0.2)], st);
+            p.circle_stroke(r.center(), u * 0.36, st);
+        }
+        // two bars
+        Icon::Pause => {
+            for x in [-0.3, 0.3] {
+                p.rect_filled(egui::Rect::from_center_size(c + vec2(x * u, 0.0), vec2(u * 0.28, u * 1.5)), 1.0, col);
+            }
+        }
+    }
 }
 
 /// A chevron pointing right, turned `turn` quarter turns clockwise (1 = down).
@@ -473,18 +897,20 @@ pub fn chevron(p: &egui::Painter, c: egui::Pos2, size: f32, turn: f32, col: Colo
 pub fn section(ui: &mut egui::Ui, id: &str, title: &str, summary: &str, open: bool, body: impl FnOnce(&mut egui::Ui)) {
     let id = ui.make_persistent_id(("section", id));
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, open);
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     let k = state.openness(ui.ctx());
-    let lit = resp.hovered() || resp.has_focus();
+    let lit = ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
     let p = ui.painter();
-    p.rect_filled(rect, 8.0, Color32::from_white_alpha(if lit { 16 } else { 7 }));
-    let title_col = if k > 0.5 { ACCENT } else if lit { Color32::WHITE } else { TEXT };
-    p.text(rect.left_center() + egui::vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(15.0), title_col);
+    // shut: a resting row; open: it becomes the head of its group
+    p.rect_filled(rect, R_WIDGET, Color32::from_white_alpha((7.0 + 9.0 * lit) as u8));
+    let title_col = mix(TEXT, Color32::WHITE, lit.max(k));
+    p.text(rect.left_center() + egui::vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, title, label(), title_col);
     if k < 1.0 && !summary.is_empty() {
         let col = DIM.gamma_multiply(1.0 - k);
-        p.text(rect.right_center() - egui::vec2(30.0, 0.0), egui::Align2::RIGHT_CENTER, summary, egui::FontId::proportional(12.0), col);
+        p.text(rect.right_center() - egui::vec2(32.0, 0.0), egui::Align2::RIGHT_CENTER, summary, egui::FontId::proportional(13.0), col);
     }
-    chevron(p, rect.right_center() - egui::vec2(15.0, 0.0), 6.0, k, if lit { Color32::WHITE } else { DIM });
+    chevron(p, rect.right_center() - egui::vec2(16.0, 0.0), 5.5, k, mix(DIM, Color32::WHITE, lit));
     if resp.clicked() {
         state.toggle(ui);
     }
@@ -500,34 +926,41 @@ pub fn section(ui: &mut egui::Ui, id: &str, title: &str, summary: &str, open: bo
 
 /// The title bar of a start-screen window: a small capitalised name, then a hairline.
 pub fn window_title(ui: &mut egui::Ui, s: &str) {
-    ui.label(RichText::new(s).size(11.5).strong().color(DIM).extra_letter_spacing(1.5));
-    let r = ui.available_rect_before_wrap();
-    ui.painter().hline(r.x_range(), r.top() + 2.0, Stroke::new(1.0, Color32::from_white_alpha(18)));
+    ui.label(section_text(s));
     ui.add_space(8.0);
 }
 
 /// A small section heading.
 pub fn heading(ui: &mut egui::Ui, s: &str) {
     if !ui.layout().is_horizontal() {
-        ui.add_space(4.0);
+        ui.add_space(8.0);
     }
-    ui.label(RichText::new(s).size(11.5).strong().color(ACCENT));
+    ui.label(section_text(s).color(DIM));
+}
+
+/// A key cap: the key's name on a raised plate with a darker lip below.
+pub fn key_cap(ui: &mut egui::Ui, keys: &str) -> egui::Response {
+    let g = ui.painter().layout_no_wrap(keys.to_string(), egui::FontId::monospace(11.5), Color32::WHITE);
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(g.size().x + 12.0, 20.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_filled(r, R_WIDGET, Color32::from_rgb(20, 24, 31));
+    p.rect_filled(r.with_max_y(r.bottom() - 2.0), R_WIDGET, RAISED_HI);
+    p.galley(egui::pos2(r.left() + 6.0, r.center().y - 1.0 - g.size().y * 0.5), g, Color32::WHITE);
+    resp
 }
 
 /// One `keys … action` row of the controls list.
 pub fn key_row(ui: &mut egui::Ui, keys: &'static str, what: &'static str) {
-    egui::Frame::new().fill(Color32::from_rgb(38, 45, 56)).corner_radius(4.0).inner_margin(egui::Margin::symmetric(6, 0)).show(ui, |ui| {
-        ui.label(RichText::new(tr(keys)).monospace().size(12.0).color(Color32::WHITE));
-    });
+    key_cap(ui, tr(keys));
     // Truncate the description so a long one can't spill into the next column.
-    ui.add(egui::Label::new(RichText::new(tr(what)).size(13.0).color(TEXT)).truncate());
+    ui.add(egui::Label::new(RichText::new(tr(what)).font(body()).color(TEXT)).truncate());
     ui.end_row();
 }
 
 /// One `buttons … action` row of the gamepad controls list.
 pub fn pad_row(ui: &mut egui::Ui, spec: &str, what: &'static str) {
     padui::glyphs(ui, spec, 20.0);
-    ui.add(egui::Label::new(RichText::new(tr(what)).size(13.0).color(TEXT)).truncate());
+    ui.add(egui::Label::new(RichText::new(tr(what)).font(caption()).color(TEXT)).truncate());
     ui.end_row();
 }
 
@@ -564,7 +997,7 @@ pub const PAD_MENUS: &[(&str, &[(&str, &str)])] = &[
         ("LT / RT", "zoom out / in"),
         ("X", "start at the crosshair"),
         ("Menu", "take off"),
-        ("View", "settings and this controls list"),
+        ("B", "back to the main menu"),
     ]),
 ];
 
@@ -664,4 +1097,71 @@ pub fn hhmm(h: f64) -> String {
 /// "37.8085°N  122.4650°W"
 pub fn latlon(lat: f64, lon: f64) -> String {
     format!("{:.4}°{}  {:.4}°{}", lat.abs(), if lat >= 0.0 { 'N' } else { 'S' }, lon.abs(), if lon >= 0.0 { 'E' } else { 'W' })
+}
+
+/// A big left-aligned button of the full-screen pause menu: its text, a hint
+/// (key or gamepad buttons) at the right, the primary one in the accent
+/// colour, the chosen page's marked with an accent bar.
+pub fn big_button(ui: &mut egui::Ui, text: &str, hint: Hint, primary: bool, chosen: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 50.0), egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, chosen, text));
+    let lit = ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
+    let pick = ui.ctx().animate_bool_with_time_and_easing(resp.id.with("chosen"), chosen, 0.18, egui::emath::easing::cubic_out);
+    let p = ui.painter();
+    let (fill, col) = if primary {
+        (mix(ACCENT, ACCENT_HI, lit), ON_ACCENT)
+    } else {
+        let rest = Color32::from_rgba_premultiplied(14, 18, 24, 214);
+        (mix(mix(rest, Color32::from_rgba_premultiplied(36, 43, 54, 232), lit), Color32::from_rgba_premultiplied(44, 52, 66, 240), pick), mix(TEXT, Color32::WHITE, lit.max(pick)))
+    };
+    p.rect_filled(rect, R_WIDGET, fill);
+    if !primary {
+        // the page it opens is showing: a short accent mark grows at the left
+        if pick > 0.0 {
+            let h = rect.height() * 0.5 * pick;
+            p.rect_filled(egui::Rect::from_center_size(egui::pos2(rect.left() + 1.5, rect.center().y), egui::vec2(3.0, h)), 1.0, ACCENT);
+        }
+        p.rect_stroke(rect, R_WIDGET, Stroke::new(1.0, mix(LINE, Color32::from_white_alpha(40), lit)), egui::StrokeKind::Inside);
+    }
+    let font = if primary { bold(22.0) } else { item_title() };
+    let x = rect.left() + 20.0 + 4.0 * lit * (!primary as u8 as f32);
+    if primary {
+        let mut job = egui::text::LayoutJob::default();
+        job.append(&text.to_uppercase(), 0.0, egui::TextFormat { font_id: font, color: col, extra_letter_spacing: 1.5, ..Default::default() });
+        let g = p.layout_job(job);
+        p.galley(egui::pos2(x, rect.center().y - g.size().y * 0.5), g, col);
+    } else {
+        p.text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, text, font, col);
+    }
+    let hc = if primary { ON_ACCENT.gamma_multiply(0.65) } else { DIM };
+    paint_hint(p, hint, rect.right() - 16.0, rect.center().y, 20.0, hc);
+    resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn screens_parse() {
+        assert_eq!(Screen::parse("main"), Some(Screen::Main));
+        assert_eq!(Screen::parse("Fly"), Some(Screen::Fly));
+        assert_eq!(Screen::parse("globe"), Some(Screen::Fly));
+        assert_eq!(Screen::parse("aircraft"), Some(Screen::Aircraft));
+        assert_eq!(Screen::parse("settings"), Some(Screen::Settings));
+        assert_eq!(Screen::parse("nowhere"), None);
+    }
+
+    #[test]
+    fn first_globe_view_is_on_the_day_side() {
+        for h in 0..96 {
+            let utc = h as f64 * 0.25;
+            let sub = -15.0 * (utc - 12.0);
+            let lon = day_side_lon(utc);
+            assert!((-180.0..180.0).contains(&lon));
+            // well inside the lit half (90° from the subsolar point)
+            let d = ((lon - sub + 540.0).rem_euclid(360.0) - 180.0).abs();
+            assert!(d <= 50.0, "utc {utc}: lon {lon} is {d}° from the subsolar point");
+        }
+    }
 }

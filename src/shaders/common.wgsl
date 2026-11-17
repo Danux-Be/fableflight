@@ -134,6 +134,9 @@ struct Globals {
 // Light rising off the towns around the camera (skyglow.rs): the night-lights map
 // averaged over 1.2 km cells, then blurred for the light reaching ~1.5, 4.5, 15 km up.
 @group(0) @binding(19) var t_glow: texture_2d<f32>;
+// The start screen globe's cloud map (globeclouds.rs): cloud cover from an
+// infrared composite, equirectangular, 180°W at u = 0, 90°N at v = 0.
+@group(0) @binding(20) var t_gclouds: texture_2d<f32>;
 
 // GPU particles (explosions, smoke, dust, spray) and their simulation constants.
 struct Particle {
@@ -1493,17 +1496,17 @@ fn road_surface(across: f32, along: f32, half: f32, kind: u32, endd: f32, app: f
     let sl = stripe(fract(along / 0.65) - 0.5, 0.36, fw / 0.65) * step(ax, 1.25);
     col = mix(col, vec3f(0.09, 0.075, 0.06), sl);
     col = mix(col, vec3f(0.42, 0.40, 0.38), stripe(ax - 0.72, 0.09, fw));
-    return vec4f(col, edge * 0.9);
+    return vec4f(col, edge);
   }
   if (rclass == 7u) {
     // Dirt track: two worn ruts, ragged edges.
     let rut = stripe(ax - 0.8, 0.5, fw);
     let col = mix(vec3f(0.20, 0.16, 0.11), vec3f(0.27, 0.22, 0.16), rut) * (0.75 + 0.5 * n2);
-    return vec4f(col, clamp((half - ax + (n2 - 0.5) * 0.9) / max(fw, 0.25), 0.0, 1.0) * 0.7);
+    return vec4f(col, clamp((half - ax + (n2 - 0.5) * 0.9) / max(fw, 0.25), 0.0, 1.0));
   }
   if (rclass == 8u) {
     let col = vec3f(0.30, 0.29, 0.27) * (0.8 + 0.4 * n2);
-    return vec4f(col, edge * 0.8);
+    return vec4f(col, edge);
   }
   // Asphalt, newer and darker on the big roads.
   var tone = 0.050;
@@ -1596,7 +1599,9 @@ fn road_surface(across: f32, along: f32, half: f32, kind: u32, endd: f32, app: f
     mk *= 0.55 + 0.45 * smoothstep(0.3, 0.6, n2);
     col = mix(col, mcol, mk);
   }
-  return vec4f(col, edge * 0.9);
+  // Asphalt and markings are solid; only the feathered outer edge blends
+  // against terrain. A constant 0.9 made the ground show through every road.
+  return vec4f(col, edge);
 }
 
 // Street lights: must match `lamp_spec` in roads.rs. Returns the light landing
@@ -1694,6 +1699,12 @@ fn photo_hides(P: vec3f, px: vec2f) -> bool {
   return photo_covered(P) && photo_keep(P, px) && !photo_cut_at(P, false);
 }
 
+// The start screen's globe look (sky.wgsl `globe_surface`), 0..1 with the
+// camera's height: below GLOBE_LO the start screen draws the ordinary flight
+// scene (a picked spot seen close up), from GLOBE_HI the planet from orbit.
+const GLOBE_LO = 150000.0;
+const GLOBE_HI = 800000.0;
+fn globe_k() -> f32 { return select(0.0, smoothstep(GLOBE_LO, GLOBE_HI, G.up.w), G.start.x > 0.0); }
 fn night_at(upn: vec3f) -> f32 { return 1.0 - smoothstep(-0.08, 0.1, dot(upn, G.sun_dir.xyz)); }
 // Moonlight arriving at a point (dimmed by the atmosphere near the horizon and
 // by the cloud deck as a whole).

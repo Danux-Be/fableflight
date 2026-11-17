@@ -568,6 +568,17 @@ fn composite_sample(in: FsIn, z: f32, c0: vec4f, a0: vec4f, amb: f32) -> vec3f {
   let dist = length(P);
   var col = c0.rgb / cov;
   let aux = a0 / cov;
+  // The start screen's globe, seen from orbit (sky.wgsl), taking over from
+  // the flight scene as the camera rises.
+  let gk = globe_k();
+  var gc = vec3f(0.0);
+  if (gk > 0.0) {
+    gc = globe_surface(P, rd, col, aux.a > 0.996, fract(jit + G.time.w * 0.618034));
+    if (gk >= 1.0) {
+      if (cov < 0.996) { gc = mix(sky_color(rd, jit), gc, cov); }
+      return clamp(gc, vec3f(0.0), vec3f(3000.0));
+    }
+  }
   if (aux.a <= 0.004) {
     // Ambient occlusion takes away from the sky and bounce light only.
     let share = clamp(amb / cov, 0.0, 1.0);
@@ -599,6 +610,7 @@ fn composite_sample(in: FsIn, z: f32, c0: vec4f, a0: vec4f, amb: f32) -> vec3f {
       col = col * sc.T + sc.L + glow_march(rd, t1, max(4, i32(8.0 / q)), fract(jit + G.time.w * 0.381966));
     }
   }
+  if (gk > 0.0) { col = mix(col, gc, gk); }
   if (cov < 0.996) { col = mix(sky_color(rd, jit), col, cov); }
   return clamp(col, vec3f(0.0), vec3f(3000.0));
 }

@@ -544,16 +544,15 @@ impl Airplane {
         let st = |p: [f64; 3]| [-p[0] / FT, -p[1] / FT, p[2] / FT];
         let mut out: Vec<Contact> = wheels
             .iter()
-            .enumerate()
-            .map(|(i, (g, _))| {
+            .map(|(g, _)| {
                 let load = kg * G / n;
                 let k = g.spring * 3.0 * load / g.compression;
                 let c = g.damp * 0.5 * 2.0 * (k * load / G).sqrt();
-                Contact { name: format!("gear {i}"), bogey: true, at: st(g.at), spring: k / 14.5939, damping: c / 14.5939, max_steer: g.steer, brakes: g.brake, retractable: g.retract }
+                Contact { bogey: true, at: st(g.at), spring: k / 14.5939, damping: c / 14.5939, max_steer: g.steer, brakes: g.brake, retractable: g.retract }
             })
             .collect();
         for g in self.gear.iter().filter(|g| g.skid || g.at[2] >= cg[2]) {
-            out.push(Contact { name: "structure".into(), bogey: false, at: st(g.at), spring: 0.0, damping: 0.0, max_steer: 0.0, brakes: false, retractable: false });
+            out.push(Contact { bogey: false, at: st(g.at), spring: 0.0, damping: 0.0, max_steer: 0.0, brakes: false, retractable: false });
         }
         out
     }

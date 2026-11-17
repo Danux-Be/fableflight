@@ -274,12 +274,6 @@ impl Google {
         self.save();
     }
 
-    #[allow(dead_code)]
-    pub fn reset_session_counts(&self) {
-        let mut u = self.usage.lock();
-        (u.session_requests, u.session_bytes, u.session_tiles, u.session_cached, u.session_errors, u.session_roots, u.session_3d, u.session_3d_cached) = (0, 0, 0, 0, 0, 0, 0, 0);
-    }
-
     fn count(&self, n: usize, ok: bool) {
         {
             let mut u = self.usage.lock();

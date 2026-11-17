@@ -457,7 +457,6 @@ pub struct SetInfo {
     pub model: String,
     pub description: String,
     pub author: String,
-    pub license: String,
     /// the pilot's view (view 0): right, up, aft of the model's origin (m)
     pub eye: Option<[f32; 3]>,
 }
@@ -546,7 +545,7 @@ fn read_set(get: &dyn Fn(&str) -> Option<Vec<u8>>, id: &str, folder: &str) -> Re
         (Some(x), Some(y), Some(z)) => Some([x, y, z]),
         _ => None,
     };
-    Ok(SetInfo { fdm: v("sim/flight-model").to_lowercase(), aero: v("sim/aero"), model, description: v("sim/description"), author: v("sim/author"), license: v("sim/license"), eye })
+    Ok(SetInfo { fdm: v("sim/flight-model").to_lowercase(), aero: v("sim/aero"), model, description: v("sim/description"), author: v("sim/author"), eye })
 }
 
 /// What the menu shows of an aircraft (before it is downloaded): its

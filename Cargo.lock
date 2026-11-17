@@ -856,6 +856,7 @@ dependencies = [
  "gilrs",
  "glam",
  "image",
+ "libloading",
  "log",
  "naga",
  "parking_lot 0.13.0",

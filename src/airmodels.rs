@@ -13,6 +13,8 @@ pub const BASE: u32 = crate::cars::M_REBAR + crate::cars::N_REBAR;
 pub const N_TYPES: usize = 5;
 /// Per aircraft type: body, livery (fin and winglets, tinted separately), gear.
 pub const M_BODY: u32 = BASE;
+// (the livery and gear follow each body by these offsets; the names only
+// document the table, which is filled in order)
 #[allow(dead_code)]
 pub const M_LIVERY: u32 = BASE + 1;
 #[allow(dead_code)]
@@ -30,7 +32,7 @@ pub const M_LOADER: u32 = M_PAPI + 9;
 pub const M_PUSHBACK: u32 = M_PAPI + 10;
 pub const M_STAIRS: u32 = M_PAPI + 11;
 pub const M_CONE: u32 = M_PAPI + 12;
-#[allow(dead_code)]
+#[allow(dead_code)] // (the last slot of the table, filled in order)
 pub const M_SIGN: u32 = M_PAPI + 13;
 pub const COUNT: usize = 3 * N_TYPES + 14;
 
@@ -53,8 +55,6 @@ pub struct Type {
     pub v_app: f32,
     pub v_rot: f32,
     pub accel: f32,
-    #[allow(dead_code)]
-    pub jet: bool,
     /// wing tip (x, y, z), tail top, for the lights
     pub tip: Vec3,
     pub tail: Vec3,
@@ -63,11 +63,11 @@ pub struct Type {
 }
 
 pub const TYPES: [Type; N_TYPES] = [
-    Type { name: "light single", len: 8.3, span: 11.0, rf: 0.62, nose: 2.3, door: 0.4, cy: 1.45, sill: 0.9, v_app: 33.0, v_rot: 29.0, accel: 1.9, jet: false, tip: Vec3::new(5.5, 2.25, 0.3), tail: Vec3::new(0.0, 2.7, 5.7), lamp: Vec3::new(2.6, 2.2, -0.2) },
-    Type { name: "business jet", len: 15.2, span: 15.9, rf: 0.86, nose: 6.6, door: 4.2, cy: 1.75, sill: 1.1, v_app: 58.0, v_rot: 56.0, accel: 2.6, jet: true, tip: Vec3::new(7.95, 1.9, 1.9), tail: Vec3::new(0.0, 4.5, 8.0), lamp: Vec3::new(1.2, 1.2, -1.0) },
-    Type { name: "regional jet", len: 32.5, span: 23.2, rf: 1.35, nose: 15.0, door: 12.2, cy: 2.5, sill: 1.6, v_app: 68.0, v_rot: 68.0, accel: 2.3, jet: true, tip: Vec3::new(11.6, 2.6, 4.2), tail: Vec3::new(0.0, 7.5, 16.6), lamp: Vec3::new(1.9, 1.8, -2.0) },
-    Type { name: "narrow-body", len: 37.6, span: 35.8, rf: 1.98, nose: 16.4, door: 12.6, cy: 3.5, sill: 3.4, v_app: 72.0, v_rot: 75.0, accel: 2.2, jet: true, tip: Vec3::new(17.9, 4.6, 5.6), tail: Vec3::new(0.0, 11.8, 20.4), lamp: Vec3::new(3.2, 2.9, -2.5) },
-    Type { name: "wide-body", len: 63.7, span: 60.9, rf: 3.1, nose: 27.5, door: 21.5, cy: 5.3, sill: 4.9, v_app: 76.0, v_rot: 82.0, accel: 1.9, jet: true, tip: Vec3::new(30.4, 7.4, 11.0), tail: Vec3::new(0.0, 18.5, 35.0), lamp: Vec3::new(5.0, 4.4, -4.0) },
+    Type { name: "light single", len: 8.3, span: 11.0, rf: 0.62, nose: 2.3, door: 0.4, cy: 1.45, sill: 0.9, v_app: 33.0, v_rot: 29.0, accel: 1.9, tip: Vec3::new(5.5, 2.25, 0.3), tail: Vec3::new(0.0, 2.7, 5.7), lamp: Vec3::new(2.6, 2.2, -0.2) },
+    Type { name: "business jet", len: 15.2, span: 15.9, rf: 0.86, nose: 6.6, door: 4.2, cy: 1.75, sill: 1.1, v_app: 58.0, v_rot: 56.0, accel: 2.6, tip: Vec3::new(7.95, 1.9, 1.9), tail: Vec3::new(0.0, 4.5, 8.0), lamp: Vec3::new(1.2, 1.2, -1.0) },
+    Type { name: "regional jet", len: 32.5, span: 23.2, rf: 1.35, nose: 15.0, door: 12.2, cy: 2.5, sill: 1.6, v_app: 68.0, v_rot: 68.0, accel: 2.3, tip: Vec3::new(11.6, 2.6, 4.2), tail: Vec3::new(0.0, 7.5, 16.6), lamp: Vec3::new(1.9, 1.8, -2.0) },
+    Type { name: "narrow-body", len: 37.6, span: 35.8, rf: 1.98, nose: 16.4, door: 12.6, cy: 3.5, sill: 3.4, v_app: 72.0, v_rot: 75.0, accel: 2.2, tip: Vec3::new(17.9, 4.6, 5.6), tail: Vec3::new(0.0, 11.8, 20.4), lamp: Vec3::new(3.2, 2.9, -2.5) },
+    Type { name: "wide-body", len: 63.7, span: 60.9, rf: 3.1, nose: 27.5, door: 21.5, cy: 5.3, sill: 4.9, v_app: 76.0, v_rot: 82.0, accel: 1.9, tip: Vec3::new(30.4, 7.4, 11.0), tail: Vec3::new(0.0, 18.5, 35.0), lamp: Vec3::new(5.0, 4.4, -4.0) },
 ];
 
 type Mesh = (Vec<MeshVertex>, Vec<u32>);

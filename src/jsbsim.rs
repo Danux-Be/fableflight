@@ -174,7 +174,6 @@ impl Default for Aircraft {
 /// A point that touches the ground (structural frame, feet; lbs/ft and lbs/ft/s).
 #[derive(Clone, Debug)]
 pub struct Contact {
-    pub name: String,
     /// a wheel (BOGEY), or part of the airframe (STRUCTURE)
     pub bogey: bool,
     pub at: [f64; 3],
@@ -472,7 +471,6 @@ impl Aircraft {
                         };
                         let brake = child(c, "brake_group").map(|b| text(b).to_uppercase()).unwrap_or_default();
                         a.contacts.push(Contact {
-                            name: c.attribute("name").unwrap_or("").to_string(),
                             bogey: c.attribute("type").unwrap_or("BOGEY").eq_ignore_ascii_case("BOGEY"),
                             at,
                             spring: per_ft("spring_coeff"),

@@ -107,8 +107,6 @@ pub struct Mover {
     pitch: f32,
     gear: bool,
     stand: usize,
-    #[allow(dead_code)]
-    rwy: (usize, usize),
     /// where along the path to stop until the runway is free
     hold_s: f32,
     /// where along the path the runway starts (lined up from here on)
@@ -462,7 +460,7 @@ impl Traffic {
         };
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
-        self.movers.push(Mover { id, ty: p.ty, body: p.body, fin: p.fin, phase, path, s: 0.0, v: 0.0, pos, hdg: dir, alt: 0.0, pitch: 0.0, gear: true, stand: p.stand, rwy: self.active.unwrap_or((0, 0)), hold_s: 0.0, entry_s: 0.0, wait: 0.0, stuck: 0.0, ref_h: g.h(pos), gone: false });
+        self.movers.push(Mover { id, ty: p.ty, body: p.body, fin: p.fin, phase, path, s: 0.0, v: 0.0, pos, hdg: dir, alt: 0.0, pitch: 0.0, gear: true, stand: p.stand, hold_s: 0.0, entry_s: 0.0, wait: 0.0, stuck: 0.0, ref_h: g.h(pos), gone: false });
         // The stand stays taken until it has left (see `step`).
     }
 
@@ -532,7 +530,7 @@ impl Traffic {
         let alt = (d0 + aim_dist(r.len)) * 3f32.to_radians().tan();
         let id = self.next_id;
         self.next_id = self.next_id.wrapping_add(1).max(1);
-        self.movers.push(Mover { id, ty, body: self.rng.pick(BODY.len()) as u8, fin: self.rng.pick(FIN.len()) as u8, phase: Phase::Final, path: Path::new(vec![pos, pos]), s: 0.0, v: t.v_app, pos, hdg: dir, alt, pitch: 2.5, gear: true, stand: si, rwy: (ri, re), hold_s: 0.0, entry_s: 0.0, wait: 0.0, stuck: 0.0, ref_h: g.h(thr), gone: false });
+        self.movers.push(Mover { id, ty, body: self.rng.pick(BODY.len()) as u8, fin: self.rng.pick(FIN.len()) as u8, phase: Phase::Final, path: Path::new(vec![pos, pos]), s: 0.0, v: t.v_app, pos, hdg: dir, alt, pitch: 2.5, gear: true, stand: si, hold_s: 0.0, entry_s: 0.0, wait: 0.0, stuck: 0.0, ref_h: g.h(thr), gone: false });
     }
 
     /// From a stand to the runway's end: the path, where to hold short, and

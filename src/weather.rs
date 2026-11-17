@@ -969,7 +969,7 @@ impl Weather {
             } else {
                 self.live_raw.clone()
             };
-            ui.label(RichText::new(text).monospace().size(11.0).weak());
+            ui.label(RichText::new(text).font(crate::menu::data()).weak());
         }
     }
 
@@ -1075,7 +1075,7 @@ impl Weather {
             add(ui, Slider::new(&mut self.haze, 0.2..=40.0).logarithmic(true).custom_formatter(|v, _| format!("{v:.1}×")));
             ui.end_row();
             ui.label("");
-            ui.label(RichText::new(t!("visibility ~{:.0} km", "visibilité ~{:.0} km", self.visibility_km())).size(11.5).weak());
+            ui.label(RichText::new(t!("visibility ~{:.0} km", "visibilité ~{:.0} km", self.visibility_km())).font(crate::menu::caption()).weak());
             ui.end_row();
         });
     }

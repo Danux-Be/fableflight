@@ -290,15 +290,11 @@ pub enum Hint<'a> {
 }
 
 impl<'a> Hint<'a> {
-    /// The key when typing, the pad's buttons while a pad is plugged in
-    /// (either may be empty for no hint).
-    pub fn of(key: &'a str, pad: &'a str) -> Self {
-        let s = if active() { pad } else { key };
-        match (s.is_empty(), active()) {
-            (true, _) => Hint::None,
-            (false, true) => Hint::Pad(s),
-            (false, false) => Hint::Text(s),
-        }
+    /// The pad's buttons while a pad is plugged in, else nothing. (The key
+    /// is named for the reader of the code only: key names on buttons read as
+    /// clutter, and the keys work all the same.)
+    pub fn of(_key: &'a str, pad: &'a str) -> Self {
+        if active() && !pad.is_empty() { Hint::Pad(pad) } else { Hint::None }
     }
 }
 
@@ -314,7 +310,7 @@ pub fn focus_ring(ctx: &egui::Context, col: Color32) {
         return;
     }
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pad_focus")));
-    p.rect_stroke(rect.expand(2.0), 6.0, Stroke::new(2.0, col), egui::StrokeKind::Outside);
+    p.rect_stroke(rect.expand(2.0), crate::menu::R_WIDGET, Stroke::new(2.0, col), egui::StrokeKind::Outside);
 }
 
 /// At the end of a scroll area's contents: scroll a widget the gamepad has
