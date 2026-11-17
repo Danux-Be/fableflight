@@ -13,7 +13,9 @@ pub const BASE: u32 = crate::cars::M_REBAR + crate::cars::N_REBAR;
 pub const N_TYPES: usize = 5;
 /// Per aircraft type: body, livery (fin and winglets, tinted separately), gear.
 pub const M_BODY: u32 = BASE;
+#[allow(dead_code)]
 pub const M_LIVERY: u32 = BASE + 1;
+#[allow(dead_code)]
 pub const M_GEAR: u32 = BASE + 2;
 pub const M_PAPI: u32 = BASE + 3 * N_TYPES as u32;
 pub const M_SOCK_POLE: u32 = M_PAPI + 1;
@@ -28,12 +30,14 @@ pub const M_LOADER: u32 = M_PAPI + 9;
 pub const M_PUSHBACK: u32 = M_PAPI + 10;
 pub const M_STAIRS: u32 = M_PAPI + 11;
 pub const M_CONE: u32 = M_PAPI + 12;
+#[allow(dead_code)]
 pub const M_SIGN: u32 = M_PAPI + 13;
 pub const COUNT: usize = 3 * N_TYPES + 14;
 
 /// What the traffic needs to know about each type of aircraft.
 #[derive(Copy, Clone)]
 pub struct Type {
+    #[allow(dead_code)]
     pub name: &'static str,
     pub len: f32,
     pub span: f32,
@@ -49,6 +53,7 @@ pub struct Type {
     pub v_app: f32,
     pub v_rot: f32,
     pub accel: f32,
+    #[allow(dead_code)]
     pub jet: bool,
     /// wing tip (x, y, z), tail top, for the lights
     pub tip: Vec3,

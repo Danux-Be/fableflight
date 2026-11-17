@@ -176,6 +176,7 @@ fn fr(en: &str) -> Option<&'static str> {
         "wheel brakes" => "freins de roues",
         "flaps down / up a notch" => "volets : sortir / rentrer d'un cran",
         "landing gear down / up" => "train d'atterrissage : sortir / rentrer",
+        "slide the canopy open / shut (Robin)" => "ouvrir / fermer la verrière coulissante (Robin)",
         "speedbrake (airliners)" => "aérofreins (avions de ligne)",
         "thrust reversers, on the ground (hold)" => "inverseurs de poussée, au sol (maintenir)",
         "set the heading indicator to the compass" => "recaler le conservateur de cap sur le compas",
@@ -192,6 +193,7 @@ fn fr(en: &str) -> Option<&'static str> {
         "look around" => "regarder autour",
         "camera distance / cockpit zoom" => "distance caméra / zoom cockpit",
         "hide / show the HUD" => "masquer / afficher le HUD",
+        "hide / show the minimap" => "masquer / afficher la mini-carte",
         "screenshot" => "capture d'écran",
         "time of day forward / back" => "avancer / reculer l'heure",
         "more / fewer clouds" => "plus / moins de nuages",
@@ -272,6 +274,7 @@ fn fr(en: &str) -> Option<&'static str> {
         "Two-stage rocket, 121 m and 5,000 t on the pad. Throttle up to lift off on 33 engines, then hold W a few seconds to tip it over. 1 picks which engines burn, Backspace lights the ship and drops the booster, 2 has the ship land itself." => "Fusée à deux étages, 121 m et 5 000 t sur le pas de tir. Mettez les gaz pour décoller sur 33 moteurs, puis tenez W quelques secondes pour l'incliner. 1 choisit les moteurs allumés, Retour arrière allume le vaisseau et largue le booster, 2 laisse le vaisseau se poser seul.",
         "Four-engine supersonic airliner, 137 t. Mach 2 at 55,000 ft without reheat; Space for reheat to take off. No flaps: F droops the nose (5° to take off, 12.5° to land). Rotate at 200 kt to 10° and no more until it is off (the tail touches at 11.5°); 160 kt approach, 10° nose up. Z reversers." => "Quadriréacteur de ligne supersonique, 137 t. Mach 2 à 55 000 ft sans réchauffe ; Espace pour la réchauffe au décollage. Pas de volets : F abaisse le nez (5° au décollage, 12,5° à l'atterrissage). Rotation à 200 kt jusqu'à 10°, pas plus avant l'envol (la queue touche à 11,5°) ; approche à 160 kt, 10° à cabrer. Z inverseurs.",
         "Four-seat single, 180 hp, retractable gear. Forgiving and slow: 125 kt flat out." => "Monomoteur quatre places, 180 ch, train rentrant. Indulgent et lent : 125 kt à fond.",
+        "French four-seat wooden tourer and glider tug, 180 hp, fixed gear. Light on the controls; 60° flaps for steep, short landings." => "Quadriplace de voyage français en bois et remorqueur de planeurs, 180 ch, train fixe. Commandes légères ; volets à 60° pour des atterrissages courts et pentus.",
         "Four-engine wide-body airliner, 290 t. Heavy and slow to answer the controls; Mach 0.85 cruise, 150 kt approach. / speedbrake, Z reversers." => "Quadriréacteur gros-porteur, 290 t. Lourd et lent à répondre aux commandes ; croisière à Mach 0,85, approche à 150 kt. / aérofreins, Z inverseurs.",
 
         // ---- places (cities, one-click places, airports)

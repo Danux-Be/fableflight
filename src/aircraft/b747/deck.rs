@@ -2206,9 +2206,15 @@ mod tests {
     #[test]
     fn plane_shader_validates() {
         let src = format!("{}\n{}\n{}\n{}\n{}", include_str!("../../shaders/common.wgsl"), include_str!("../../shaders/plane.wgsl"), strings_wgsl(), include_str!("../../shaders/deck747.wgsl"), include_str!("../../shaders/pit18.wgsl"));
-        let m = naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
-        if let Err(e) = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all()).validate(&m) {
-            panic!("{}", e.emit_to_string(&src));
+        // the generic shader, and each kind's specialised one (render.rs `specialise`).
+        let mut all = vec![src.clone()];
+        all.extend((0..8).map(|k| crate::render::specialise(&src, k)));
+        assert!(all[1].contains("const KIND: u32 = 0u;") && all[1].contains("const INSTR: u32 = 0u;"), "specialise found nothing to rewrite");
+        for src in &all {
+            let m = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
+            if let Err(e) = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all()).validate(&m) {
+                panic!("{}", e.emit_to_string(src));
+            }
         }
     }
 

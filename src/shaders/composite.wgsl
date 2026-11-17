@@ -593,8 +593,10 @@ fn composite_sample(in: FsIn, z: f32, c0: vec4f, a0: vec4f, amb: f32) -> vec3f {
     let t0 = max(top.x, 0.0);
     let t1 = min(dist, top.y);
     if (t1 > t0) {
-      let sc = atm_march(oc, rd, t0, t1, 12, fract(jit + G.time.w * 0.618034));
-      col = col * sc.T + sc.L + glow_march(rd, t1, 8, fract(jit + G.time.w * 0.381966));
+      // fewer steps on lighter presets, taa hides the coarser march.
+      let q = max(G.quality.x, 1.0);
+      let sc = atm_march(oc, rd, t0, t1, max(6, i32(12.0 / q)), fract(jit + G.time.w * 0.618034));
+      col = col * sc.T + sc.L + glow_march(rd, t1, max(4, i32(8.0 / q)), fract(jit + G.time.w * 0.381966));
     }
   }
   if (cov < 0.996) { col = mix(sky_color(rd, jit), col, cov); }
@@ -603,21 +605,22 @@ fn composite_sample(in: FsIn, z: f32, c0: vec4f, a0: vec4f, amb: f32) -> vec3f {
 
 @fragment fn fs(in: FsIn) -> @location(0) vec4f {
   let px = vec2i(in.pos.xy);
+  let ns = i32(textureNumSamples(t_aux_ms));
   var water_samples = 0;
-  for (var i = 0; i < 4; i++) {
+  for (var i = 0; i < ns; i++) {
     if (textureLoad(t_aux_ms, px, i).a > 0.996) { water_samples++; }
   }
-  if (water_samples > 0 && water_samples < 4) {
+  if (water_samples > 0 && water_samples < ns) {
     // Shade before resolving: each water sample needs its own tint, parameters
     // and depth, even when no neighbouring pixel is entirely water. Foreground
     // samples retain their own lighting and haze rather than water's colour.
     var col = vec3f(0.0);
-    for (var i = 0; i < 4; i++) {
+    for (var i = 0; i < ns; i++) {
       col += composite_sample(in, textureLoad(t_depth_ms, px, i),
         textureLoad(t_color_ms, px, i), textureLoad(t_aux_ms, px, i),
         textureLoad(t_amb_ms, px, i).r);
     }
-    return vec4f(col * 0.25, 1.0);
+    return vec4f(col / f32(ns), 1.0);
   }
   return vec4f(composite_sample(in, textureLoad(t_depth, px, 0),
     textureLoad(t_color, px, 0), textureLoad(t_aux, px, 0),

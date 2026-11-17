@@ -736,6 +736,13 @@ struct IOut {
   // the hand-over from one picture to the next.
   var ww = pow(in.w, vec3f(12.0));
   ww /= ww.x + ww.y + ww.z;
+  // low preset takes the nearest picture alone, without the depth search.
+  let lowq = G.quality.x > 1.5;
+  if (lowq) {
+    let m = max(ww.x, max(ww.y, ww.z));
+    ww = select(vec3f(0.0), vec3f(1.0), ww >= vec3f(m));
+    ww /= ww.x + ww.y + ww.z;
+  }
   let uvs = array<vec2f, 3>(in.uva.xy, in.uva.zw, in.uvb);
   let ks = array<vec2f, 3>(in.ka.xy, in.ka.zw, in.kb);
   let layer = in.cells.w;
@@ -751,7 +758,7 @@ struct IOut {
     // The picture was taken from a slightly different direction: find where
     // this pixel's ray meets the surface in it, from the depth stored there.
     var u = uvs[i];
-    for (var it = 0; it < 2; it++) {
+    for (var it = 0; it < select(2, 0, lowq); it++) {
       let l = vec2f(0.5 + 0.5 * u.x, 0.5 - 0.5 * u.y);
       let a0 = (vec2f(c) + clamp(l, vec2f(half), vec2f(1.0 - half))) / f32(IMP_N);
       let A0 = textureSampleLevel(t_imp_a, s_clamp, a0, layer, lod + 1.0);

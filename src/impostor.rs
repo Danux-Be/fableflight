@@ -8,7 +8,9 @@
 //! Each picture is stored premultiplied by its coverage (the multisampled
 //! bake is resolved over a transparent clear), so averaging, both in the
 //! mip chain and between pictures, keeps colour and coverage consistent.
-use crate::render::{tex_entry, ub_entry, TreeVertex, AMB, DEPTH, HDR, MSAA};
+/// impostor bakes keep their own 4x targets.
+const BAKE_MSAA: u32 = 4;
+use crate::render::{tex_entry, ub_entry, TreeVertex, AMB, DEPTH, HDR};
 use crate::trees::{CARDS, LODS, TREE_SPECIES, VARIANTS};
 
 /// Pictures per side of the grid. Must match IMP_N in trees.wgsl.
@@ -118,9 +120,9 @@ impl Impostors {
         let vb_tree = [Some(wgpu::VertexBufferLayout { array_stride: std::mem::size_of::<TreeVertex>() as u64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A_TREEV })];
         let vb_inst = [Some(wgpu::VertexBufferLayout { array_stride: 36, step_mode: wgpu::VertexStepMode::Instance, attributes: &A_TREE })];
         let g_bake = [Some(l0), Some(l_tileu), Some(&l_bake)];
-        let p_bake = pipe("impostor bake", &g_bake, m_tree, "vs_bake", "fs_bake", &vb_tree, &bake_targets, true, MSAA);
-        let p_bake_card = pipe("impostor bake cards", &g_bake, m_tree, "vs_bake_card", "fs_bake_card", &vb_tree, &bake_targets, true, MSAA);
-        let p_draw = pipe("impostors", &[Some(l0), Some(l_tileu), Some(&l_imp)], m_tree, "vs_imp", "fs_imp", &vb_inst, &draw_targets, true, MSAA);
+        let p_bake = pipe("impostor bake", &g_bake, m_tree, "vs_bake", "fs_bake", &vb_tree, &bake_targets, true, BAKE_MSAA);
+        let p_bake_card = pipe("impostor bake cards", &g_bake, m_tree, "vs_bake_card", "fs_bake_card", &vb_tree, &bake_targets, true, BAKE_MSAA);
+        let p_draw = pipe("impostors", &[Some(l0), Some(l_tileu), Some(&l_imp)], m_tree, "vs_imp", "fs_imp", &vb_inst, &draw_targets, true, crate::render::msaa());
         let m_mip = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("impostor mips"), source: wgpu::ShaderSource::Wgsl(MIP_WGSL.into()) });
         let d2 = wgpu::TextureViewDimension::D2;
         let l_mip = d.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("impostor mips"), entries: &[tex_entry(0, d2, false), tex_entry(1, d2, false)] });
@@ -161,7 +163,7 @@ impl Impostors {
                 label: Some("impostor bake target"),
                 size: wgpu::Extent3d { width: SIZE, height: SIZE, depth_or_array_layers: 1 },
                 mip_level_count: 1,
-                sample_count: MSAA,
+                sample_count: BAKE_MSAA,
                 dimension: wgpu::TextureDimension::D2,
                 format: f,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,

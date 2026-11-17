@@ -1911,6 +1911,7 @@ impl Destruction {
         (slots, draws)
     }
 
+    #[allow(dead_code)]
     pub fn clear(&mut self) {
         self.falling.clear();
         self.chunks.clear();

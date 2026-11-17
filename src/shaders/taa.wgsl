@@ -56,8 +56,12 @@ fn history(uv: vec2f) -> vec3f {
 @fragment fn fs_taa(in: FsIn) -> @location(0) vec4f {
   let dims = vec2i(textureDimensions(t_cur));
   let px = vec2i(in.pos.xy);
-  let cur = textureLoad(t_cur, px, 0).rgb;
+  let cur4 = textureLoad(t_cur, px, 0);
+  let cur = cur4.rgb;
   if (G.taa.z < 0.5) { return vec4f(cur, 0.0); }
+  // Rain streaks and lightning (precip.wgsl) mark what they cover in alpha:
+  // they last a frame or two, so this frame's colour wins there.
+  let react = clamp((1.0 - cur4.a) * 4.0, 0.0, 1.0);
   // The colours around this pixel bound what its history may plausibly be;
   // the nearest surface around it says how it moved (so an edge keeps the
   // motion of the thing in front).
@@ -108,7 +112,7 @@ fn history(uv: vec2f) -> vec3f {
   let h = clamp(to_ycc(squash(history(huv))), lo, hi);
   let speed = length((huv - in.uv) * G.screen.xy);
   let moving = smoothstep(0.02, 0.4, speed);
-  let a = mix(TAA_BLEND, TAA_BLEND_MOVING, moving);
+  let a = max(mix(TAA_BLEND, TAA_BLEND_MOVING, moving), react * 0.9);
   let o = unsquash(max(from_ycc(mix(h, yc, a)), vec3f(0.0)));
   // Alpha: how much the pixel is moving, for the sharpening that follows (post.wgsl).
   return vec4f(clamp(o, vec3f(0.0), vec3f(3000.0)), moving);

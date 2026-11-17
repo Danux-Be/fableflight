@@ -60,6 +60,7 @@ impl<'a> Pb<'a> {
 pub enum Val {
     Str(String),
     Num(f64),
+    #[allow(dead_code)]
     Bool(bool),
 }
 impl Val {

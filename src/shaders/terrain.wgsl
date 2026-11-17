@@ -762,8 +762,11 @@ fn city_glow(gq: vec2f, dens: f32, dcx: vec2f, dcy: vec2f, upn: vec3f) -> vec3f 
   let upn = normalize(in.P - G.planet.xyz);
   var wc = wc0;
   let fw = max(length(dx), length(dy));
-  if (dist < DET_FAR) {
-    let fade = 1.0 - smoothstep(DET_FAR * 0.45, DET_FAR, dist);
+  // low preset keeps the ground detail materials to half the distance.
+  let lowq = G.quality.x > 1.5;
+  let det_far = DET_FAR * select(1.0, 0.5, lowq);
+  if (dist < det_far) {
+    let fade = 1.0 - smoothstep(det_far * 0.45, det_far, dist);
     let g = ground(in.uv, wc0, img, 1.0 - dot(N, upn), dx, dy, V);
     // Tangent frame along east / north, laid onto the surface.
     let t = normalize(G.east.xyz - N * dot(G.east.xyz, N));
@@ -771,11 +774,12 @@ fn city_glow(gq: vec2f, dens: f32, dcx: vec2f, dcy: vec2f, upn: vec3f) -> vec3f 
     let graze = 1.0 - abs(dot(V, N));
     // Parallax on the main layer up close.
     let pk = (1.0 - smoothstep(18.0, 40.0, dist)) * (1.0 - g.rock) * g.amp;
-    if (pk > 0.0) {
+    // low preset goes without the parallax march.
+    if (pk > 0.0 && !lowq) {
       let Vt = vec3f(dot(V, t), dot(V, b), dot(V, N));
       wc = pom(g.la, wc0, Vt, det_range(g.la) * pk, dx, dy);
     }
-    let lite = smoothstep(120.0, 180.0, dist);
+    let lite = select(smoothstep(120.0, 180.0, dist), smoothstep(30.0, 60.0, dist), lowq);
     let A = det(g.la, wc, dx, dy, t, b, wc, fw, lite);
     var B = A;
     var wb = g.wb * (1.0 - 0.7 * graze * graze * g.grassy);
@@ -803,7 +807,8 @@ fn city_glow(gq: vec2f, dens: f32, dcx: vec2f, dcy: vec2f, upn: vec3f) -> vec3f 
     // a satellite pixel. Rock gets its own, projected like the close-up rock.
     var mk = g.midk * select(0.0, 1.0, det_photo(g.mid) > 0.0);
     let mrk = kr * select(0.0, 1.0, det_photo(M_ROCK) > 0.0);
-    if (mk > 0.0 || mrk > 0.0) {
+    // low preset goes without the mid scale layer.
+    if ((mk > 0.0 || mrk > 0.0) && !lowq) {
       let mlite = smoothstep(350.0, 500.0, dist);
       var M = Det(vec3f(1.0), 0.5, 0.0, vec3f(0.0), cav_mean(g.mid));
       if (mk > 0.0 && mrk < 0.999) { M = det(g.mid, wc0, dx, dy, t, b, wc0, fw, mlite); }

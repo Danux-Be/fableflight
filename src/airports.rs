@@ -289,6 +289,7 @@ pub struct RwyMeta {
     pub lighted: bool,
     pub ident: [String; 2],
     pub disp: [f32; 2],
+    #[allow(dead_code)]
     pub apt: Option<u32>,
     pub found: bool,
 }
@@ -424,6 +425,7 @@ pub struct Stand {
     pub dir: Vec2,
     /// largest aircraft that fits: 0 light single, 1 business jet, 2 regional, 3 narrow-body, 4 wide-body
     pub size: u8,
+    #[allow(dead_code)]
     pub gate: String,
     /// taxi graph node it is reached from
     pub node: u32,

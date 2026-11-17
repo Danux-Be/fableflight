@@ -66,6 +66,10 @@ pub struct Plane {
     gust_b: DVec3,
     rot_a: DVec3,
     rot_b: DVec3,
+    /// small eddies (sharp jolts), and the slow level that gathers the
+    /// turbulence into bursts
+    gust_s: DVec3,
+    burst: f64,
     /// the pilot's head swaying on its neck as the airframe is shaken (body frame, m)
     pub head: DVec3,
     /// specific force (what an accelerometer reads: everything but gravity), body frame, m/s²
@@ -123,6 +127,9 @@ pub struct Plane {
     /// gear position, 0 stowed .. 1 down and locked, and where the handle is
     pub gear: f64,
     pub gear_down: bool,
+    /// a sliding canopy, 0 shut .. 1 open, and which way it is going
+    pub canopy: f64,
+    pub canopy_open: bool,
     /// per landing gear leg (see `Spec::gear`): how far its oleo or spring is
     /// compressed (m), how far its wheels have turned (rad) and how fast (rad/s)
     pub compress: [f64; MAX_GEAR],
@@ -223,6 +230,8 @@ impl Plane {
             gust_b: DVec3::ZERO,
             rot_a: DVec3::ZERO,
             rot_b: DVec3::ZERO,
+            gust_s: DVec3::ZERO,
+            burst: 0.0,
             head: DVec3::ZERO,
             sf: DVec3::new(0.0, 9.81, 0.0),
             head_v: DVec3::ZERO,
@@ -256,9 +265,11 @@ impl Plane {
             spoilers: 0.0,
             chute_spent: false,
             reverser: 0.0,
-            // Airborne starts are cleaned up: gear stowed.
-            gear: 0.0,
-            gear_down: false,
+            // Airborne starts are cleaned up: gear stowed (unless it is fixed).
+            gear: if spec.fixed_gear() { 1.0 } else { 0.0 },
+            gear_down: spec.fixed_gear(),
+            canopy: 0.0,
+            canopy_open: false,
             compress: [0.0; MAX_GEAR],
             wheel_rot: [0.0; MAX_GEAR],
             wheel_spin: [0.0; MAX_GEAR],
@@ -452,9 +463,13 @@ impl Plane {
     }
     pub fn toggle_gear(&mut self) {
         // The squat switch blocks retraction on the ground. (A rocket has none to raise.)
-        if !(self.gear_down && self.on_ground) && self.spec.rocket().is_none() {
+        if !(self.gear_down && self.on_ground) && self.spec.rocket().is_none() && !self.spec.fixed_gear() {
             self.gear_down = !self.gear_down;
         }
+    }
+    /// Slides the canopy open or shut (the model decides whether it has one).
+    pub fn toggle_canopy(&mut self) {
+        self.canopy_open = !self.canopy_open;
     }
     pub fn set_flaps(&mut self, delta: i32) {
         self.flap_set = (self.flap_set as i32 + delta).clamp(0, self.spec.max_notch() as i32) as u8;
@@ -511,8 +526,8 @@ impl Plane {
         self.flap_set = notch.min(self.spec.max_notch());
         self.flaps = self.spec.flap_frac(self.flap_set);
         self.slats = if self.spec.slats_at > 0 && self.flap_set >= self.spec.slats_at { 1.0 } else { 0.0 };
-        self.gear_down = gear_down;
-        self.gear = if gear_down { 1.0 } else { 0.0 };
+        self.gear_down = gear_down || self.spec.fixed_gear();
+        self.gear = if self.gear_down { 1.0 } else { 0.0 };
         let (_, _, h) = geo::pos_to_lla(self.pos);
         let rho = density(h);
         let v = self.airspeed().length();
@@ -556,6 +571,7 @@ impl Plane {
             Input::Trim => self.trim as f32,
             Input::Reverser => self.reverser as f32,
             Input::Mach => self.mach() as f32,
+            Input::Canopy => self.canopy as f32,
         }
     }
 
@@ -1056,15 +1072,34 @@ impl Plane {
     fn turbulence(&mut self, dt: f64, v: f64, upw: DVec3) {
         let air = self.air;
         let vt = v.max(12.0);
+        // Bursts: a slow random level (patches a kilometre or two long) scales
+        // the eddies up and down, lognormal with the mean variance unchanged:
+        // quiet stretches, then a run of hard jolts. Rougher air is patchier.
+        let eb = (-vt * dt / 1200.0).exp();
+        let nb = self.gauss();
+        self.burst = self.burst * eb + (1.0 - eb * eb).sqrt() * nb;
+        let a = 0.3 + 0.2 * smooth(1.0, 5.0, air.sigma_w);
+        let m = (a * self.burst - a * a).exp().min(3.0);
+        // Two scales of eddy: the big ones (hundreds of metres: slow heaves
+        // the aircraft rides up and down) and small ones a few tens of metres
+        // across that it cannot follow (sharp jolts). The small ones carry a
+        // third of the variance and come and go with the bursts the most.
         let len = DVec3::new(air.len_h, air.len_h, air.len_w);
         let sig = DVec3::new(air.sigma_h, air.sigma_h, air.sigma_w);
+        let one = DVec3::ONE;
         let n = DVec3::new(self.gauss(), self.gauss(), self.gauss());
         let e1 = (-vt * dt / len).exp();
         let e2 = (-vt * dt * 4.0 / len).exp();
-        let one = DVec3::ONE;
-        self.gust_a = self.gust_a * e1 + sig * (one - e1 * e1).max(DVec3::ZERO).sqrt() * n;
+        let big = sig * (0.8 * (0.4 + 0.6 * m));
+        self.gust_a = self.gust_a * e1 + big * (one - e1 * e1).max(DVec3::ZERO).sqrt() * n;
         self.gust_b = self.gust_b * e2 + self.gust_a * (one - e2);
-        let g = self.gust_b * 1.118;
+        let ls = (len / 10.0).clamp(DVec3::splat(6.0), DVec3::splat(45.0));
+        let es = (-vt * dt / ls).exp();
+        let n = DVec3::new(self.gauss(), self.gauss(), self.gauss());
+        self.gust_s = self.gust_s * es + sig * (0.6 * m) * (one - es * es).max(DVec3::ZERO).sqrt() * n;
+        // (A big airframe spans many of the small ones and averages them out.)
+        let span = (ls / (ls + DVec3::splat(0.5 * self.spec.b))).powf(0.5);
+        let g = self.gust_b * 1.118 + self.gust_s * span;
         // Along and across the flight path, and up.
         let air_v = self.vel - self.wind;
         let mut along = air_v - upw * air_v.dot(upw);
@@ -1080,7 +1115,8 @@ impl Plane {
         // a big aircraft averages more of them out.
         let lr = self.spec.b * 2.5;
         let big = (11.0 / self.spec.b).sqrt();
-        let sr = DVec3::new(0.012 * air.sigma_w, 0.020 * air.sigma_h, 0.03 * air.sigma_w) * big;
+        // (In bursts, roll upsets too.)
+        let sr = DVec3::new(0.018 * air.sigma_w, 0.020 * air.sigma_h, 0.03 * air.sigma_w) * big * m;
         let n = DVec3::new(self.gauss(), self.gauss(), self.gauss());
         let e1 = (-vt * dt / lr).exp();
         let e2 = (-vt * dt * 4.0 / lr).exp();
@@ -1211,7 +1247,13 @@ impl Plane {
         if !self.gear_down && self.on_ground {
             self.gear_down = true;
         }
+        if spec.gear_rate <= 0.0 {
+            // fixed gear (a downloaded aircraft's): always down
+            (self.gear, self.gear_down) = (1.0, true);
+        }
         self.gear = (self.gear + if self.gear_down { spec.gear_rate * dt } else { -spec.gear_rate * dt }).clamp(0.0, 1.0);
+        // A canopy slides open or shut in about two seconds.
+        self.canopy = (self.canopy + if self.canopy_open { 0.5 * dt } else { -0.5 * dt }).clamp(0.0, 1.0);
 
         let (lat, lon, h) = geo::pos_to_lla(self.pos);
         let upw = self.pos.normalize();
@@ -1284,6 +1326,8 @@ impl Plane {
             // Ragged stumps and missing fairings all drag.
             let rag = ((spec.span - dm.wing[0]) + (spec.span - dm.wing[1])) as f64 / k as f64;
             let cd = cd
+                // An open canopy: the cockpit is a hole in the airframe.
+                + 0.03 * self.canopy
                 + spec.chute.as_ref().map_or(0.0, |ch| ch.cda * self.spoilers / area)
                 + self.wave_cd(mach)
                 + 0.02 * rag
@@ -2207,6 +2251,7 @@ mod tests {
 
     const C172: &Spec = &c172::SPEC;
     const B747: &Spec = &b747::SPEC;
+    const DR400: &Spec = &crate::aircraft::dr400::SPEC;
 
     fn empty_world() -> World {
         let dir = std::env::temp_dir().join("fablegame-test-cache");
@@ -2821,7 +2866,7 @@ mod tests {
         assert!(p.step(dt, &Controls::default(), &w).is_none());
         assert!(p.chute_spent && p.spoilers == 0.0 && p.notes == ["DRAG CHUTE TORN AWAY (OVERSPEED)"], "{:?}", p.notes);
         // No other type has one, or an engine that fades without its afterburners.
-        for s in crate::aircraft::ALL.iter().filter(|s| s.id != bird.id) {
+        for s in crate::aircraft::BUILTIN.iter().filter(|s| s.id != bird.id) {
             assert!(s.chute.is_none() && s.dry_mach == 0.0, "{}", s.name);
         }
     }
@@ -3197,6 +3242,114 @@ mod tests {
     }
 
     #[test]
+    fn performance_is_a_robin_dr400() {
+        let w = empty_world();
+        let s = DR400;
+        // Flat out and level near sea level: about 150 kt (278 km/h).
+        let mut p = Plane::spawn(s, 0.6, -2.1, 300.0, 0.0, 70.0);
+        assert!(p.gear_down && p.gear == 1.0, "fixed gear starts down");
+        p.toggle_gear();
+        assert!(p.gear_down, "and stays down");
+        let (v, _) = fly(&mut p, &w, 240.0, 1.0, hold_alt(300.0));
+        println!("DR 400 max level speed {:.0} kt at {:.0} rpm", v * KT, rpm(&p));
+        assert!(v * KT > 140.0 && v * KT < 158.0, "{}", v * KT);
+        assert!(rpm(&p) > 2550.0 && rpm(&p) < 2850.0, "{}", rpm(&p));
+
+        // 75% power at 6000 ft: about 135 kt true (250 km/h).
+        let mut p = Plane::spawn(s, 0.6, -2.1, 1830.0, 0.0, 66.0);
+        let mut thr = 0.8;
+        for _ in 0..40 {
+            fly(&mut p, &w, 5.0, thr, hold_alt(1830.0));
+            thr = (thr + (0.75 - p.power) * 0.5).clamp(0.0, 1.0);
+        }
+        let (v, _) = fly(&mut p, &w, 120.0, thr, hold_alt(1830.0));
+        println!("DR 400 75% at 6000 ft: {:.0} kt true, {:.0} rpm", v * KT, rpm(&p));
+        assert!(v * KT > 122.0 && v * KT < 142.0, "{}", v * KT);
+
+        // Full power at the best-rate speed (75 kt): 850-1100 fpm, lighter than the book's 1100 kg.
+        let mut p = Plane::spawn(s, 0.6, -2.1, 300.0, 0.0, 40.0);
+        let (v, vs) = fly(&mut p, &w, 90.0, 1.0, |p| (p.airspeed().length() - 38.5) * 0.04);
+        println!("DR 400 climb at {:.0} kt: {:.0} fpm", v * KT, vs * 196.85);
+        assert!(vs * 196.85 > 800.0 && vs * 196.85 < 1200.0, "{}", vs * 196.85);
+
+        // Idle glide at 70 kt: about 9 or 10 to 1.
+        let mut p = Plane::spawn(s, 0.6, -2.1, 1500.0, 0.0, 36.0);
+        let (v, vs) = fly(&mut p, &w, 90.0, 0.0, |p| (p.airspeed().length() - 36.0) * 0.04);
+        let glide = (v * v - vs * vs).sqrt() / -vs;
+        println!("DR 400 idle glide at {:.0} kt: {:.1}:1", v * KT, glide);
+        assert!(glide > 7.5 && glide < 11.5, "{glide}");
+
+        // Stall at 900 kg: about 50 kt clean, 44 kt with full flaps (the book: 55 and 50 at 1100 kg).
+        let vs_at = |flap_cl: f64, a: f64| (2.0 * s.mass * 9.81 / (RHO0 * s.wing_area * (s.cl0 + flap_cl + s.cl_a * a))).sqrt() * KT;
+        let (clean, full) = (vs_at(0.0, s.stall_alpha), vs_at(s.flap_cl, s.stall_alpha - s.stall_flap));
+        println!("DR 400 stall {clean:.0} kt clean, {full:.0} kt full flaps");
+        assert!(clean > 46.0 && clean < 54.0 && full > 40.0 && full < 47.0);
+
+        // As the game sets up a final: 66 kt, full flaps, a 3 degree glide, hands off.
+        let (va, notch) = s.approach;
+        let mut p = Plane::spawn(s, 0.6, -2.1, 400.0, 0.0, va);
+        let sink = va * 3f64.to_radians().sin();
+        p.configure(notch, true, sink);
+        let thr = p.throttle;
+        let (v, vs) = fly(&mut p, &w, 30.0, thr, |_| 0.0);
+        println!("DR 400 approach: throttle {thr:.2}, {:.0} kt, {:.0} fpm", v * KT, vs * 196.85);
+        assert!((v - va).abs() < 3.0, "{v}");
+        assert!((vs + sink).abs() < 1.0, "{vs}");
+    }
+
+    #[test]
+    fn a_dr400_canopy_slides_open_and_drags() {
+        let w = empty_world();
+        let model = (DR400.build)();
+        let k = model.pieces.iter().position(|p| p.name == "canopy").unwrap();
+        assert!(model.pieces[k].anim.uses(Input::Canopy));
+        let mut p = Plane::spawn(DR400, 0.6, -2.1, 300.0, 0.0, 50.0);
+        let shut = p.pose(&model.pieces)[k];
+        p.toggle_canopy();
+        let (v_open, _) = fly(&mut p, &w, 60.0, 0.75, hold_alt(300.0));
+        assert_eq!(p.canopy, 1.0);
+        let moved = p.pose(&model.pieces)[k].transform_point3(Vec3::ZERO) - shut.transform_point3(Vec3::ZERO);
+        println!("DR 400 canopy open: moved {moved:?}, {:.0} kt", v_open * KT);
+        assert!(moved.z < -0.5 && moved.y > 0.05, "{moved:?}");
+        p.toggle_canopy();
+        let (v_shut, _) = fly(&mut p, &w, 60.0, 0.75, hold_alt(300.0));
+        assert_eq!(p.canopy, 0.0);
+        assert!(v_shut > v_open + 1.0, "{v_shut} {v_open}");
+    }
+
+    #[test]
+    fn a_dr400_takes_off_and_climbs() {
+        let w = flat_world();
+        let s = DR400;
+        let mut p = Plane::spawn_ground(s, 37.6, -122.37, 0.0, 0.5, 0.0);
+        p.hold = false;
+        p.t = 2.0;
+        p.flap_set = 1;
+        p.flaps = s.flap_frac(1);
+        let dt = 1.0 / 180.0;
+        let (mut lifted, mut t) = (None, 0.0);
+        let start = p.pos;
+        while t < 60.0 {
+            let v = p.vel.length();
+            let pitch_deg = (p.forward().dot(p.pos.normalize())).asin().to_degrees();
+            // Rotate at 50 kt, then hold 9 degrees.
+            let pitch = if v * KT > 50.0 { ((9.0 - pitch_deg) * 0.15).clamp(-1.0, 1.0) } else { 0.0 };
+            let c = Controls { throttle: 1.0, pitch, ..Default::default() };
+            assert!(p.step(dt, &c, &w).is_none(), "{:?}", p.notes);
+            if lifted.is_none() && !p.on_ground && t > 3.0 {
+                lifted = Some(((p.pos - start).length(), v));
+            }
+            t += dt;
+        }
+        let (dist, vlo) = lifted.expect("it never left the ground");
+        let (_, _, h) = geo::pos_to_lla(p.pos);
+        println!("DR 400 lift-off after {dist:.0} m at {:.0} kt; at 60 s: {h:.0} m, {:.0} kt", vlo * KT, p.vel.length() * KT);
+        assert!(dist > 120.0 && dist < 300.0 && vlo * KT < 62.0, "{dist} {}", vlo * KT);
+        assert!(h > 150.0, "{h}");
+        assert!(p.notes.is_empty() && p.dmg.gear.iter().all(|g| *g), "{:?}", p.notes);
+    }
+
+    #[test]
     fn engine_starts_runs_and_stops() {
         let w = flat_world();
         let dt = 1.0 / 180.0;
@@ -3399,7 +3552,7 @@ mod tests {
         let mut spread = Vec::new();
         for sigma in [0.0, 1.5, 4.0] {
             let mut p = Plane::spawn(C172, 0.6, -2.1, 1000.0, 0.0, 55.0);
-            p.air = Air { sigma_w: sigma, sigma_h: sigma, len_w: 300.0, len_h: 300.0, draft: 0.0 };
+            p.air = Air { sigma_w: sigma, sigma_h: sigma, len_w: 300.0, len_h: 300.0, draft: 0.0, ..Default::default() };
             let dt = 1.0 / 180.0;
             let (mut s, mut s2, mut n, mut bank) = (0.0, 0.0, 0.0, 0.0f64);
             for i in 0..(60.0 / dt) as usize {
@@ -3419,6 +3572,97 @@ mod tests {
             spread.push(sd);
         }
         assert!(spread[0] < 0.02 && spread[1] > 0.05 && spread[2] > spread[1] * 1.8, "{spread:?}");
+    }
+
+    /// Straight and level passes through each kind of weather, a pilot holding
+    /// the wings level and the pitch attitude (as you do in turbulence), the air
+    /// fed in as main.rs does. Prints peak storm sigma, drafts, g, height and
+    /// bank excursions. `cargo test --release storm_passes -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn storm_passes() {
+        use crate::weather::{CellKind, Weather};
+        let w = empty_world();
+        let (lat, lon) = (41.2f64.to_radians(), -96.0f64.to_radians());
+        let p0 = geo::lla_to_pos(lat, lon, 0.0);
+        // (name, spec, alt, setup, distance flown m)
+        type Setup = fn(&mut Weather, DVec3);
+        let cases: Vec<(&str, &'static Spec, f64, Setup, f64)> = vec![
+            ("clear", C172, 2500.0, |_, _| {}, 15000.0),
+            ("deck 0.4", C172, 1000.0, |wx, p| { wx.rain_set = Some(0.4); for _ in 0..600 { wx.step_deck(1.0, p, Some(0.0)); } }, 15000.0),
+            ("deck 1.0 in", C172, 1500.0, |wx, p| { wx.rain_set = Some(1.0); for _ in 0..600 { wx.step_deck(1.0, p, Some(0.0)); } }, 15000.0),
+            ("shower", C172, 2500.0, |wx, p| wx.place_storm(p, 6.0, 270.0, 1.8, Some(CellKind::Shower)), 12000.0),
+            ("shower low", C172, 800.0, |wx, p| wx.place_storm(p, 6.0, 270.0, 1.8, Some(CellKind::Shower)), 12000.0),
+            ("thunder", C172, 2500.0, |wx, p| wx.place_storm(p, 6.0, 270.0, 5.0, Some(CellKind::Thunder)), 20000.0),
+            ("thunder low", C172, 300.0, |wx, p| wx.place_storm(p, 6.0, 270.0, 5.0, Some(CellKind::Thunder)), 20000.0),
+            ("severe", C172, 2500.0, |wx, p| wx.place_storm(p, 8.0, 270.0, 6.0, None), 24000.0),
+            ("squall", C172, 2500.0, |wx, p| wx.place_squall(p, 6.0, 270.0, 100.0), 24000.0),
+            ("squall low", C172, 400.0, |wx, p| wx.place_squall(p, 6.0, 270.0, 100.0), 24000.0),
+            ("supercell 2.5", C172, 2500.0, |wx, p| wx.place_storm(p, 12.0, 270.0, crate::weather::SUPER_R, Some(CellKind::Supercell)), 30000.0),
+            ("supercell", C172, 4000.0, |wx, p| wx.place_storm(p, 12.0, 270.0, crate::weather::SUPER_R, Some(CellKind::Supercell)), 30000.0),
+            ("thunder 747", B747, 2500.0, |wx, p| wx.place_storm(p, 6.0, 270.0, 5.0, Some(CellKind::Thunder)), 20000.0),
+            ("supercell 747", B747, 4000.0, |wx, p| wx.place_storm(p, 12.0, 270.0, crate::weather::SUPER_R, Some(CellKind::Supercell)), 30000.0),
+        ];
+        for (name, spec, alt, setup, dist) in cases {
+          for seed in [7u64, 99, 12345] {
+            let mut wx = Weather::new(0.3);
+            wx.storms = 0.0;
+            setup(&mut wx, p0);
+            wx.cells = wx.storm_cells(p0);
+            let speed = if spec.b > 30.0 { 130.0 } else { 55.0 };
+            let mut p = Plane::spawn(spec, lat, lon, alt, -std::f64::consts::FRAC_PI_2, speed);
+            p.rng = Rng(seed);
+            let theta = |p: &Plane| p.forward().dot(p.pos.normalize()).asin();
+            let th0 = theta(&p);
+            let dt = 1.0 / 120.0;
+            let (mut t, mut prev) = (0.0, th0);
+            let (mut sig, mut sw, mut up, mut dn, mut gmax, mut gmin, mut dh, mut bank, mut dv) = (0.0f64, 0.0f64, 0.0f64, 0.0f64, 1.0f64, 1.0f64, 0.0f64, 0.0f64, 0.0f64);
+            let mut gust = 0.0f64;
+            let mut prof = String::new();
+            let mut broke = false;
+            let mut vmin = 999.0f64;
+            let mut gl: Vec<f64> = Vec::new();
+            let mut notes = Vec::new();
+            while (p.pos - geo::lla_to_pos(lat, lon, alt)).length() < dist && t < 900.0 {
+                let (_, _, h) = geo::pos_to_lla(p.pos);
+                let air = wx.air(p.pos, h, t, false);
+                let st = crate::storm::local(&wx, p.pos, h, t);
+                p.air = air;
+                p.wind = wx.at(p.pos, h, t) + p.pos.normalize() * air.draft + air.gust;
+                let th = theta(&p);
+                let q = (th - prev) / dt;
+                prev = th;
+                let roll_err = -p.right().dot(p.pos.normalize());
+                let c = Controls { pitch: ((th0 - th) * 4.0 - q * 1.0).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), ..Default::default() };
+                if p.step(dt, &c, &w).is_some() {
+                    broke = true;
+                    break;
+                }
+                t += dt;
+                if t > 2.0 {
+                    sig = sig.max(st.sigma);
+                    sw = sw.max(air.sigma_w);
+                    up = up.max(air.draft);
+                    dn = dn.min(air.draft);
+                    gust = gust.max(air.gust.length());
+                    gmax = gmax.max(p.g_load);
+                    gmin = gmin.min(p.g_load);
+                    dh = dh.max((h - alt).abs());
+                    bank = bank.max(roll_err.abs().min(1.0).asin().to_degrees());
+                    dv = dv.max((p.airspeed().length() - speed).abs());
+                    vmin = vmin.min(p.airspeed().length());
+                    gl.push(p.g_load);
+                    notes.extend(p.notes.drain(..));
+                }
+                if (t / dt) as usize % (10.0 / dt) as usize == 0 {
+                    let km = (p.pos - geo::lla_to_pos(lat, lon, alt)).length() / 1000.0;
+                    prof += &format!(" {km:.1}:{:.1}/{:+.0}", air.sigma_w, air.draft);
+                }
+            }
+            println!("{name:14} storm sigma {sig:4.1} sigma_w {sw:4.1}  draft {up:+5.1} {dn:+5.1}  gust {gust:4.1}  g {gmin:+5.2}..{gmax:+5.2}  dh {dh:5.0} m  bank {bank:4.0}  dv {dv:4.1} m/s vmin {vmin:4.1} grms {:.2} {notes:?}{}", gl.chunks((20.0 / dt) as usize).map(|c| { let n = c.len() as f64; let m = c.iter().sum::<f64>() / n; (c.iter().map(|g| (g - m) * (g - m)).sum::<f64>() / n).sqrt() }).fold(0.0, f64::max), if broke { "  CRASHED" } else { "" });
+            if seed == 7 { println!("    {prof}"); }
+          }
+        }
     }
 
     fn flat_world() -> World {
@@ -3602,7 +3846,7 @@ mod tests {
     #[test]
     fn a_rocket_lights_the_engines_it_is_told_to() {
         let w = flat_world();
-        let mut burn = |lit: usize| {
+        let burn = |lit: usize| {
             let mut p = on_the_pad();
             p.lit = lit;
             run(&mut p, &w, 4.0, Controls { throttle_set: Some(1.0), ..Default::default() });
@@ -3921,7 +4165,7 @@ mod tests {
     #[test]
     fn a_747_settles_on_its_gear() {
         let w = flat_world();
-        for (spec, wind) in [(C172, 0.0), (B747, 0.0), (C172, 6.0), (B747, 6.0)] {
+        for (spec, wind) in [(C172, 0.0), (B747, 0.0), (DR400, 0.0), (C172, 6.0), (B747, 6.0), (DR400, 6.0)] {
             let mut p = Plane::spawn_ground(spec, 37.6, -122.37, 0.0, 0.5, 0.0);
             // A tailwind, parked: no airflow worth the name over the wing.
             p.wind = p.forward() * wind;

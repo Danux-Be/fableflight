@@ -272,6 +272,8 @@ pub static SPEC: Spec = Spec {
     name: "F-4E Phantom II",
     keys: &["f4", "f-4", "f4e", "f-4e", "phantom"],
     blurb: "Twin-engine two-seat fighter, 17 t. No fly-by-wire: mind the g and the angle of attack; Space for afterburner, / speedbrakes. 150 kt approach.",
+    origin: None,
+    ext: None,
     still: include_bytes!("../../../assets/aircraft/f4.png"),
     paint: Some(Paint { jpg: include_bytes!("../../../assets/f4_paint.jpg"), views: 4, span: 13.2, length: 19.8, centre: [0.4, 1.0], relief: 1.0, sheen: 0.0 }),
     build,

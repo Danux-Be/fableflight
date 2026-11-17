@@ -1,11 +1,18 @@
 //! Real weather: the current conditions where the player is (or where they
 //! are about to start), turned into the weather sliders. The nearest METAR
 //! (aviationweather.gov) within 60 km gives the wind, gusts, visibility, the
-//! cloud layers and thunderstorms; away from any airport, Open-Meteo's model
+//! cloud layers, thunderstorms and rain; away from any airport, Open-Meteo's model
 //! stands in. A background thread looks again every ten minutes or after a
 //! move of 30 km, and the sky eases into each new report.
+//!
+//! Where a weather radar sees (RainViewer's composite, radar.rs), the storm
+//! cells stand where it shows the convective cores and the rain deck over its
+//! widespread rain, refreshed every five minutes or after 40 km, growing in
+//! and dying away as the picture changes. Beyond radar coverage (or with no
+//! radar picture) the report's storms and rain are spread round as before.
 
 use crate::geo;
+use crate::radar::{self, Radar};
 use crate::sources::Sources;
 use crate::weather::Weather;
 use parking_lot::Mutex;
@@ -17,6 +24,13 @@ const REFRESH: f64 = 600.0;
 const MOVE_KM: f64 = 30.0;
 /// The nearest METAR station is used up to this far away (km).
 const STATION_KM: f64 = 60.0;
+/// How often to look for a new radar picture (s; RainViewer makes one every
+/// ten minutes), and how far the player may move before it is read again round
+/// them (km).
+const RADAR_REFRESH: f64 = 300.0;
+const RADAR_MOVE_KM: f64 = 40.0;
+/// A radar picture older than this is no longer the weather now (s).
+const RADAR_STALE: i64 = 2700;
 
 /// The weather sliders a report comes to.
 #[derive(Clone, Debug, PartialEq)]
@@ -27,6 +41,11 @@ pub struct Target {
     pub depth_m: f32,
     pub alto: f32,
     pub storms: f32,
+    /// showers but no thunder reported: the convective cells are showers
+    pub showers_only: bool,
+    /// rain falling at the station, 0..1 (the Rain slider: it brings the
+    /// nimbostratus rain deck); 0 = none
+    pub rain: f32,
     pub haze: f32,
     /// m/s, and where from (None: variable)
     pub wind: f64,
@@ -45,6 +64,8 @@ struct Shared {
     want: Option<(f64, f64)>,
     got: Option<(Instant, Target)>,
     error: String,
+    /// the latest radar picture read round the player (None: none to be had)
+    radar: Option<(Instant, Arc<Radar>)>,
 }
 
 pub struct LiveWx {
@@ -54,11 +75,18 @@ pub struct LiveWx {
     target: Option<Target>,
     /// ease in (false right after a new place is picked: jump straight there)
     settled: bool,
+    /// the Rain slider (`rain_set`) is ours: handed back when live weather goes off
+    owns_rain: bool,
+    radar_thread: bool,
+    /// the radar picture in use (when it came; where the player was)
+    radar_got: Option<Instant>,
+    radar: Option<Arc<Radar>>,
+    radar_at: Option<(f64, f64)>,
 }
 
 impl LiveWx {
     pub fn new() -> Self {
-        Self { shared: Arc::default(), thread: false, last_got: None, target: None, settled: false }
+        Self { shared: Arc::default(), thread: false, last_got: None, target: None, settled: false, owns_rain: false, radar_thread: false, radar_got: None, radar: None, radar_at: None }
     }
 
     pub fn error(&self) -> String {
@@ -70,18 +98,46 @@ impl LiveWx {
     pub fn step(&mut self, src: &Arc<Sources>, wx: &mut Weather, at: Option<(f64, f64)>, dt: f64) {
         if !wx.live {
             self.settled = false;
+            if self.owns_rain {
+                self.owns_rain = false;
+                wx.rain_set = None;
+                wx.live_cells.clear();
+                (wx.radar_cover, wx.deck_goal, wx.deck_tau) = (None, None, 6.0);
+                (self.radar, self.radar_got, self.radar_at) = (None, None, None);
+            }
             // Hand-set weather: the standard atmosphere.
             wx.qnh = 1013.25;
             return;
         }
-        let got = {
+        let (got, radar) = {
             let mut s = self.shared.lock();
             s.want = at;
-            s.got.as_ref().filter(|(t, _)| Some(*t) != self.last_got).cloned()
+            let r = match &s.radar {
+                Some((t, r)) if Some(*t) != self.radar_got => Some((Some(*t), Some(r.clone()))),
+                None if self.radar_got.is_some() => Some((None, None)),
+                _ => None,
+            };
+            (s.got.as_ref().filter(|(t, _)| Some(*t) != self.last_got).cloned(), r)
         };
         if !self.thread && at.is_some() {
             self.thread = true;
             spawn(src.clone(), self.shared.clone());
+        }
+        if !self.radar_thread && at.is_some() {
+            self.radar_thread = true;
+            spawn_radar(src.clone(), self.shared.clone());
+        }
+        if let Some((t, r)) = radar {
+            self.radar_got = t;
+            self.apply_radar(wx, r, at, dt);
+        }
+        wx.step_live(dt);
+        // Where there is radar, the rain deck stands over its rain (weather.rs
+        // `step_deck` eases it in and out).
+        let radar_here = self.radar.as_ref().is_some_and(|r| r.here);
+        if let Some(r) = self.radar.as_ref().filter(|r| r.here) {
+            wx.rain_set = r.deck.as_ref().map(|d| d.amount);
+            wx.deck_tau = 25.0;
         }
         if let Some((t, target)) = got {
             self.last_got = Some(t);
@@ -107,7 +163,15 @@ impl LiveWx {
         wx.cloud_depth = mix(wx.cloud_depth, t.depth_m);
         wx.alto = mix(wx.alto, t.alto);
         wx.storms = mix(wx.storms, t.storms);
+        wx.showers_only = t.showers_only;
         wx.haze = mix(wx.haze, t.haze);
+        // Beyond the radar, a rain deck round the aircraft as heavy as the
+        // report says.
+        if !radar_here {
+            wx.rain_set = (t.rain > 0.0).then_some(t.rain);
+            (wx.deck_goal, wx.deck_tau) = (None, 6.0);
+        }
+        self.owns_rain = true;
         wx.wind += (t.wind - wx.wind) * k;
         wx.gusts += (t.gusts - wx.gusts) * k;
         if let Some(q) = t.qnh {
@@ -118,6 +182,215 @@ impl LiveWx {
             wx.wind_from = (wx.wind_from + d * k).rem_euclid(360.0);
         }
     }
+}
+
+impl LiveWx {
+    /// A new radar picture (None: there is none now): its cells into cloud
+    /// space where they stand now, and the rain deck's place.
+    fn apply_radar(&mut self, wx: &mut Weather, r: Option<Arc<Radar>>, at: Option<(f64, f64)>, dt: f64) {
+        self.owns_rain = true;
+        let Some(r) = r else {
+            // Lost it: the radar's cells die away, the report takes over.
+            wx.set_live_cells(&[], false);
+            (wx.radar_cover, wx.deck_goal) = (None, None);
+            (self.radar, self.radar_at) = (None, None);
+            return;
+        };
+        // A fresh start (the first picture, or the player put down far away):
+        // show it as it is rather than growing it all in.
+        let jump = dt <= 0.0 || self.radar_at.zip(at).is_none_or(|(a, b)| dist_km(a, b) > 150.0);
+        self.radar_at = at;
+        // The cloud field drifts with the wind (Weather::advance): where the
+        // radar saw a cell is where it stood when the picture was taken.
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(r.time);
+        let age = (now - r.time).clamp(0, RADAR_STALE) as f64;
+        let cloud = |lat: f64, lon: f64| {
+            let p = geo::lla_to_pos(lat.to_radians(), lon.to_radians(), 0.0);
+            let drift = wx.steady(p, 2000.0) * 1.6 * age;
+            (p.normalize() * 6371.0 + (wx.cloud_off + drift) / 1000.0).normalize() * 6371.0
+        };
+        // A squall line stands as one (the shaders draw it across the wind
+        // aloft) where it lies within 40 degrees of that; otherwise as its cells.
+        let across = (wx.wind_from + 90.0).rem_euclid(180.0);
+        let mut cells = Vec::new();
+        for c in &r.cells {
+            let off = ((c.axis - across).rem_euclid(180.0) + 90.0).rem_euclid(180.0) - 90.0;
+            if c.len > 0.0 && off.abs() < 40.0 {
+                cells.push((cloud(c.lat, c.lon), c.rad, c.age, c.len * off.to_radians().cos()));
+            } else if c.len > 0.0 {
+                cells.extend(c.parts.iter().map(|p| (cloud(p.lat, p.lon), p.rad, p.age, 0.0)));
+            } else {
+                cells.push((cloud(c.lat, c.lon), c.rad, c.age, 0.0));
+            }
+        }
+        let deck = r.deck.as_ref().filter(|_| r.here).map(|d| cloud(d.lat, d.lon));
+        wx.set_live_cells(&cells, jump);
+        wx.deck_goal = deck;
+        wx.radar_cover = Some(r.cover.clone());
+        if let Some(a) = at {
+            let near: Vec<String> = r
+                .cells
+                .iter()
+                .take(6)
+                .map(|c| format!("{:.0} km {:03.0}° r{:.1} age{:.2} {:.0}dBZ{}", radar::dist_km(a, (c.lat, c.lon)), bearing(a, (c.lat, c.lon)), c.rad, c.age, c.peak, if c.len > 0.0 { format!(" squall line {:.0} km along {:03.0}°", c.len, c.axis) } else { String::new() }))
+                .collect();
+            let deck = r.deck.as_ref().map(|d| format!("{:.0} km {:03.0}° rain {:.2} ({:.0}% wet)", radar::dist_km(a, (d.lat, d.lon)), bearing(a, (d.lat, d.lon)), d.amount, d.frac * 100.0));
+            log::info!("radar ({} min old): {} cells{}, deck {:?}; nearest: {}", age as i64 / 60, r.cells.len(), if r.here { "" } else { " (no radar here)" }, deck, near.join(", "));
+        }
+        self.radar = Some(r);
+    }
+}
+
+/// Compass bearing from a to b, degrees.
+fn bearing(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (la1, la2, dl) = (a.0.to_radians(), b.0.to_radians(), (b.1 - a.1).to_radians());
+    let y = dl.sin() * la2.cos();
+    let x = la1.cos() * la2.sin() - la1.sin() * la2.cos() * dl.cos();
+    y.atan2(x).to_degrees().rem_euclid(360.0)
+}
+
+/// The radar thread: a new picture every five minutes (if RainViewer has
+/// one), read round the player again after a move of 40 km. The tiles of the
+/// picture in use stay in memory; the coverage tiles (which hardly change) on
+/// disk.
+fn spawn_radar(src: Arc<Sources>, shared: Arc<Mutex<Shared>>) {
+    std::thread::spawn(move || {
+        let mut frame: Option<(Instant, Frame)> = None;
+        let mut done: Option<(String, (f64, f64))> = None;
+        let mut tiles: std::collections::HashMap<(i64, i64), Arc<Vec<f32>>> = Default::default();
+        let mut retry: Option<Instant> = None;
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let Some(p) = shared.lock().want else { continue };
+            if retry.is_some_and(|t| t.elapsed().as_secs() < 120) {
+                continue;
+            }
+            retry = None;
+            if frame.as_ref().is_none_or(|(t, _)| t.elapsed().as_secs_f64() > RADAR_REFRESH) {
+                match radar_frame(&src) {
+                    Ok(f) => {
+                        if frame.as_ref().is_none_or(|(_, o)| o.path != f.path) {
+                            tiles.clear();
+                        }
+                        frame = Some((Instant::now(), f));
+                    }
+                    Err(e) => {
+                        radar_failed(&shared, &e, &mut retry);
+                        continue;
+                    }
+                }
+            }
+            let Some((_, f)) = &frame else { continue };
+            if done.as_ref().is_some_and(|(path, q)| *path == f.path && dist_km(p, *q) < RADAR_MOVE_KM) {
+                continue;
+            }
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+            if now - f.time > RADAR_STALE {
+                radar_failed(&shared, "the radar picture is old", &mut retry);
+                continue;
+            }
+            match radar_echo(&src, f, p, &mut tiles) {
+                Ok(e) => {
+                    let mut r = radar::analyse(&e, p);
+                    r.time = f.time;
+                    let mut s = shared.lock();
+                    s.radar = Some((Instant::now(), Arc::new(r)));
+                    done = Some((f.path.clone(), p));
+                }
+                Err(e) => radar_failed(&shared, &e, &mut retry),
+            }
+        }
+    });
+}
+
+fn radar_failed(shared: &Mutex<Shared>, e: &str, retry: &mut Option<Instant>) {
+    if e != "offline" {
+        log::warn!("weather radar: {e}");
+    }
+    let mut s = shared.lock();
+    // An older picture will still do for a while.
+    if s.radar.as_ref().is_some_and(|(t, _)| t.elapsed().as_secs() > 1800) {
+        s.radar = None;
+    }
+    *retry = Some(Instant::now());
+}
+
+/// RainViewer's newest radar picture.
+struct Frame {
+    host: String,
+    path: String,
+    /// Unix seconds
+    time: i64,
+}
+
+fn radar_frame(src: &Sources) -> Result<Frame, String> {
+    let j = get_json(src, "https://api.rainviewer.com/public/weather-maps.json")?;
+    let last = j["radar"]["past"].as_array().and_then(|a| a.last()).ok_or("no radar pictures")?;
+    Ok(Frame {
+        host: j["host"].as_str().unwrap_or("https://tilecache.rainviewer.com").to_string(),
+        path: last["path"].as_str().ok_or("no radar path")?.to_string(),
+        time: last["time"].as_i64().ok_or("no radar time")?,
+    })
+}
+
+/// The strongest storms anywhere a radar sees right now (lat, lon, dBZ), a
+/// few hundred km apart, strongest first: places to fly to see live storms
+/// (`--find-storms`). Reads the whole world at zoom 2 (16 tiles).
+pub fn find_storms(fetch: &crate::fetch::Fetcher) -> Result<Vec<(f64, f64, f32)>, String> {
+    let j: serde_json::Value = serde_json::from_slice(&fetch.get("https://api.rainviewer.com/public/weather-maps.json").map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let host = j["host"].as_str().unwrap_or("https://tilecache.rainviewer.com");
+    let path = j["radar"]["past"].as_array().and_then(|a| a.last()).and_then(|f| f["path"].as_str()).ok_or("no radar pictures")?;
+    let mut hits: Vec<(f32, f64, f64)> = Vec::new();
+    for y in 0..4i64 {
+        for x in 0..4i64 {
+            let d = radar::decode_tile(&fetch.get(&format!("{host}{path}/256/2/{x}/{y}/2/0_0.png")).map_err(|e| e.to_string())?)?;
+            for (k, &z) in d.iter().enumerate() {
+                if z >= 45.0 {
+                    let (gx, gy) = ((x * 256 + (k % 256) as i64) as f64 + 0.5, (y * 256 + (k / 256) as i64) as f64 + 0.5);
+                    hits.push((z, geo::merc_y_to_lat(gy / 1024.0).to_degrees(), gx / 1024.0 * 360.0 - 180.0));
+                }
+            }
+        }
+    }
+    hits.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut out: Vec<(f64, f64, f32)> = Vec::new();
+    for (z, lat, lon) in hits {
+        if out.len() < 12 && out.iter().all(|o| radar::dist_km((o.0, o.1), (lat, lon)) > 300.0) {
+            out.push((lat, lon, z));
+        }
+    }
+    Ok(out)
+}
+
+/// The block of radar and coverage tiles round p, as one grid.
+fn radar_echo(src: &Sources, f: &Frame, (lat, lon): (f64, f64), tiles: &mut std::collections::HashMap<(i64, i64), Arc<Vec<f32>>>) -> Result<radar::Echo, String> {
+    let (z, tx0, ty0, n) = radar::Echo::block(lat, lon);
+    let s = 256 * n as usize;
+    let mut e = radar::Echo { z, gx0: tx0 * 256, gy0: ty0 * 256, w: s, h: s, dbz: vec![f32::NAN; s * s], cover: vec![false; s * s] };
+    let wrap = 1i64 << z;
+    for ty in 0..n {
+        for tx in 0..n {
+            let (x, y) = ((tx0 + tx).rem_euclid(wrap), ty0 + ty);
+            let d = match tiles.get(&(x, y)) {
+                Some(d) => d.clone(),
+                None => {
+                    // (smooth 0: the pixels as measured; snow 0: one palette)
+                    let url = format!("{}{}/256/{z}/{x}/{y}/2/0_0.png", f.host, f.path);
+                    let d = Arc::new(radar::decode_tile(&src.fetch.get(&url).map_err(|e| e.to_string())?)?);
+                    tiles.insert((x, y), d.clone());
+                    d
+                }
+            };
+            let url = format!("{}/v2/coverage/0/256/{z}/{x}/{y}/0/0_0.png", f.host);
+            let c = radar::decode_cover(&src.fetch.get_cached(&format!("radar/coverage/{z}/{x}/{y}.png"), &url).map_err(|e| e.to_string())?)?;
+            for j in 0..256 {
+                let row = (ty as usize * 256 + j) * s + tx as usize * 256;
+                e.dbz[row..row + 256].copy_from_slice(&d[j * 256..j * 256 + 256]);
+                e.cover[row..row + 256].copy_from_slice(&c[j * 256..j * 256 + 256]);
+            }
+        }
+    }
+    Ok(e)
 }
 
 fn spawn(src: Arc<Sources>, shared: Arc<Mutex<Shared>>) {
@@ -226,7 +499,9 @@ fn from_metar(m: &serde_json::Value) -> Option<Target> {
     layers.sort_by(|a, b| a.1.total_cmp(&b.1));
     let cb = tokens.iter().any(|t| t.ends_with("CB"));
     let tcu = tokens.iter().any(|t| t.ends_with("TCU"));
-    let storms = if wx.contains("TS") { 0.75 } else if cb { 0.45 } else if tcu { 0.2 } else { 0.0 };
+    let p = precip(wx);
+    let storms: f32 = if p.thunder { 0.75 } else if cb { 0.45 } else if p.showers > 0.0 || tcu { 0.2 } else { 0.0 };
+    let storms = storms.max(p.showers);
     let (clouds, base_m, alto) = match layers.first() {
         None => (0.03, None, 0.0),
         Some(&(_, base)) => {
@@ -235,6 +510,8 @@ fn from_metar(m: &serde_json::Value) -> Option<Target> {
             (low, Some(base.clamp(300.0, 4000.0)), high)
         }
     };
+    // Showers fall from cumulus: enough of it for the storm cells to grow.
+    let clouds = if p.showers > 0.0 { clouds.max(0.45) } else { clouds };
     let foggy = ["FG", "BR", "HZ", "FU", "DU", "SA"].iter().any(|w| wx.contains(w));
     Some(Target {
         clouds,
@@ -242,6 +519,8 @@ fn from_metar(m: &serde_json::Value) -> Option<Target> {
         depth_m: depth(clouds, storms),
         alto,
         storms,
+        showers_only: storms > 0.0 && !p.thunder && !cb,
+        rain: p.rain,
         haze: haze(if cavok { None } else { vis_km }, foggy),
         wind,
         wind_from,
@@ -250,6 +529,55 @@ fn from_metar(m: &serde_json::Value) -> Option<Target> {
         station,
         raw,
     })
+}
+
+/// What falls, from a METAR's present weather ("-SHRA BR", "+TSRA", "DZ").
+#[derive(Debug, PartialEq)]
+struct Precip {
+    /// the rain deck (the Rain slider), 0..1
+    rain: f32,
+    /// showers: the storm-cell slider they want (convective cloud), 0 = none
+    showers: f32,
+    thunder: bool,
+}
+
+/// Rain deck amount for each intensity (light, moderate, heavy): drizzle
+/// lighter still. Showers and thunderstorms rain mostly from their cells, so
+/// they bring a thinner deck.
+const RAIN: [f32; 3] = [0.3, 0.55, 0.85];
+const DRIZZLE: [f32; 3] = [0.12, 0.18, 0.25];
+const CONVECTIVE_DECK: f32 = 0.5;
+
+fn precip(wx: &str) -> Precip {
+    let mut p = Precip { rain: 0.0, showers: 0.0, thunder: false };
+    for tok in wx.split_whitespace() {
+        let (level, rest) = match tok.as_bytes().first() {
+            Some(b'-') => (0, &tok[1..]),
+            Some(b'+') => (2, &tok[1..]),
+            _ => (1, tok),
+        };
+        // In the vicinity (VC) or recent (RE): not falling here.
+        let near = !(rest.starts_with("VC") || rest.starts_with("RE"));
+        let codes: Vec<&str> = (0..rest.len() / 2).map(|i| &rest[2 * i..2 * i + 2]).collect();
+        let has = |c: &str| codes.contains(&c);
+        let ts = has("TS");
+        let sh = has("SH");
+        p.thunder |= ts;
+        let mut r = 0.0f32;
+        if has("RA") {
+            r = RAIN[level];
+        } else if has("DZ") {
+            r = DRIZZLE[level];
+        }
+        if sh && !ts {
+            // stronger showers, taller and more cells
+            p.showers = p.showers.max(if near { [0.25, 0.35, 0.5][level] } else { 0.2 });
+        }
+        if near && r > 0.0 {
+            p.rain = p.rain.max(if ts || sh { r * CONVECTIVE_DECK } else { r });
+        }
+    }
+    p
 }
 
 /// "6+", "1/2", "1 1/2" statute miles.
@@ -283,7 +611,7 @@ fn haze(vis_km: Option<f64>, foggy: bool) -> f32 {
 /// Open-Meteo's model where there is no METAR near.
 fn open_meteo(src: &Sources, (lat, lon): (f64, f64)) -> Result<Target, String> {
     let url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={lat:.3}&longitude={lon:.3}&current=temperature_2m,dew_point_2m,cloud_cover_low,cloud_cover_mid,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,weather_code,pressure_msl&wind_speed_unit=ms"
+        "https://api.open-meteo.com/v1/forecast?latitude={lat:.3}&longitude={lon:.3}&current=temperature_2m,dew_point_2m,cloud_cover_low,cloud_cover_mid,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,weather_code,rain,showers,pressure_msl&wind_speed_unit=ms"
     );
     let j = get_json(src, &url)?;
     from_open_meteo(&j).ok_or_else(|| "unreadable Open-Meteo answer".to_string())
@@ -303,10 +631,31 @@ fn from_open_meteo(j: &serde_json::Value) -> Option<Target> {
     };
     let storms = match code {
         95..=99 => 0.75,
-        80..=82 => 0.2,
+        80 => 0.25,
+        81 => 0.35,
+        82 => 0.5,
         _ => 0.0,
     };
+    // WMO weather codes: drizzle 51-57, rain 61-67, showers 80-82, storms 95-99.
+    let by_code = match code {
+        51 | 56 => DRIZZLE[0],
+        53 => DRIZZLE[1],
+        55 | 57 => DRIZZLE[2],
+        61 | 66 => RAIN[0],
+        63 => RAIN[1],
+        65 | 67 => RAIN[2],
+        80 | 95 => RAIN[0] * CONVECTIVE_DECK,
+        81 | 96 => RAIN[1] * CONVECTIVE_DECK,
+        82 | 99 => RAIN[2] * CONVECTIVE_DECK,
+        _ => 0.0,
+    };
+    // The amount (mm/h) where the code says nothing falls: light under 2.5,
+    // heavy from 7.6.
+    let mm = f("rain").unwrap_or(0.0) + f("showers").unwrap_or(0.0);
+    let by_amount = if mm < 0.1 { 0.0 } else if mm < 2.5 { RAIN[0] } else if mm < 7.6 { RAIN[1] } else { RAIN[2] };
+    let rain = if by_code > 0.0 || (50..=99).contains(&code) { by_code } else { by_amount };
     let clouds = if low > 0.05 { low } else { mid * 0.6 }.max(0.03);
+    let clouds = if (80..=82).contains(&code) { clouds.max(0.45) } else { clouds };
     let wind = f("wind_speed_10m")?;
     Some(Target {
         clouds,
@@ -314,6 +663,8 @@ fn from_open_meteo(j: &serde_json::Value) -> Option<Target> {
         depth_m: depth(clouds, storms),
         alto: mid,
         storms,
+        showers_only: (80..=82).contains(&code),
+        rain,
         haze: haze(f("visibility").map(|v| v / 1000.0), matches!(code, 45 | 48)),
         wind,
         wind_from: f("wind_direction_10m"),
@@ -337,6 +688,7 @@ mod tests {
         assert!((t.wind - 15.0 / 1.94384).abs() < 1e-6);
         assert!(t.gusts > 0.8);
         assert_eq!(t.storms, 0.75);
+        assert_eq!(t.rain, RAIN[0] * CONVECTIVE_DECK);
         // FEW at 1200 ft and BKN at 2500 ft are one layer; OVC at 8000 ft is mid-level cloud.
         assert_eq!(t.clouds, 0.75);
         assert_eq!(t.alto, 1.0);
@@ -345,13 +697,49 @@ mod tests {
 
         let cavok = serde_json::json!({"icaoId":"EBBR","rawOb":"METAR EBBR 151720Z 19010KT CAVOK 10/09 Q0999","elev":56,"wdir":190,"wspd":10,"visib":"6+","clouds":[]});
         let t = from_metar(&cavok).unwrap();
-        assert_eq!((t.clouds, t.base_m, t.storms, t.haze), (0.03, None, 0.0, 1.0));
+        assert_eq!((t.clouds, t.base_m, t.storms, t.haze, t.rain), (0.03, None, 0.0, 1.0, 0.0));
 
         let fog = serde_json::json!({"icaoId":"LFPG","rawOb":"METAR LFPG 150600Z VRB02KT 0300 FG VV001 05/05 Q1020","wdir":"VRB","wspd":2,"visib":0.25,"wxString":"FG","clouds":[{"cover":"OVX","base":100}]});
         let t = from_metar(&fog).unwrap();
         assert_eq!(t.wind_from, None);
         assert_eq!(t.haze, 40.0);
         assert_eq!(t.base_m, Some(300.0));
+        assert_eq!(t.rain, 0.0);
+
+        let rain = serde_json::json!({"icaoId":"KOMA","rawOb":"METAR KOMA 151852Z 18012KT 3SM +RA BR OVC008 08/07 A2990","elev":299,"wdir":180,"wspd":12,"visib":3,"wxString":"+RA BR","clouds":[{"cover":"OVC","base":800}]});
+        let t = from_metar(&rain).unwrap();
+        assert_eq!((t.rain, t.storms), (RAIN[2], 0.0));
+
+        let showers = serde_json::json!({"icaoId":"KLNK","rawOb":"METAR KLNK 151854Z 27010KT 10SM -SHRA SCT040 BKN060 15/09 A2995","elev":362,"wdir":270,"wspd":10,"visib":"10+","wxString":"-SHRA","clouds":[{"cover":"SCT","base":4000},{"cover":"BKN","base":6000}]});
+        let t = from_metar(&showers).unwrap();
+        assert_eq!((t.rain, t.storms), (RAIN[0] * CONVECTIVE_DECK, 0.25));
+        assert!(t.clouds >= 0.45);
+    }
+
+    #[test]
+    fn present_weather() {
+        let p = |s| precip(s);
+        assert_eq!(p("").rain, 0.0);
+        assert_eq!(p("BR HZ").rain, 0.0);
+        assert_eq!(p("-RA").rain, RAIN[0]);
+        assert_eq!(p("RA").rain, RAIN[1]);
+        assert_eq!(p("+RA").rain, RAIN[2]);
+        assert_eq!(p("-DZ").rain, DRIZZLE[0]);
+        assert_eq!(p("DZ BR").rain, DRIZZLE[1]);
+        assert_eq!(p("-RADZ").rain, RAIN[0]);
+        assert_eq!(p("-DZ RA").rain, RAIN[1]);
+        assert!(p("+DZ").rain < p("-RA").rain);
+        assert_eq!(p("-RASN").rain, RAIN[0]);
+        assert_eq!(p("SN").rain, 0.0);
+        let sh = p("+SHRA");
+        assert_eq!((sh.rain, sh.showers, sh.thunder), (RAIN[2] * CONVECTIVE_DECK, 0.5, false));
+        let ts = p("TSRA");
+        assert_eq!((ts.rain, ts.showers, ts.thunder), (RAIN[1] * CONVECTIVE_DECK, 0.0, true));
+        assert!(p("TS").thunder && p("TS").rain == 0.0);
+        let vc = p("VCSH");
+        assert_eq!((vc.rain, vc.showers), (0.0, 0.2));
+        assert_eq!(p("RERA").rain, 0.0);
+        assert_eq!(p("FZRA").rain, RAIN[1]);
     }
 
     #[test]
@@ -365,9 +753,26 @@ mod tests {
     fn open_meteo_model() {
         let j = serde_json::json!({"elevation":37.0,"current":{"temperature_2m":10.0,"dew_point_2m":8.0,"cloud_cover_low":100,"cloud_cover_mid":40,"wind_speed_10m":6.6,"wind_direction_10m":203,"wind_gusts_10m":13.1,"visibility":19420.0,"weather_code":53}});
         let t = from_open_meteo(&j).unwrap();
-        assert_eq!((t.clouds, t.alto, t.storms), (1.0, 0.4, 0.0));
+        assert_eq!((t.clouds, t.alto, t.storms, t.rain), (1.0, 0.4, 0.0, DRIZZLE[1]));
         assert_eq!(t.base_m, Some(300.0));
         assert_eq!(t.wind_from, Some(203.0));
         assert_eq!(t.station, "Open-Meteo");
+
+        let om = |code: u32, rain: f64, showers: f64| {
+            let j = serde_json::json!({"elevation":0.0,"current":{"cloud_cover_low":30,"cloud_cover_mid":0,"wind_speed_10m":3.0,"weather_code":code,"rain":rain,"showers":showers}});
+            from_open_meteo(&j).unwrap()
+        };
+        assert_eq!(om(0, 0.0, 0.0).rain, 0.0);
+        assert_eq!(om(3, 0.0, 0.0).rain, 0.0);
+        assert_eq!(om(61, 0.5, 0.0).rain, RAIN[0]);
+        assert_eq!(om(65, 9.0, 0.0).rain, RAIN[2]);
+        // a cloudy code with rain falling anyway: the amount decides
+        assert_eq!(om(3, 4.0, 0.0).rain, RAIN[1]);
+        let t = om(81, 0.0, 3.0);
+        assert_eq!((t.rain, t.storms), (RAIN[1] * CONVECTIVE_DECK, 0.35));
+        assert!(t.clouds >= 0.45);
+        assert_eq!(om(95, 0.0, 5.0).storms, 0.75);
+        // fog (45) with a trace of rain in the model: no deck
+        assert_eq!(om(45, 0.05, 0.0).rain, 0.0);
     }
 }

@@ -77,6 +77,7 @@ pub struct Parked {
 }
 
 pub struct BuildingData {
+    #[allow(dead_code)]
     pub id: TileId,
     pub center: DVec3,
     pub radius: f64,

@@ -16,6 +16,26 @@ pub struct Weather {
     pub alto: f32,
     /// aerosol haze, as a multiple of a clear day's
     pub haze: f32,
+    /// rain falling where the aircraft is, 0..1 (wets the windows, rain.rs;
+    /// falling streaks, precip.wgsl): from the rain deck (`deck_rain`) and the
+    /// storm cells (storm.rs `local`), only ever under or in their cloud
+    pub rain: f32,
+    /// rain set by hand (`--rain`, the slider): it brings a rain deck
+    /// (nimbostratus) that heavy over the area around the aircraft
+    pub rain_set: Option<f32>,
+    /// the rain deck now, 0..1 (eases towards `rain_set`; 0 = none)
+    pub deck: f32,
+    /// centre of the rain deck's area, cloud space (km on the sphere, drifting
+    /// with the wind like the storm cells), and the ground height it sits over (m)
+    pub deck_at: Option<DVec3>,
+    pub deck_ground: Option<f64>,
+    /// where to put the rain area's centre next time (`--rain-at KM,BEARING`)
+    pub deck_place: Option<(f64, f64)>,
+    deck_prev: Option<f32>,
+    /// how far the rain deck's area has grown in, 0..1: it shrinks away (the
+    /// sky clearing in from the horizon) when the rain is turned off, rather
+    /// than lingering as a full overcast while its rain dwindles
+    pub deck_fade: f32,
     /// wind 10 m above the ground, m/s, and the compass direction it blows from
     pub wind: f64,
     pub wind_from: f64,
@@ -35,6 +55,18 @@ pub struct Weather {
     pub thermal_off: DVec3,
     /// the storm cells handed to the shaders last frame (see `storm_cells`)
     pub cells: Vec<[[f32; 4]; 2]>,
+    /// storm cells placed by hand (`--storm-at`), in cloud space; always handed on first
+    pub placed: Vec<[[f32; 4]; 2]>,
+    /// storm cells where the weather radar sees them (live weather, see
+    /// livewx.rs and radar.rs), fading in and out as the radar updates
+    pub live_cells: Vec<LiveCell>,
+    /// where some radar sees (made-up storm cells give way to the real ones there)
+    pub radar_cover: Option<crate::radar::Cover>,
+    /// live weather: where the rain deck should stand (cloud space, km), over
+    /// the real rain; None = round the aircraft
+    pub deck_goal: Option<DVec3>,
+    /// how quickly the rain deck follows the Rain slider (time constant, s)
+    pub deck_tau: f64,
     /// real weather (see livewx.rs) sets the sliders: where its report came
     /// from ("EBBR", "Open-Meteo") and the report itself
     pub live: bool,
@@ -42,9 +74,74 @@ pub struct Weather {
     pub live_raw: String,
     /// the clock follows the real time and date (see `real_clock`)
     pub real_time: bool,
+    /// live weather reports showers but no thunder (SH without TS, no CB):
+    /// its convective cells are showers (with `live`)
+    pub showers_only: bool,
     /// sea-level pressure (hPa): the QNH an altimeter is set to (standard
     /// unless the real weather says otherwise)
     pub qnh: f64,
+}
+
+/// What kind of convective cell: a shower (towering cumulus or a small
+/// cumulonimbus, no anvil, tops 4-7 km, a narrow light-to-moderate rain
+/// shaft, no lightning), an ordinary thunderstorm (anvil, occasional
+/// lightning) or a severe one (big, heavy rain, frequent lightning), or a
+/// supercell (an isolated giant with a rotating updraft, a 100 km anvil, hail
+/// and near-continuous lightning). The shaders know only a cell's radius,
+/// maturity and top height; a shower is a small young cell whose tower stops
+/// below the height where lightning starts (`LIGHTNING_TOP`, storm.rs); a
+/// supercell's maturity runs on past 1 (2 = a full one, `supercell`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CellKind {
+    Shower,
+    Thunder,
+    Severe,
+    Supercell,
+}
+
+impl CellKind {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "shower" | "showers" | "sh" | "cu" | "tcu" => Some(Self::Shower),
+            "thunder" | "ts" | "ordinary" | "storm" => Some(Self::Thunder),
+            "severe" | "cb" => Some(Self::Severe),
+            "supercell" | "super" | "sc" => Some(Self::Supercell),
+            _ => None,
+        }
+    }
+}
+
+/// How much of a supercell a cell is, 0..1 (its maturity past 1; common.wgsl
+/// `storm_super`).
+pub fn supercell(c: &[[f32; 4]; 2]) -> f64 {
+    (c[1][0] as f64 - 1.0).clamp(0.0, 1.0)
+}
+/// A supercell: its anvil height (m above sea level) and how far its
+/// overshooting top climbs above that (m). (The storm ceiling takes it in.)
+pub const SUPER_TOP: f32 = STORM_TOP + 300.0;
+pub const SUPER_OVERSHOOT: f32 = 2300.0;
+const _: () = assert!(SUPER_TOP + SUPER_OVERSHOOT <= STORM_TOP + 700.0 + STORM_OVERSHOOT + 300.0);
+/// A supercell's tower radius, km.
+pub const SUPER_R: f64 = 9.0;
+/// The cell for the shaders, centre `cen` (cloud space km), radius `rad` km,
+/// `on` 0..1 how far it has grown in (to 0.5 an ordinary storm growing, then a
+/// supercell).
+fn super_cell(cen: DVec3, rad: f64, on: f64, seed: f32) -> [[f32; 4]; 2] {
+    let s = smoothstep(0.5, 1.0, on) as f32;
+    let age = (2.0 * on).min(1.0) + s as f64;
+    [[cen.x as f32, cen.y as f32, cen.z as f32, rad as f32], [age as f32, STORM_TOP + (SUPER_TOP - STORM_TOP) * s, STORM_OVERSHOOT * 0.6 + (SUPER_OVERSHOOT - STORM_OVERSHOOT * 0.6) * s, seed]]
+}
+
+/// How high a cell grows, as a share of base..anvil (common.wgsl `storm_top`).
+pub fn storm_top_share(age: f64) -> f64 {
+    0.3 + 0.7 * smoothstep(0.0, 0.55, age)
+}
+
+/// A shower cell's "anvil" height (the shaders' sp.y) for its tower to top out
+/// at `top` m (above sea level) at maturity `age`, over a cloud base `base`.
+fn shower_anvil(base: f64, top: f64, age: f64) -> f32 {
+    let top = top.max(base + 2200.0);
+    (base + (top - base) / storm_top_share(age)) as f32
 }
 
 /// What the air around the aircraft is doing beyond the mean wind.
@@ -58,11 +155,41 @@ pub struct Air {
     pub len_h: f64,
     /// steady vertical motion of the air (thermals, storm drafts), m/s, + up
     pub draft: f64,
+    /// a storm's outflow along the ground (the gust front), planet frame m/s
+    pub gust: DVec3,
 }
+
+/// A storm cell from the weather radar, easing towards what the latest
+/// radar picture says (so nothing pops as it updates).
+#[derive(Clone, Debug)]
+pub struct LiveCell {
+    /// centre now and where the radar puts it (cloud space, km on the sphere)
+    pub at: DVec3,
+    pub goal: DVec3,
+    /// tower radius (km) and maturity 0..1, now and wanted
+    pub rad: f64,
+    pub rad_goal: f64,
+    pub age: f64,
+    pub age_goal: f64,
+    /// how far it has grown in, 0..1, and whether it is growing (or dying away)
+    pub on: f64,
+    pub alive: bool,
+    /// turret layout seed and anvil height
+    pub seed: f32,
+    pub top: f32,
+    /// a squall line: its length (km, across the wind), now and wanted; 0 = a lone cell
+    pub len: f64,
+    pub len_goal: f64,
+}
+
+/// Live storm cells grow in or die away over about this long (time constant, s).
+const LIVE_FADE: f64 = 35.0;
+/// ...and glide to their new place and size over this (s).
+const LIVE_GLIDE: f64 = 50.0;
 
 impl Default for Air {
     fn default() -> Self {
-        Self { sigma_w: 0.0, sigma_h: 0.0, len_w: 300.0, len_h: 300.0, draft: 0.0 }
+        Self { sigma_w: 0.0, sigma_h: 0.0, len_w: 300.0, len_h: 300.0, draft: 0.0, gust: DVec3::ZERO }
     }
 }
 
@@ -75,14 +202,36 @@ const PRESETS: &[(&str, f32, f32, f32, f32, f32, f32, f64, f64)] = &[
     ("Windy", 0.55, 1200.0, 4000.0, 0.1, 0.35, 1.5, 14.0, 0.7),
     ("Storms", 0.6, 1300.0, 5000.0, 0.85, 0.5, 1.4, 9.0, 0.5),
 ];
-/// Where storm towers flatten into anvils (tropopause), metres.
-pub const STORM_TOP: f32 = 11000.0;
+/// Where storm towers flatten into anvils (tropopause), metres; each cell's
+/// anvil sits a little above or below it.
+pub const STORM_TOP: f32 = 11500.0;
+/// Most a mature storm's core overshoots its anvil, metres (clouds.wgsl keeps the
+/// ceiling above anvil + overshoot, so nothing is sliced off flat).
+pub const STORM_OVERSHOOT: f32 = 1800.0;
 /// Most storm cells handed to the shaders at once (nearest first).
 pub const MAX_STORMS: usize = 16;
+/// The rain deck's area: radius (km, its lobed edge wanders by ~15 km either
+/// way) and how soft its edge is (km). Must match common.wgsl `nimbo_area`.
+pub const DECK_R: f64 = 45.0;
+const DECK_EDGE: f64 = 10.0;
+/// How far inside its centre the rain deck's edge goes when it has shrunk
+/// away (km): past the wobble and the soft edge, so nothing is left.
+const DECK_GONE: f64 = 26.0;
+/// How far below its mean base the rain deck's ragged scud hangs, m.
+pub const DECK_RAG: f32 = 320.0;
 /// Spacing of candidate storm sites, km.
 const STORM_GRID: f64 = 40.0;
+/// Spacing of candidate squall-line sites, km (on stormy days one now and then
+/// stands in for the scattered cells around it).
+const SQUALL_GRID: f64 = 400.0;
+/// A squall line's tower radius (km): its depth across is about 3x this.
+pub const SQUALL_R: f64 = 6.5;
+/// Share of candidate storm sites that hold a supercell on the stormiest days,
+/// and how far round one no other cell stands, km.
+const SUPER_P: f64 = 0.006;
+const SUPER_CLEAR: f64 = 50.0;
 /// Storm cells are found out to this distance from the camera, km.
-const STORM_RANGE: f64 = 190.0;
+const STORM_RANGE: f64 = 260.0;
 
 fn shash(x: u32) -> u32 {
     let h = x.wrapping_mul(747796405).wrapping_add(2891336453);
@@ -114,6 +263,14 @@ fn smoothstep(a: f64, b: f64, x: f64) -> f64 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
+/// A squall line for the shaders: like a storm cell (centre in cloud space km,
+/// tower radius km; maturity, anvil height m, overshoot m), with its length in
+/// km as the whole part of the 8th value (the seed its fraction).
+fn squall_cell(cen: DVec3, rad: f64, len_km: f64, age: f64, top: f32, seed: f64) -> [[f32; 4]; 2] {
+    let over = STORM_OVERSHOOT * 0.8 * smoothstep(0.6, 0.95, age) as f32;
+    let len = len_km.round().max(1.0);
+    [[cen.x as f32, cen.y as f32, cen.z as f32, rad as f32], [age as f32, top, over, (len + seed.clamp(0.0, 0.999)) as f32]]
+}
 /// The cube face (0..6) whose direction dominates `q`, with its normal and in-plane axes.
 fn cube_face(q: DVec3) -> (u32, DVec3, DVec3, DVec3) {
     let a = q.abs();
@@ -126,16 +283,352 @@ fn cube_face(q: DVec3) -> (u32, DVec3, DVec3, DVec3) {
     }
 }
 
+/// Candidate sites on a jittered `grid` (km) on each face of a cube projected
+/// onto the planet, within `range` km of `q` (cloud space): f(centre,
+/// distance, hash). They stay put, and each belongs to exactly one face.
+fn sites(q: DVec3, grid: f64, range: f64, mut f: impl FnMut(DVec3, f64, u32)) {
+    let reach = (range / grid).ceil() as i32 + 1;
+    for face in 0..6u32 {
+        let n = [DVec3::X, -DVec3::X, DVec3::Y, -DVec3::Y, DVec3::Z, -DVec3::Z][face as usize];
+        if q.normalize().dot(n) < 0.45 {
+            continue;
+        }
+        let (_, _, u, v) = cube_face(n);
+        let g = DVec2::new(q.dot(u), q.dot(v)) * (6371.0 / q.dot(n)) / grid;
+        // (A coarser grid gets its own hashes.)
+        let salt = if grid == STORM_GRID { 0 } else { (grid as u32).wrapping_mul(2654435761) };
+        for j in -reach..=reach {
+            for i in -reach..=reach {
+                let (cx, cy) = (g.x.floor() as i32 + i, g.y.floor() as i32 + j);
+                let h0 = shash((cx as u32).wrapping_mul(73856093) ^ (cy as u32).wrapping_mul(19349663) ^ face.wrapping_mul(83492791) ^ salt);
+                let h1 = shash(h0);
+                let jit = DVec2::new(unit(h1), unit(h1 >> 16));
+                let cg = (DVec2::new(cx as f64, cy as f64) + 0.2 + 0.6 * jit) * grid;
+                let cen = (n * 6371.0 + u * cg.x + v * cg.y).normalize() * 6371.0;
+                if cube_face(cen).0 != face {
+                    continue;
+                }
+                let dist = cen.distance(q);
+                if dist <= range {
+                    f(cen, dist, h0);
+                }
+            }
+        }
+    }
+}
+
 impl Weather {
     pub fn new(clouds: f32) -> Self {
         // A light west-south-westerly, as the smoke always drifted before there was a slider for it.
-        Self { clouds, cloud_base: 1500.0, cloud_depth: 4500.0, storms: 0.2, alto: 0.25, haze: 1.0, wind: 4.0, wind_from: 248.0, gusts: 0.15, time_rate: 1.0, moon_age: 11.5, cloud_off: DVec3::ZERO, open: false, sun: 0.5, thermal_off: DVec3::ZERO, cells: Vec::new(), live: false, live_station: String::new(), live_raw: String::new(), real_time: false, qnh: 1013.25 }
+        Self { clouds, cloud_base: 1500.0, cloud_depth: 4500.0, storms: 0.2, alto: 0.25, haze: 1.0, rain: 0.0, rain_set: None, deck: 0.0, deck_at: None, deck_ground: None, deck_place: None, deck_prev: None, deck_fade: 0.0, wind: 4.0, wind_from: 248.0, gusts: 0.15, time_rate: 1.0, moon_age: 11.5, cloud_off: DVec3::ZERO, open: false, sun: 0.5, thermal_off: DVec3::ZERO, cells: Vec::new(), placed: Vec::new(), live_cells: Vec::new(), radar_cover: None, deck_goal: None, deck_tau: 6.0, live: false, live_station: String::new(), live_raw: String::new(), real_time: false, showers_only: false, qnh: 1013.25 }
+    }
+
+    /// The rain deck's mean base and top, metres above sea level: the heavier
+    /// the rain, the lower and thicker (darker) the deck.
+    pub fn deck_layer(&self) -> Option<(f32, f32)> {
+        if self.deck <= 0.0 || self.deck_at.is_none() {
+            return None;
+        }
+        let r = self.deck;
+        let base = self.deck_ground.unwrap_or(0.0) as f32 + 1100.0 + (450.0 - 1100.0) * r;
+        Some((base, base + 1800.0 + 1600.0 * r))
+    }
+
+    /// The cloud layer the shaders draw, metres: base (the lowest any cloud
+    /// reaches) and thickness, taking in the rain deck.
+    pub fn base(&self) -> f32 {
+        match self.deck_layer() {
+            Some((b, _)) => self.cloud_base.min(b - DECK_RAG),
+            None => self.cloud_base,
+        }
+    }
+    pub fn depth(&self) -> f32 {
+        let top = self.cloud_base + self.cloud_depth;
+        match self.deck_layer() {
+            Some((_, t)) => top.max(t + 100.0) - self.base(),
+            None => top - self.base(),
+        }
+    }
+
+    /// The rain deck's tangent axes at its centre (Globals.nimbo).
+    fn deck_axes(c: DVec3) -> (DVec3, DVec3) {
+        let cn = c.normalize();
+        let a = if cn.z.abs() > 0.9 { DVec3::X } else { DVec3::Z };
+        let ax = cn.cross(a).normalize();
+        (ax, cn.cross(ax))
+    }
+
+    /// How far into the rain deck's area a point (planet frame) is, 0..1: a
+    /// lobed patch some 90 km across, soft at the edge. Must match common.wgsl
+    /// `nimbo_area`.
+    pub fn deck_area(&self, pos: DVec3) -> f64 {
+        let Some(c) = self.deck_at else { return 0.0 };
+        if self.deck <= 0.0 {
+            return 0.0;
+        }
+        let d = pos.normalize() * 6371.0 + self.cloud_off / 1000.0 - c;
+        let (ax, ay) = Self::deck_axes(c);
+        let (x, y) = (d.dot(ax), d.dot(ay));
+        let wob = 9.0 * (0.083 * x + 1.7 * (0.051 * y).sin()).sin() + 6.0 * (0.13 * y + 0.9 + 0.8 * (0.07 * x).sin()).sin();
+        let r = self.deck_radius();
+        smoothstep(r, r - DECK_EDGE, x.hypot(y) + wob)
+    }
+
+    /// The rain deck's area radius now (km): full size once grown in,
+    /// shrinking to nothing as it fades out (`deck_fade`).
+    pub fn deck_radius(&self) -> f64 {
+        -DECK_GONE + (DECK_R + DECK_GONE) * self.deck_fade as f64
+    }
+
+    /// Rain from the deck at a point, 0..1: under it and in it (thinning out
+    /// higher up, where it is snow and ice), none above its top or outside it.
+    pub fn deck_rain(&self, pos: DVec3) -> f64 {
+        let Some((base, top)) = self.deck_layer() else { return 0.0 };
+        let a = self.deck_area(pos);
+        if a <= 0.0 {
+            return 0.0;
+        }
+        let (base, top) = (base as f64, top as f64);
+        let d = top - base;
+        let alt = pos.length() - geo::R;
+        let v = (1.0 - 0.5 * smoothstep(base, top, alt)) * (1.0 - smoothstep(top - 0.25 * d, top - 0.12 * d, alt));
+        self.deck as f64 * smoothstep(0.3, 0.8, a) * v
+    }
+
+    /// How deep in the rain deck's gloom a point is, 0..1 (the ground and
+    /// air under it get only the dull light that diffuses through). Must match
+    /// common.wgsl `nimbo_shade`.
+    pub fn deck_shade(&self, pos: DVec3) -> f64 {
+        let Some((base, top)) = self.deck_layer() else { return 0.0 };
+        let alt = pos.length() - geo::R;
+        let (base, top) = (base as f64, top as f64);
+        (0.6 + 0.4 * self.deck as f64) * self.deck_area(pos) * (1.0 - smoothstep(base, top - 0.15 * (top - base), alt))
+    }
+
+    /// Rain at a point from any cloud above it: the deck or a storm cell.
+    pub fn rain_at(&self, pos: DVec3, agl: f64, t: f64) -> f64 {
+        self.deck_rain(pos).max(crate::storm::local(self, pos, agl, t).rain).min(1.0)
+    }
+
+    /// The rain deck follows the slider (over a few seconds); its area is
+    /// centred on `pos` (planet frame) when it first comes, or when the
+    /// slider is moved outside it. `ground` = the terrain height under the
+    /// aircraft, when known (the deck's base is set above it).
+    pub fn step_deck(&mut self, dt: f64, pos: DVec3, ground: Option<f64>) {
+        let mut target = self.rain_set.unwrap_or(0.0);
+        // The deck grows in and shrinks away over this long (s), linearly so
+        // it is surely gone in the end.
+        let fade_time = 2.5 * self.deck_tau;
+        // Live weather puts the deck over the real rain: a small shift glides
+        // it there, a big one fades it out and back in at the new place.
+        if let (Some(g), Some(at)) = (self.deck_goal, self.deck_at) {
+            if g.distance(at) > 35.0 {
+                target = 0.0;
+            } else {
+                self.deck_at = Some(at + (g - at) * (dt / LIVE_GLIDE).min(1.0));
+            }
+        }
+        if let Some(g) = ground {
+            self.deck_ground = Some(match self.deck_ground {
+                Some(o) => o + (g - o) * (dt / 90.0).min(1.0),
+                None => g,
+            });
+        }
+        let moved = self.deck_prev != self.rain_set;
+        self.deck_prev = self.rain_set;
+        if target > 0.0 && (self.deck_at.is_none() || (moved && self.deck_goal.is_none() && self.deck_area(pos) < 0.5)) {
+            if let Some(g) = self.deck_goal {
+                self.deck_at = Some(g);
+                // (at once only on a fresh start; otherwise it closes in)
+                if self.deck <= 0.0 && dt <= 0.0 {
+                    (self.deck, self.deck_fade) = (target, 1.0);
+                }
+                self.deck += (target - self.deck) * (dt / self.deck_tau).min(1.0) as f32;
+                self.deck_fade = (self.deck_fade + (dt / fade_time) as f32).min(1.0);
+                return;
+            }
+            let p = match self.deck_place.take() {
+                Some((km, bearing)) => {
+                    let (e, n, up) = geo::enu(pos);
+                    let b = bearing.to_radians();
+                    let a = km / 6371.0;
+                    up * a.cos() + (e * b.sin() + n * b.cos()) * a.sin()
+                }
+                None => pos.normalize(),
+            };
+            self.deck_at = Some(p * 6371.0 + self.cloud_off / 1000.0);
+            if self.deck <= 0.0 {
+                self.deck = target;
+            }
+            // (all there at once on a fresh start; otherwise it closes in)
+            if dt <= 0.0 {
+                self.deck_fade = 1.0;
+            }
+        }
+        if self.deck_at.is_none() {
+            return;
+        }
+        if target > 0.0 {
+            // A heavier or lighter rain: the deck eases to it, growing in if new.
+            self.deck += (target - self.deck) * (dt / self.deck_tau).min(1.0) as f32;
+            self.deck_fade = (self.deck_fade + (dt / fade_time) as f32).min(1.0);
+        } else {
+            // Turned off: the deck keeps its look and shrinks away (the rain
+            // stops as its edge goes by), then it is gone.
+            self.deck_fade -= (dt / fade_time) as f32;
+            if self.deck_fade <= 0.0 {
+                (self.deck, self.deck_at, self.deck_fade) = (0.0, None, 0.0);
+            }
+        }
+    }
+
+    /// The aircraft was put down somewhere new: a rain deck set by hand
+    /// moves there if it was left behind (and learns the new ground height).
+    pub fn deck_moved(&mut self, pos: DVec3) {
+        if self.deck_at.is_some() && self.deck_area(pos) < 0.5 {
+            (self.deck_at, self.deck_ground) = (None, None);
+        }
+    }
+
+    /// The rain deck for the shaders (Globals.nimbo): centre (cloud space, km)
+    /// + amount (0 = none); east-ish axis + mean base (m); north-ish axis +
+    /// top (m); how dark it is under it, how far below the ordinary cloud's base
+    /// the layer now starts (m), how far its scud hangs (m), area radius (km).
+    pub fn deck_globals(&self) -> [[f32; 4]; 4] {
+        let (Some(c), Some((base, top))) = (self.deck_at, self.deck_layer()) else { return [[0.0; 4]; 4] };
+        let (ax, ay) = Self::deck_axes(c);
+        let v = |v: DVec3, w: f32| [v.x as f32, v.y as f32, v.z as f32, w];
+        [v(c, self.deck), v(ax, base), v(ay, top), [0.6 + 0.4 * self.deck, (self.cloud_base - self.base()).max(0.0), DECK_RAG, self.deck_radius() as f32]]
     }
 
     /// Top of the cloud layer including any storm towers, metres.
     pub fn cloud_ceiling(&self) -> f32 {
-        let top = self.cloud_base + self.cloud_depth;
-        if self.storms > 0.0 { top.max(STORM_TOP).max(top + 1500.0) } else { top }
+        let top = self.base() + self.depth();
+        if self.storms > 0.0 || !self.placed.is_empty() || !self.live_cells.is_empty() { top.max(STORM_TOP + 700.0 + STORM_OVERSHOOT + 300.0).max(top + 1500.0) } else { top }
+    }
+
+    /// The weather radar's latest storm cells: (centre in cloud space km,
+    /// tower radius km, maturity 0..1). Each is matched to a cell already
+    /// standing near there, which glides to it; cells no longer seen die away
+    /// and new ones grow in. `jump`: a fresh start, show them as they are.
+    /// A squall line comes as one cell with its length (km, the 4th value; 0 =
+    /// a lone cell); lines only match lines.
+    pub fn set_live_cells(&mut self, cells: &[(DVec3, f64, f64, f64)], jump: bool) {
+        if jump {
+            self.live_cells.clear();
+        }
+        let mut used = vec![false; self.live_cells.len()];
+        // Biggest first, so a big cell keeps its old self rather than a small neighbour taking it.
+        let mut order: Vec<usize> = (0..cells.len()).collect();
+        order.sort_by(|&a, &b| cells[b].1.total_cmp(&cells[a].1));
+        let mut fresh = Vec::new();
+        for &k in &order {
+            let (p, rad, age, len) = cells[k];
+            let near = self
+                .live_cells
+                .iter()
+                .enumerate()
+                .filter(|(i, c)| !used[*i] && c.alive && (c.len_goal > 0.0) == (len > 0.0))
+                .map(|(i, c)| (i, c.goal.distance(p)))
+                .filter(|&(i, d)| d < (1.3 * (rad + self.live_cells[i].rad_goal) + 0.3 * len).max(10.0))
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            match near {
+                Some((i, _)) => {
+                    used[i] = true;
+                    let c = &mut self.live_cells[i];
+                    (c.goal, c.rad_goal, c.age_goal, c.len_goal) = (p, rad, age, len);
+                }
+                None => {
+                    let h = shash((p.x * 37.0) as i32 as u32 ^ ((p.y * 41.0) as i32 as u32).wrapping_mul(19349663) ^ ((p.z * 43.0) as i32 as u32).wrapping_mul(83492791));
+                    let on = if jump { 1.0 } else { 0.0 };
+                    fresh.push(LiveCell { at: p, goal: p, rad, rad_goal: rad, age, age_goal: age, on, alive: true, seed: unit(h) as f32 * 0.999, top: STORM_TOP + 700.0 * (unit(h >> 16) as f32 * 2.0 - 1.0), len, len_goal: len });
+                }
+            }
+        }
+        for (c, u) in self.live_cells.iter_mut().zip(used) {
+            c.alive &= u;
+        }
+        self.live_cells.extend(fresh);
+    }
+
+    /// Let the radar's cells grow, die away and glide (dt s; 0 = at once).
+    pub fn step_live(&mut self, dt: f64) {
+        let (kf, kg) = if dt <= 0.0 { (1.0, 1.0) } else { (1.0 - (-dt / LIVE_FADE).exp(), 1.0 - (-dt / LIVE_GLIDE).exp()) };
+        for c in &mut self.live_cells {
+            let to = if c.alive { 1.0 } else { 0.0 };
+            // (a smooth start and a clean end: never quite reaching 0 otherwise)
+            c.on = (c.on + (to - c.on) * kf + (to * 2.0 - 1.0) * 0.002 * dt.max(0.0)).clamp(0.0, 1.0);
+            c.at += (c.goal - c.at) * kg;
+            c.rad += (c.rad_goal - c.rad) * kg;
+            c.age += (c.age_goal - c.age) * kg;
+            c.len += (c.len_goal - c.len) * kg;
+        }
+        self.live_cells.retain(|c| c.alive || c.on > 0.0);
+    }
+
+    /// Put a convective cell `dist_km` from `pos` (planet frame) towards
+    /// compass `bearing` (degrees), its tower `rad_km` in radius (8 = a giant
+    /// supercell). None = a mature cumulonimbus as big as asked; a shower is a
+    /// young tower topping out around 6 km. It drifts with the cloud field from
+    /// there on. For testing: `--storm-at KM,BEARING[,R[,KIND]]`.
+    pub fn place_storm(&mut self, pos: DVec3, dist_km: f64, bearing: f64, rad_km: f64, kind: Option<CellKind>) {
+        let (e, n, up) = geo::enu(pos);
+        let b = bearing.to_radians();
+        let dir = e * b.sin() + n * b.cos();
+        let a = dist_km / 6371.0;
+        let p = up * a.cos() + dir * a.sin();
+        let cen = (p * 6371.0 + self.cloud_off / 1000.0).normalize() * 6371.0;
+        let size = smoothstep(2.0, 7.0, rad_km);
+        // Each placed storm gets its own seed (turret layout), so a line of them is not
+        // one cloud repeated.
+        let seed = (0.37 + dist_km * 0.1373 + bearing * 0.0619 + rad_km * 0.271).fract() as f32;
+        if kind == Some(CellKind::Supercell) {
+            self.placed.push(super_cell(cen, rad_km, 1.0, seed));
+            return;
+        }
+        let (age, top, over) = match kind {
+            Some(CellKind::Shower) => (0.3, shower_anvil(self.base() as f64, 6000.0, 0.3), 0.0),
+            Some(CellKind::Thunder) => (0.75, STORM_TOP, 0.4 * STORM_OVERSHOOT * size as f32),
+            _ => (1.0, STORM_TOP + 500.0, 600.0 + (STORM_OVERSHOOT - 600.0) * size as f32),
+        };
+        self.placed.push([[cen.x as f32, cen.y as f32, cen.z as f32, rad_km as f32], [age, top, over, seed]]);
+    }
+
+    /// Put a squall line's leading edge `dist_km` from `pos` towards compass `bearing`: a
+    /// row of merged mature cumulonimbus `len_km` long lying across the wind,
+    /// with a shared anvil streaming ahead, a shelf cloud along its leading
+    /// edge, heavy rain right behind that and lighter rain trailing behind
+    /// (common.wgsl storm_sd, storm.rs). It drifts with the cloud field. For
+    /// testing: `--squall-at KM,BEARING[,LENGTH_KM]`.
+    pub fn place_squall(&mut self, pos: DVec3, dist_km: f64, bearing: f64, len_km: f64) {
+        let (e, n, up) = geo::enu(pos);
+        let b = bearing.to_radians();
+        let dir = e * b.sin() + n * b.cos();
+        // (`dist_km` is to its leading edge, the gust front under the shelf cloud.)
+        let a = (dist_km + crate::storm::SHELF_F * SQUALL_R) / 6371.0;
+        let p = up * a.cos() + dir * a.sin();
+        let cen = (p * 6371.0 + self.cloud_off / 1000.0).normalize() * 6371.0;
+        let seed = (0.37 + dist_km * 0.1373 + bearing * 0.0619 + len_km * 0.271).fract() * 0.999;
+        self.placed.push(squall_cell(cen, SQUALL_R, len_km, 1.0, STORM_TOP + 300.0, seed));
+    }
+
+    /// Set a named preset (case-insensitive, e.g. "storms"); false if there is none.
+    pub fn preset(&mut self, name: &str) -> bool {
+        let Some(&(_, c, b, d, s, a, h, w, g)) = PRESETS.iter().find(|p| p.0.eq_ignore_ascii_case(name) || p.0.to_lowercase().trim_end_matches('s') == name.to_lowercase().trim_end_matches('s')) else { return false };
+        (self.clouds, self.cloud_base, self.cloud_depth, self.storms, self.alto, self.haze, self.wind, self.gusts) = (c, b, d, s, a, h, w, g);
+        true
+    }
+
+    /// Thunderstorms all round `pos` (`--weather storm`): the Storms preset, a
+    /// big mature cell a few km ahead along `heading` with its rain shaft across
+    /// the way, and more around it.
+    pub fn storm_field(&mut self, pos: DVec3, heading: f64) {
+        self.preset("Storms");
+        self.place_storm(pos, 8.0, heading, 6.5, None);
+        self.place_storm(pos, 24.0, heading + 55.0, 5.0, None);
+        self.place_storm(pos, 30.0, heading - 45.0, 8.0, None);
+        self.place_storm(pos, 42.0, heading + 150.0, 4.5, None);
+        self.place_storm(pos, 55.0, heading - 120.0, 6.0, None);
     }
 
     /// Storm cells (cumulonimbus) near the camera, nearest first, two vec4s each for
@@ -146,54 +639,133 @@ impl Weather {
     /// age, and a coarse noise makes them cluster.
     pub fn storm_cells(&self, cam: DVec3) -> Vec<[[f32; 4]; 2]> {
         let mut out: Vec<(f64, [[f32; 4]; 2])> = Vec::new();
-        let prob_amount = self.storms as f64 * 0.5 * smoothstep(0.12, 0.45, self.clouds as f64);
-        if prob_amount <= 0.0 {
-            return Vec::new();
-        }
         let q = cam.normalize() * 6371.0 + self.cloud_off / 1000.0;
-        let reach = (STORM_RANGE / STORM_GRID).ceil() as i32 + 1;
-        for face in 0..6u32 {
-            let n = [DVec3::X, -DVec3::X, DVec3::Y, -DVec3::Y, DVec3::Z, -DVec3::Z][face as usize];
-            if q.normalize().dot(n) < 0.45 {
+        // The weather radar's cells, where it sees them.
+        for c in &self.live_cells {
+            let dist = c.at.distance(q);
+            if c.on <= 0.0 || dist > STORM_RANGE {
                 continue;
             }
-            let (_, _, u, v) = cube_face(n);
-            let g = DVec2::new(q.dot(u), q.dot(v)) * (6371.0 / q.dot(n)) / STORM_GRID;
-            for j in -reach..=reach {
-                for i in -reach..=reach {
-                    let (cx, cy) = (g.x.floor() as i32 + i, g.y.floor() as i32 + j);
-                    let h0 = shash((cx as u32).wrapping_mul(73856093) ^ (cy as u32).wrapping_mul(19349663) ^ face.wrapping_mul(83492791));
-                    let (h1, h2) = (shash(h0), shash(shash(h0)));
-                    let jit = DVec2::new(unit(h1), unit(h1 >> 16));
-                    let cg = (DVec2::new(cx as f64, cy as f64) + 0.2 + 0.6 * jit) * STORM_GRID;
-                    let cen = (n * 6371.0 + u * cg.x + v * cg.y).normalize() * 6371.0;
-                    // Each site belongs to exactly one face: no gaps or doubles at the seams.
-                    if cube_face(cen).0 != face {
-                        continue;
-                    }
-                    let dist = cen.distance(q);
-                    if dist > STORM_RANGE {
-                        continue;
-                    }
-                    let region = value_noise(cen / 320.0 + DVec3::new(0.41, 0.07, 0.66));
-                    let prob = prob_amount * smoothstep(0.2, 0.6, region + self.storms as f64 * 0.25);
-                    // Fades in rather than pops as the slider or the region changes.
-                    let r0 = unit(h0);
-                    let on = smoothstep(r0 - 0.04, r0 + 0.04, prob);
-                    if on <= 0.0 {
-                        continue;
-                    }
-                    // A cell fading out shrinks into a smaller, younger (lower) tower.
-                    let rad = (2.2 + 3.0 * unit(h2)) * (0.6 + 0.4 * on);
-                    // Stormier days have more mature cells (with anvils).
-                    let u = unit(h2 >> 16);
-                    let age = (u + (1.0 - (1.0 - u) * (1.0 - u) - u) * self.storms as f64) * on;
-                    out.push((dist, [[cen.x as f32, cen.y as f32, cen.z as f32, rad as f32], [age as f32, 0.0, 0.0, 0.0]]));
-                }
+            let rad = c.rad * (0.6 + 0.4 * c.on);
+            let age = c.age * c.on;
+            if c.len > 0.0 {
+                out.push(((dist - 0.5 * c.len).max(0.0), squall_cell(c.at, rad, c.len * (0.6 + 0.4 * c.on), age.max(0.9 * c.on), c.top, c.seed as f64)));
+                continue;
             }
+            // An isolated, very intense, large echo: a supercell (radar.rs).
+            if c.age > 1.0 {
+                out.push((dist, super_cell(c.at, rad, 0.5 * age, c.seed)));
+                continue;
+            }
+            // Weak echoes are showers; where the report has showers but no
+            // thunder, all but the strongest (~47 dBZ and up) are.
+            let shower = c.age < 0.4 || (self.live && self.showers_only && c.age < 0.8);
+            let (age, top) = if shower { let a = age.min(0.35); (a, shower_anvil(self.base() as f64, 4500.0 + 2500.0 * c.seed as f64, a)) } else { (age, c.top) };
+            let over = STORM_OVERSHOOT * (0.25 + 0.75 * smoothstep(2.5, 8.0, rad) as f32) * smoothstep(0.6, 0.95, age) as f32;
+            out.push((dist, [[c.at.x as f32, c.at.y as f32, c.at.z as f32, rad as f32], [age as f32, top, over, c.seed]]));
         }
+        // (Showers are many and small: a low setting still has a fair few.)
+        let st = self.storms as f64;
+        let prob_amount = (0.15 + 0.35 * st) * (st * 8.0).min(1.0) * smoothstep(0.12, 0.45, self.clouds as f64);
+        // Share of cells that are showers: nearly all on a showery day, a few
+        // on a stormy one (and all where live weather says no thunder).
+        let p_shower = if self.live && self.showers_only { 1.0 } else { (0.95 - 0.85 * st * st.sqrt()).clamp(0.1, 0.95) };
+        if prob_amount <= 0.0 {
+            out.sort_by(|a, b| a.0.total_cmp(&b.0));
+            return self.placed.iter().copied().chain(out.into_iter().map(|c| c.1)).take(MAX_STORMS).collect();
+        }
+        // Where a weather radar sees, its cells stand instead of made-up ones
+        // (fading across the edge of its coverage as the cloud drifts).
+        let seen_at = |cen: DVec3| {
+            self.radar_cover.as_ref().map_or(0.0, |cv| {
+                let (la, lo, _) = geo::pos_to_lla(cen - self.cloud_off / 1000.0);
+                cv.at(la.to_degrees(), lo.to_degrees())
+            })
+        };
+        // Squall lines: on stormy days, now and then a line of storms 60-150 km
+        // long instead of the scattered cells round it (centre, half-length km).
+        let mut lines: Vec<(DVec3, f64)> = Vec::new();
+        let p_line = 0.4 * smoothstep(0.55, 0.95, st) * smoothstep(0.3, 0.5, self.clouds as f64) * if self.live && self.showers_only { 0.0 } else { 1.0 };
+        if p_line > 0.0 {
+            sites(q, SQUALL_GRID, STORM_RANGE + 75.0, |cen, dist, h0| {
+                let on = smoothstep(unit(h0) - 0.04, unit(h0) + 0.04, p_line) * (1.0 - seen_at(cen));
+                if on <= 0.0 {
+                    return;
+                }
+                let h1 = shash(h0 ^ 0x27d4eb2d);
+                let len = (60.0 + 90.0 * unit(h1)) * (0.6 + 0.4 * on);
+                let rad = (SQUALL_R - 1.0 + 2.0 * unit(h1 >> 16)) * (0.6 + 0.4 * on);
+                let h2 = shash(h1);
+                let top = STORM_TOP + 700.0 * (unit(h2) as f32 * 2.0 - 1.0);
+                lines.push((cen, 0.5 * len));
+                out.push(((dist - 0.5 * len).max(0.0), squall_cell(cen, rad, len, on, top, unit(h2 >> 16))));
+            });
+        }
+        // Supercells: on the stormiest days, now and then one isolated giant
+        // (the cells around it keep their distance).
+        let mut supers: Vec<DVec3> = Vec::new();
+        let p_super = SUPER_P * smoothstep(0.7, 1.0, st) * smoothstep(0.3, 0.5, self.clouds as f64) * if self.live && self.showers_only { 0.0 } else { 1.0 };
+        if p_super > 0.0 {
+            sites(q, STORM_GRID, STORM_RANGE + SUPER_CLEAR, |cen, dist, h0| {
+                let hs = shash(h0 ^ 0x68e3_1da4);
+                let clear = lines.iter().map(|&(c, l2)| smoothstep(l2 + 30.0, l2 + 90.0, c.distance(cen))).fold(1.0, f64::min);
+                let on = smoothstep(unit(hs) - 0.25 * SUPER_P, unit(hs) + 0.25 * SUPER_P, p_super) * (1.0 - seen_at(cen)) * clear;
+                if on <= 0.0 {
+                    return;
+                }
+                supers.push(cen);
+                if dist <= STORM_RANGE {
+                    let rad = (SUPER_R - 1.0 + 2.0 * unit(hs >> 16)) * (0.6 + 0.4 * on);
+                    out.push((dist, super_cell(cen, rad, on, unit(shash(hs)) as f32 * 0.999)));
+                }
+            });
+        }
+        sites(q, STORM_GRID, STORM_RANGE, |cen, dist, h0| {
+            // (A supercell stands here, or near enough to keep this one off.)
+            let lone = supers.iter().map(|s| smoothstep(0.5 * SUPER_CLEAR, SUPER_CLEAR, s.distance(cen))).fold(1.0, f64::min);
+            if lone <= 0.0 {
+                return;
+            }
+            let h2 = shash(shash(h0));
+            let region = value_noise(cen / 320.0 + DVec3::new(0.41, 0.07, 0.66));
+            let prob = prob_amount * smoothstep(0.2, 0.6, region + self.storms as f64 * 0.25);
+            // Fades in rather than pops as the slider or the region changes.
+            let r0 = unit(h0);
+            // (A squall line takes the place of the cells round it.)
+            let clear = lines.iter().map(|&(c, l2)| smoothstep(l2 + 30.0, l2 + 90.0, c.distance(cen))).fold(1.0, f64::min);
+            let on = smoothstep(r0 - 0.04, r0 + 0.04, prob) * (1.0 - seen_at(cen)) * clear * lone;
+            if on <= 0.0 {
+                return;
+            }
+            // A cell fading out shrinks into a smaller, younger (lower) tower.
+            let us = unit(h2);
+            let u = unit(h2 >> 16);
+            let h3 = shash(h2 ^ 0x9e3779b9);
+            let seed = unit(h3 >> 16) as f32;
+            if unit(shash(h3 ^ 0x5bd1e995)) < p_shower {
+                // A shower: a tower 2.4-5 km across, no anvil, topping out at
+                // 4-7 km (higher on stormier days).
+                let rad = (1.2 + 1.3 * us) * (0.6 + 0.4 * on);
+                let age = (0.12 + 0.25 * u) * on;
+                let top = 4000.0 + 3000.0 * (unit(h3) * (0.6 + 0.4 * st));
+                out.push((dist, [[cen.x as f32, cen.y as f32, cen.z as f32, rad as f32], [age as f32, shower_anvil(self.base() as f64, top, age), 0.0, seed]]));
+                return;
+            }
+            // Thunderstorms. Sizes have a long tail: mostly single towers a
+            // few km across, now and then a giant multicell / supercell 12-18 km wide.
+            let giant = smoothstep(0.82, 1.0, us) * (0.5 + 0.5 * st);
+            let rad = (2.4 + 2.6 * us + 4.0 * giant * giant) * (0.6 + 0.4 * on);
+            // Mature (with anvils); stormier days have more of the older,
+            // bigger ones; giants always are.
+            let age = (0.5 + 0.5 * (u + (1.0 - (1.0 - u) * (1.0 - u) - u) * st)).max(giant * 1.6).min(1.0) * on;
+            // Anvil height (the tropopause varies a little) and how far the
+            // strongest updraft overshoots it: big, mature cells the most.
+            let top = STORM_TOP + 700.0 * (unit(h3) as f32 * 2.0 - 1.0);
+            let over = STORM_OVERSHOOT * (0.25 + 0.75 * smoothstep(2.5, 8.0, rad) as f32) * smoothstep(0.6, 0.95, age) as f32;
+            out.push((dist, [[cen.x as f32, cen.y as f32, cen.z as f32, rad as f32], [age as f32, top, over, seed]]));
+        });
         out.sort_by(|a, b| a.0.total_cmp(&b.0));
-        out.into_iter().take(MAX_STORMS).map(|c| c.1).collect()
+        self.placed.iter().copied().chain(out.into_iter().map(|c| c.1)).take(MAX_STORMS).collect()
     }
 
     /// Visibility at sea level through the haze (Koschmieder, green light), km.
@@ -305,48 +877,39 @@ impl Weather {
         let w20 = self.wind * 0.93;
         let mech = (0.1 + 0.2 * self.gusts) * w20 * (1.0 - 0.65 * smoothstep(250.0, 900.0, agl));
         // Convective eddies through the mixed layer.
-        let conv = self.convection() * if water { 0.25 } else { 1.0 };
+        // (Under the rain deck the sun is gone and the thermals with it.)
+        let sunlit = 1.0 - 0.9 * self.deck_shade(pos);
+        let conv = self.convection() * sunlit * if water { 0.25 } else { 1.0 };
         let top = self.mixed_top();
         let convt = 1.1 * conv * (1.0 - smoothstep(0.85 * top, 1.15 * top, agl)) * smoothstep(0.0, 60.0, agl).max(0.3);
         // In the cloud layer itself (strongest where it is cumulus-like rather than a flat deck).
         let (_, _, alt) = geo::pos_to_lla(pos);
-        let (base, ctop) = (self.cloud_base as f64, (self.cloud_base + self.cloud_depth) as f64);
+        let (base, ctop) = (self.base() as f64, (self.base() + self.depth()) as f64);
         let inside = smoothstep(base - 150.0, base + 100.0, alt) * (1.0 - smoothstep(ctop - 100.0, ctop + 200.0, alt));
         let cloud = inside * self.clouds as f64 * (0.7 + 0.8 * self.convection() + 0.6 * self.storms as f64);
+        // In and under the rain deck: smooth, a light chop in the heavier rain
+        // (the falling rain drags the air down unevenly).
+        let deck = self.deck_area(pos).min(1.0) * self.deck as f64 * 0.25 + 0.6 * self.deck_rain(pos);
         // A light background chop everywhere, as there always is a little.
         let background = 0.12 + 0.03 * self.wind;
 
-        // Storm cells: severe turbulence in and around a tower, an updraft in its
-        // heart that pulls in air from below the base, and a downdraft (the rain
-        // shaft) on its flank that spreads out over the ground.
-        let mut storm = 0.0f64;
-        let mut draft = 0.0;
-        if !self.cells.is_empty() {
-            let q = pos.normalize() * 6371.0 + self.cloud_off / 1000.0;
-            for c in &self.cells {
-                let cen = DVec3::new(c[0][0] as f64, c[0][1] as f64, c[0][2] as f64);
-                let (rad, age) = (c[0][3] as f64, c[1][0] as f64);
-                let d = cen.distance(q.normalize() * 6371.0);
-                if d > rad * 3.0 {
-                    continue;
-                }
-                let tower_top = base + (STORM_TOP as f64 - base) * age.min(1.0).sqrt();
-                let up = if alt < base { smoothstep(0.0, base, alt) * 0.45 } else { 1.0 - smoothstep(tower_top - 1500.0, tower_top + 500.0, alt) };
-                let core = (-(d / (rad * 0.55)).powi(2)).exp();
-                let shaft = (-((d - rad * 1.05) / (rad * 0.35)).powi(2)).exp();
-                draft += age * (14.0 * core * up - 9.0 * shaft * (1.0 - smoothstep(base, tower_top, alt) * 0.6) * smoothstep(0.0, 200.0, agl));
-                storm = storm.max(age * 7.0 * (1.0 - smoothstep(rad * 0.8, rad * 2.6, d)) * (0.35 + 0.65 * up.max(inside)));
-            }
-        }
-
-        let sigma_w = (mech * mech + convt * convt + cloud * cloud + storm * storm + background * background).sqrt().min(9.0);
+        // Storm cells (storm.rs): severe, gusty turbulence in and around a tower,
+        // the updraft feeding it, the downdraft in its rain and the gust front
+        // that spreads out from under it.
+        let st = crate::storm::local(self, pos, agl, t);
+        let storm = st.sigma;
+        let draft = st.draft;
+        let rest = convt * convt + cloud * cloud + deck * deck + storm * storm + background * background;
+        let sigma_w = (mech * mech + rest).sqrt().min(13.0);
         // Near the ground the eddies are as small as the height and the horizontal
         // gusts larger than the vertical; aloft they are a few hundred metres across.
         let k = 0.177 + 0.000823 * ft.min(1000.0);
         let len_w = agl.clamp(12.0, 530.0);
         let len_h = (agl / k.powf(1.2)).clamp(40.0, 530.0);
-        let sigma_h = sigma_w / k.powf(0.4).max(0.5).min(1.0);
-        Air { sigma_w, sigma_h, len_w, len_h, draft: self.thermal(pos, agl, t) * if water { 0.2 } else { 1.0 } + draft }
+        // (Only the wind's own eddies, tumbling over the ground, are stretched
+        // out sideways like that; a storm's are as strong across as up.)
+        let sigma_h = (mech * mech / k.powf(0.8).clamp(0.25, 1.0) + rest).sqrt().min(13.0);
+        Air { sigma_w, sigma_h, len_w, len_h, draft: self.thermal(pos, agl, t) * sunlit * if water { 0.2 } else { 1.0 } + draft, gust: st.gust }
     }
 
     /// The floating weather & time window (F3). `utc` and `doy` belong to the
@@ -397,7 +960,7 @@ impl Weather {
 
     /// The real-weather switch, and where the report comes from.
     fn live_switch(&mut self, ui: &mut egui::Ui) {
-        ui.checkbox(&mut self.live, t!("Real weather (METAR, else Open-Meteo)", "Météo réelle (METAR, sinon Open-Meteo)"));
+        ui.checkbox(&mut self.live, t!("Real weather (METAR, else Open-Meteo; radar)", "Météo réelle (METAR, sinon Open-Meteo ; radar)"));
         if self.live {
             let text = if self.live_station.is_empty() {
                 if self.live_raw.is_empty() { t!("Waiting for a report…", "En attente d'un bulletin…").to_string() } else { self.live_raw.clone() }
@@ -493,6 +1056,20 @@ impl Weather {
             ui.end_row();
             ui.label(t!("Mid-level cloud", "Nuages moyens"));
             add(ui, Slider::new(&mut self.alto, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
+            ui.end_row();
+            ui.label(t!("Rain", "Pluie"));
+            ui.horizontal(|ui| {
+                let mut r = self.rain_set.unwrap_or(self.rain);
+                if add(ui, Slider::new(&mut r, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0))).changed() {
+                    self.rain_set = Some(r);
+                }
+                // Set, a rain deck (nimbostratus) that heavy closes in overhead;
+                // unset, the rain is wherever the storm cells drop it.
+                let mut auto = self.rain_set.is_none();
+                if ui.checkbox(&mut auto, "auto").changed() {
+                    self.rain_set = if auto { None } else { Some(self.rain) };
+                }
+            });
             ui.end_row();
             ui.label(t!("Haze", "Brume"));
             add(ui, Slider::new(&mut self.haze, 0.2..=40.0).logarithmic(true).custom_formatter(|v, _| format!("{v:.1}×")));
@@ -649,6 +1226,42 @@ mod tests {
     }
 
     #[test]
+    fn rain_deck_clears_when_turned_off() {
+        let mut w = Weather::new(0.3);
+        let p = geo::lla_to_pos(0.72, -1.68, 800.0);
+        let step = |w: &mut Weather, secs: f64| {
+            for _ in 0..(secs * 60.0) as usize {
+                w.step_deck(1.0 / 60.0, p, Some(300.0));
+            }
+        };
+        // Turned on in flight, it closes in over a few seconds, then rains.
+        w.rain_set = Some(0.7);
+        step(&mut w, 1.0);
+        assert!(w.deck_at.is_some() && w.deck_rain(p) == 0.0);
+        step(&mut w, 20.0);
+        assert!((w.deck_rain(p) - 0.7).abs() < 0.05, "{}", w.deck_rain(p));
+        // Turned off, the rain stops and the deck is gone within the fade
+        // (it used to linger as a full overcast for half a minute and more).
+        w.rain_set = Some(0.0);
+        step(&mut w, 10.0);
+        assert_eq!(w.deck_rain(p), 0.0);
+        step(&mut w, 6.0);
+        assert!(w.deck_at.is_none() && w.deck_layer().is_none());
+        assert_eq!(w.deck_globals(), [[0.0; 4]; 4]);
+        assert_eq!(w.base(), w.cloud_base);
+        // Back on half way through a fade: it grows back where it was.
+        w.rain_set = Some(0.5);
+        step(&mut w, 20.0);
+        w.rain_set = Some(0.0);
+        step(&mut w, 5.0);
+        let at = w.deck_at;
+        w.rain_set = Some(0.5);
+        step(&mut w, 20.0);
+        assert!(w.deck_at.is_some() && w.deck_fade == 1.0 && w.deck_rain(p) > 0.4);
+        assert!(w.deck_at.unwrap().distance(at.unwrap()) < 1.0);
+    }
+
+    #[test]
     fn wind_blows_from_its_direction() {
         let mut w = Weather::new(0.5);
         w.gusts = 0.0;
@@ -660,6 +1273,171 @@ mod tests {
         assert!((v.dot(e) - 10.0).abs() < 1e-6, "{v:?}");
         assert!(w.steady(p, 300.0).length() > 10.0);
         assert!((w.visibility_km() - 3.912 / (13.558e-6 + 8.396e-6) / 1000.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn radar_cells_grow_in_and_die_away() {
+        let mut w = Weather::new(0.5);
+        w.storms = 0.0;
+        let cam = geo::lla_to_pos(0.6, -2.1, 1000.0);
+        let (e, n, _) = geo::enu(cam);
+        let q = cam.normalize() * 6371.0;
+        let a = (q + e * 40.0).normalize() * 6371.0;
+        let b = (q + n * 80.0).normalize() * 6371.0;
+        // A fresh start shows the radar's cells as they are.
+        w.set_live_cells(&[(a, 7.0, 0.95, 0.0), (b, 2.5, 0.3, 0.0)], true);
+        assert_eq!(w.storm_cells(cam).len(), 2);
+        assert!(w.live_cells.iter().all(|c| c.on == 1.0));
+        let seed = w.live_cells[0].seed;
+        // The next picture: the big cell has moved 5 km and grown, the shower is
+        // gone and a new one has popped up.
+        let a2 = (a + e * 5.0).normalize() * 6371.0;
+        let c = (q - n * 60.0).normalize() * 6371.0;
+        w.set_live_cells(&[(a2, 8.0, 1.0, 0.0), (c, 3.0, 0.4, 0.0)], false);
+        assert_eq!(w.live_cells.len(), 3);
+        assert_eq!(w.live_cells[0].seed, seed, "the big cell is the same cell");
+        w.step_live(1.0);
+        let big = &w.live_cells[0];
+        assert!(big.at.distance(a) < 1.0 && big.rad < 7.3, "it glides, not jumps: {big:?}");
+        let fresh = w.live_cells.iter().find(|x| x.goal == c).unwrap();
+        assert!(fresh.on > 0.0 && fresh.on < 0.1, "it grows in: {fresh:?}");
+        for _ in 0..600 {
+            w.step_live(1.0);
+        }
+        assert_eq!(w.live_cells.len(), 2, "the shower has died away");
+        assert!(w.live_cells.iter().all(|c| c.on == 1.0));
+        assert!(w.live_cells[0].at.distance(a2) < 0.01 && (w.live_cells[0].rad - 8.0).abs() < 0.01);
+        assert!(w.cloud_ceiling() > STORM_TOP);
+        // Where radar sees, the made-up cells give way to the real ones.
+        w.storms = 1.0;
+        w.live_cells.clear();
+        let made_up = w.storm_cells(cam).len();
+        assert!(made_up > 0);
+        let (la, lo, _) = geo::pos_to_lla(cam);
+        let mut e = crate::radar::Echo { z: 0, gx0: 0, gy0: 0, w: 0, h: 0, dbz: vec![], cover: vec![] };
+        let (z, tx, ty, nt) = crate::radar::Echo::block(la.to_degrees(), lo.to_degrees());
+        let sz = 256 * nt as usize;
+        (e.z, e.gx0, e.gy0, e.w, e.h) = (z, tx * 256, ty * 256, sz, sz);
+        (e.dbz, e.cover) = (vec![f32::NAN; sz * sz], vec![true; sz * sz]);
+        w.radar_cover = Some(crate::radar::analyse(&e, (la.to_degrees(), lo.to_degrees())).cover);
+        let near = w.storm_cells(cam).iter().filter(|s| DVec3::new(s[0][0] as f64, s[0][1] as f64, s[0][2] as f64).distance(q) < 150.0).count();
+        assert_eq!(near, 0);
+    }
+
+    #[test]
+    fn showery_days_mostly_showers_stormy_days_thunderstorms() {
+        let cam = geo::lla_to_pos(0.71, -1.68, 1000.0);
+        // A shower tops out below the lightning height, a thunderstorm above it.
+        let tops = |storms: f32, live_showers: bool| {
+            let mut w = Weather::new(0.5);
+            w.storms = storms;
+            (w.live, w.showers_only) = (live_showers, live_showers);
+            let base = w.base() as f64;
+            let cells = w.storm_cells(cam);
+            let top = |c: &[[f32; 4]; 2]| base + (c[1][1] as f64 - base) * storm_top_share(c[1][0] as f64);
+            let showers = cells.iter().filter(|c| c[1][0] > 0.0 && top(c) < crate::storm::LIGHTNING_TOP - 800.0).count();
+            let storms = cells.iter().filter(|c| top(c) > crate::storm::LIGHTNING_TOP).count();
+            (showers, storms)
+        };
+        let (sh, ts) = tops(0.3, false);
+        assert!(sh > 2 * ts && sh >= 4, "showery: {sh} showers, {ts} thunderstorms");
+        let (sh, ts) = tops(1.0, false);
+        assert!(ts > sh && ts >= 4, "stormy: {sh} showers, {ts} thunderstorms");
+        let (sh, ts) = tops(0.5, true);
+        assert!(ts == 0 && sh > 0, "live, SH without TS: {sh} showers, {ts} thunderstorms");
+        // A shower placed by hand: young, no anvil, topping out around 6 km.
+        let mut w = Weather::new(0.5);
+        w.storms = 0.0;
+        w.place_storm(cam, 10.0, 90.0, 1.8, CellKind::parse("shower"));
+        let c = w.storm_cells(cam)[0];
+        let top = w.base() as f64 + (c[1][1] as f64 - w.base() as f64) * storm_top_share(c[1][0] as f64);
+        assert!(c[1][0] < 0.45 && (top - 6000.0).abs() < 1.0 && c[1][2] == 0.0, "{c:?} top {top}");
+    }
+
+    #[test]
+    fn squall_lines_on_stormy_days_and_by_hand() {
+        // Placed by hand: one cell carrying its length, its leading edge where asked.
+        let cam = geo::lla_to_pos(0.72, -1.68, 500.0);
+        let mut w = Weather::new(0.3);
+        w.storms = 0.0;
+        w.place_squall(cam, 20.0, 270.0, 100.0);
+        let c = w.storm_cells(cam);
+        assert_eq!(c.len(), 1);
+        let (len2, seed) = crate::storm::line_of(&c[0]);
+        assert!(len2 == 50_000.0 && (0.0..1.0).contains(&seed), "{:?}", c[0]);
+        let cen = DVec3::new(c[0][0][0] as f64, c[0][0][1] as f64, c[0][0][2] as f64);
+        let d = cen.distance(cam.normalize() * 6371.0);
+        assert!((d - 20.0 - crate::storm::SHELF_F * SQUALL_R).abs() < 0.5, "{d}");
+        // On a stormy day somewhere a line stands in for the cells round it;
+        // on an ordinary one never.
+        let lines = |st: f32| {
+            let mut w = Weather::new(0.55);
+            w.storms = st;
+            let mut n = 0;
+            for k in 0..40 {
+                let p = geo::lla_to_pos(0.3 + 0.05 * k as f64, -1.5 - 0.07 * k as f64, 500.0);
+                let cells = w.storm_cells(p);
+                let near: Vec<_> = cells.iter().filter(|c| c[1][3] >= 1.0).collect();
+                if let Some(l) = near.first() {
+                    let len = l[1][3].floor() as f64;
+                    assert!((36.0..=150.0).contains(&len) && l[0][3] > 2.5, "{l:?}");
+                    let lc = DVec3::new(l[0][0] as f64, l[0][1] as f64, l[0][2] as f64);
+                    // (no thunderstorm right beside it)
+                    assert!(cells.iter().filter(|c| c[1][3] < 1.0 && c[0][3] > 2.6).all(|c| DVec3::new(c[0][0] as f64, c[0][1] as f64, c[0][2] as f64).distance(lc) > 0.5 * len + 25.0));
+                    n += 1;
+                }
+            }
+            n
+        };
+        let stormy = lines(1.0);
+        assert!((4..40).contains(&stormy), "{stormy} of 40 places see a squall line on a stormy day");
+        assert_eq!(lines(0.4), 0);
+        // Live: the radar's line comes in as one, and only matches a line.
+        let mut w = Weather::new(0.5);
+        let a = (cam.normalize() * 6371.0 + DVec3::X * 30.0).normalize() * 6371.0;
+        w.set_live_cells(&[(a, 6.0, 1.0, 110.0)], true);
+        let c = w.storm_cells(cam);
+        assert!(c.iter().any(|c| c[1][3].floor() == 110.0), "{c:?}");
+        w.set_live_cells(&[(a, 6.0, 1.0, 0.0)], false);
+        assert_eq!(w.live_cells.len(), 2, "a lone cell does not take over a line");
+    }
+
+    #[test]
+    fn supercells_rare_isolated_and_by_hand() {
+        // Placed by hand: maturity 2, the higher anvil and the biggest overshoot.
+        let cam = geo::lla_to_pos(0.72, -1.68, 500.0);
+        let mut w = Weather::new(0.3);
+        w.storms = 0.0;
+        w.place_storm(cam, 60.0, 270.0, SUPER_R, CellKind::parse("supercell"));
+        let c = w.storm_cells(cam);
+        assert!(c.len() == 1 && supercell(&c[0]) == 1.0 && c[0][1][1] == SUPER_TOP && c[0][1][2] == SUPER_OVERSHOOT, "{c:?}");
+        assert!(w.cloud_ceiling() >= SUPER_TOP + SUPER_OVERSHOOT);
+        // Only on the stormiest days, now and then, and with no other cell near it.
+        let supers = |st: f32| {
+            let mut w = Weather::new(0.55);
+            w.storms = st;
+            let mut n = 0;
+            for k in 0..40 {
+                let p = geo::lla_to_pos(0.3 + 0.05 * k as f64, -1.5 - 0.07 * k as f64, 500.0);
+                let cells = w.storm_cells(p);
+                for s in cells.iter().filter(|c| supercell(c) > 0.5) {
+                    let sc = DVec3::new(s[0][0] as f64, s[0][1] as f64, s[0][2] as f64);
+                    assert!(s[0][3] > 6.0, "{s:?}");
+                    assert!(cells.iter().filter(|c| supercell(c) == 0.0 && c[1][3] < 1.0).all(|c| DVec3::new(c[0][0] as f64, c[0][1] as f64, c[0][2] as f64).distance(sc) > 0.5 * SUPER_CLEAR), "a cell beside a supercell");
+                    n += 1;
+                }
+            }
+            n
+        };
+        let stormy = supers(1.0);
+        assert!((1..40).contains(&stormy), "{stormy} supercells seen from 40 places on the stormiest day");
+        assert_eq!(supers(0.6), 0);
+        // Live: an isolated, intense, large echo comes in as one.
+        let mut w = Weather::new(0.5);
+        let a = (cam.normalize() * 6371.0 + DVec3::X * 30.0).normalize() * 6371.0;
+        w.set_live_cells(&[(a, 8.0, 2.0, 0.0)], true);
+        let c = w.storm_cells(cam);
+        assert!(c.iter().any(|c| supercell(c) == 1.0), "{c:?}");
     }
 
     #[test]
@@ -681,4 +1459,5 @@ mod tests {
         assert!(hi > 1.0 && lo < -0.2, "{lo} {hi}");
     }
 }
+
 

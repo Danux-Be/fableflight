@@ -24,7 +24,7 @@ struct Obj { model: mat4x4f, tint: vec4f, glow: vec4f, params: array<vec4f, 6>, 
 const M_PAINT = 0u; const M_LIVERY = 1u; const M_ALU = 2u; const M_STEEL = 3u; const M_RUBBER = 4u;
 const M_PLASTIC = 5u; const M_FABRIC = 6u; const M_GLASS = 7u; const M_LAMP = 8u; const M_GAUGE = 9u;
 const M_BLACK = 10u; const M_EXHAUST = 11u; const M_SCREW = 12u; const M_PROP = 13u; const M_DISPLAY = 14u;
-const M_SATIN = 15u; const M_PROPDISC = 16u; const M_PLUME = 17u;
+const M_SATIN = 15u; const M_PROPDISC = 16u; const M_PLUME = 17u; const M_TEX = 18u;
 const P_FUSE = 1u; const P_WING = 2u; const P_CTRL = 3u; const P_COWL = 4u; const P_TAIL = 5u; const P_TREAD = 6u;
 const P_LINING = 7u; const P_SEAT = 8u; const P_CARPET = 9u; const P_PANEL = 10u; const P_PLACARD = 11u; const P_KNURL = 12u;
 const P_NACELLE = 13u; const P_LEGEND = 14u; const P_FLEECE = 15u; const P_SPINNER = 16u; const P_HORNET = 17u;
@@ -39,6 +39,12 @@ const P_PIT = 18u; const P_MESH = 19u; const P_WEBBING = 20u; const P_NONSLIP = 
 // many pictures (0: it has no paint); .y: how much relief its lines stand
 // for; .z: how much its sheen follows its tone (a dark paint's panels).
 @group(1) @binding(1) var t_paint: texture_2d_array<f32>;
+// A downloaded aircraft's meshes bind its own textures there instead (fgmodel.rs):
+// layer `layer` (< 0: none), repeating.
+fn tex_at(uv: vec2f, layer: f32, dx: vec2f, dy: vec2f) -> vec4f {
+  if (layer < -0.5) { return vec4f(1.0); }
+  return textureSampleGrad(t_paint, s_aniso, fract(uv), i32(layer + 0.5), dx, dy);
+}
 struct Paint { box: vec4f, view: vec4f };
 @group(1) @binding(2) var<uniform> PT: Paint;
 
@@ -46,7 +52,11 @@ struct Paint { box: vec4f, view: vec4f };
 // light single, 1 the 747, 2 the Hornet, 3 the Phantom, 4 the Raptor, 5 the Starship rocket. Its windows, wells,
 // paint and panel lines differ. tint.y and tint.z carry the engines: how far the afterburners
 // are lit, and how hard they are running dry (0 idle .. 1).
-fn kind() -> u32 { return u32(O.glow.y + 0.5); }
+// specialisation, render.rs `specialise` rewrites these two lines. a kind under 99 is fixed.
+const KIND: u32 = 99u;
+// instrument faces and displays, 0 left out (drawn by their own pipeline), 1 drawn.
+const INSTR: u32 = 1u;
+fn kind() -> u32 { if (KIND < 99u) { return KIND; } return u32(O.glow.y + 0.5); }
 // The fighters: modelled in Blender, their paint a picture, one blown canopy over a tub.
 fn fighter() -> bool { return (kind() >= 2u && kind() <= 4u) || kind() == 7u; }
 // The engines, of the aircraft being flown only (wreckage and parts that have come off carry a glow.x).
@@ -130,6 +140,8 @@ fn quad(a: vec2f, b: vec2f, c: vec2f, d: vec2f) -> array<vec2f, 5> { return arra
 // Window openings (negative inside); matches c172::window / b747::window.
 fn window(p: vec3f) -> f32 {
   if (kind() == 1u) { return window747(p); }
+  // (The Robin's canopy is a glass piece of its own, all of it clear.)
+  if (kind() == 8u) { return -1.0; }
   // A fighter's canopy is blown glass: all of it is window.
   if (fighter()) { return -1.0; }
   // (Concorde's windscreen, side windows and visor are glass pieces of their own.)
@@ -148,6 +160,7 @@ fn window(p: vec3f) -> f32 {
 // Landing gear wells (only the skin has them); matches c172::well / b747::well.
 fn well(p: vec3f) -> f32 {
   if (kind() == 1u) { return well747(p); }
+  if (kind() == 8u) { return 1.0; }
   var d = 1.0;
   if (p.y < -0.40) {
     d = min(d, sd_poly(vec2f(p.z, p.x), quad(vec2f(-3.0, -0.135), vec2f(-1.915, -0.135), vec2f(-1.915, 0.135), vec2f(-3.0, 0.135)), 4) + 0.005);
@@ -158,7 +171,15 @@ fn well(p: vec3f) -> f32 {
   }
   return d;
 }
+// The Robin's two round cooling-air inlets in the nose bowl (dr400::INLET,
+// body frame): negative inside, where the skin is cut away to the ducts.
+fn inlet_dr400(L: vec3f) -> f32 {
+  if (L.z > -1.62) { return 1.0; }
+  return length(vec2f(abs(L.x) - 0.225, L.y + 0.19)) - 0.060;
+}
 fn cut_here(L: vec3f, pt: u32) -> bool {
+  // Nothing else is cut out of the Robin's skin: it simply stops under the canopy.
+  if (kind() == 8u) { return pt == P_COWL && inlet_dr400(L) < 0.0; }
   // The 747's wing gear passes through the lower wing skin as well.
   let wing_well = kind() == 1u && pt == P_WING && well(L) < 0.0;
   return wing_well || ((pt == P_FUSE || pt == P_COWL || pt == P_LINING) && (window(L) < 0.0 || (pt != P_LINING && well(L) < 0.0)));
@@ -490,6 +511,7 @@ fn pack(a: u32, b: u32, c: u32, d: u32, e: u32, f: u32) -> u32 {
 
 fn livery(L: vec3f, aa: f32, pt: u32) -> vec3f {
   if (kind() == 1u) { return livery747(L, aa, pt); }
+  if (kind() == 8u) { return livery_dr400(L, aa, pt); }
   var c = WHITE_PAINT;
   let ax = abs(L.x);
   let fin = ax < 0.15 && L.y > 0.33 && L.z > 2.8;
@@ -526,6 +548,55 @@ fn livery(L: vec3f, aa: f32, pt: u32) -> vec3f {
   return c;
 }
 
+// The Robin DR 400: white, a blue cheat line from the spinner to the tail
+// with a red pinstripe under it, the top of the fin blue, red wing tips and
+// spinner (a classic Robin scheme, made up; no registration).
+const ROBIN_BLUE = vec3f(0.012, 0.045, 0.20);
+const ROBIN_RED = vec3f(0.42, 0.02, 0.015);
+// Coverage of the walkway on the top of a wing root (body frame; 0 off it).
+fn walkway_dr400(Lb: vec3f, aa: f32) -> f32 {
+  let L = Lb - vec3f(0.0, 0.0, 0.55);
+  let ax = abs(L.x);
+  let xc = (L.z + 1.0) / 1.71;
+  if (ax < 0.56 || ax > 1.0 || xc < 0.05 || xc > 0.75 || L.y < -0.66 - 0.0895 * xc) { return 0.0; }
+  let e = min(min(ax - 0.585, 0.975 - ax), min(xc - 0.08, 0.72 - xc) * 1.71);
+  return smoothstep(-aa, aa, e);
+}
+fn livery_dr400(Lb: vec3f, aa: f32, pt: u32) -> vec3f {
+  // (In dr400.rs's design frame, 0.55 m ahead of the body frame.)
+  let L = Lb - vec3f(0.0, 0.0, 0.55);
+  var c = WHITE_PAINT;
+  let ax = abs(L.x);
+  // The black anti-skid walkway on top of each wing root, greyer where worn.
+  if (pt == P_WING) {
+    let wk = walkway_dr400(Lb, aa);
+    if (wk > 0.0) {
+      let worn = smoothstep(0.55, 0.85, nz(L * vec3f(9.0, 9.0, 3.0)).g) * 0.5;
+      return mix(c, mix(vec3f(0.022, 0.022, 0.024), vec3f(0.055, 0.052, 0.05), worn), wk);
+    }
+  }
+  let fin = ax < 0.12 && L.y > 0.12 && L.z > 3.1;
+  if (!fin && ax < 0.6 && L.y < 0.5 && L.y > -0.5 && L.z > -2.42 && L.z < 4.4) {
+    let zz = max(L.z - 0.9, 0.0);
+    let yc = -0.07 + zz * 0.025;
+    let taper = 1.0 - 0.5 * smoothstep(1.0, 4.3, L.z);
+    let hw = 0.045 * taper;
+    let blue = smoothstep(hw + aa, hw - aa, abs(L.y - yc));
+    let red = smoothstep(0.010 + aa, 0.010 - aa, abs(L.y - (yc - hw - 0.028)));
+    c = mix(c, ROBIN_BLUE, blue);
+    c = mix(c, ROBIN_RED, red);
+  }
+  if (fin) {
+    let edge = 0.78 - (L.z - 3.6) * 0.25;
+    c = mix(c, ROBIN_BLUE, smoothstep(edge - aa, edge + aa, L.y));
+    c = mix(c, ROBIN_RED, smoothstep(aa, -aa, abs(L.y - (edge - 0.05)) - 0.012));
+  }
+  if (ax > 4.12 && L.y > -0.2) { c = ROBIN_RED; }
+  if (ax > 1.45 && L.z > 3.4 && abs(L.y - 0.06) < 0.15) { c = ROBIN_BLUE; }
+  if (L.z < -2.41) { c = ROBIN_RED; }
+  return c;
+}
+
 // Grime, exhaust soot, oil and fuel stains, fading: everything a few hundred
 // hours of flying leaves on the paint. Returns (colour, extra roughness).
 fn weather(L: vec3f, N: vec3f, base: vec3f) -> vec4f {
@@ -534,6 +605,7 @@ fn weather(L: vec3f, N: vec3f, base: vec3f) -> vec4f {
   let belly = sat(-N.y * 1.5 + 0.2);
   c *= 1.0 - (0.03 + 0.07 * belly) * n.g;
   if (kind() == 1u) { return weather747(L, N, c, belly, n); }
+  if (kind() == 8u) { return weather_dr400(L, N, c, belly); }
   // Soot from the exhaust stack streaking back along the belly.
   let d = L.z + 2.1;
   if (d > 0.0 && L.y < -0.2) {
@@ -556,13 +628,206 @@ fn weather(L: vec3f, N: vec3f, base: vec3f) -> vec4f {
   return vec4f(c, 0.08 * belly * n.b);
 }
 
+
+// The Robin's: exhaust soot from the two stubs under the cowl streaking
+// back along the belly, an oil mist from the breather, grey grime on the
+// walkways and round the step, avgas stains under the wing fillers.
+fn weather_dr400(Lb: vec3f, N: vec3f, base: vec3f, belly: f32) -> vec4f {
+  let L = Lb - vec3f(0.0, 0.0, 0.55);
+  var c = base;
+  let ax = abs(L.x);
+  let d = L.z + 1.56;
+  if (d > -0.05 && L.y < -0.30 && L.z < 3.0 && ax < 0.62) {
+    let cx = 0.15 + min(max(d, 0.0), 1.2) * 0.07;
+    let spread = 0.035 + max(d, 0.0) * 0.06;
+    let streak = nz(vec3f(L.x * 9.0, L.y * 9.0, L.z * 0.4)).r;
+    let soot = exp(-pow((ax - cx) / spread, 2.0)) * exp(-max(d, 0.0) / 1.3) * smoothstep(-0.05, 0.03, d) * sat(belly * 1.6) * (0.5 + 0.7 * streak);
+    c = mix(c, vec3f(0.04, 0.035, 0.03), sat(soot * 1.3));
+  }
+  if (L.y < -0.5 && L.z > -1.6 && L.z < 2.5) {
+    let oil = exp(-L.x * L.x / 0.012) * exp(-(L.z + 1.6) / 1.2) * (0.4 + 0.6 * nz(vec3f(L.x * 6.0, 0.0, L.z * 0.6)).b);
+    c = mix(c, c * vec3f(0.6, 0.5, 0.34), sat(oil * 0.7));
+  }
+  // Scuffed paint where shoes go: either side of the walkway, the root fairing, the step.
+  if (L.y > -0.75 && L.y < -0.35 && ax > 0.5 && ax < 1.05 && L.z > -0.9 && L.z < 0.95) {
+    let scuff = smoothstep(0.55, 0.9, nz(L * vec3f(5.0, 5.0, 2.0)).g) * sat(N.y * 2.0);
+    c = mix(c, c * vec3f(0.78, 0.76, 0.72), scuff * 0.6);
+  }
+  // Avgas round the wing tank fillers (a faint blue tide mark).
+  let fl = length(vec2f(ax - 1.2, L.z + 0.49));
+  if (fl < 0.35 && L.y > -0.6) {
+    let f = exp(-fl / 0.08) * (0.4 + 0.6 * nz(vec3f(L.x * 14.0, 0.0, L.z * 14.0)).r) * smoothstep(0.04, 0.05, fl);
+    c = mix(c, c * vec3f(0.74, 0.84, 1.0), sat(f * 1.5));
+  }
+  return vec4f(c, 0.08 * belly);
+}
+
 // ---------------------------------------------------------------- surface relief
 
 fn chord_at(s: f32) -> f32 { return select(1.65 - 0.5 * (s - 2.55) / 2.95, 1.65, s <= 2.55); }
 
+
+// ---------------------------------------------------------------- the Robin's skin
+// Wood under doped fabric: plywood ahead of the spars, bare fabric shrunk
+// over the ribs behind them, every rib under a pinked tape; a glass-fibre
+// cowling in pieces held by fasteners. (dr400.rs's design frame is 0.55 m
+// ahead of the body frame L is in; uv is in the design frame.)
+
+// A pinked fabric tape `hw` wide centred on d (m), its edges zigzag cut.
+fn tape(d: f32, along: f32, hw: f32, px: f32) -> f32 {
+  let zig = abs(fract(along / 0.007) - 0.5) * 0.0024;
+  let e = hw + zig;
+  let a = max(px, 0.0006);
+  return smoothstep(e + a, e - a, abs(d));
+}
+// Fabric over ribs `pitch` apart from s0 along s, spanning chord distance x
+// (m) from x0 to x1 (sagging between them most halfway), rib tapes on top.
+fn fabric(s: f32, x: f32, s0: f32, pitch: f32, x0: f32, x1: f32, px: f32) -> vec2f {
+  if (x < x0 - 0.02 || x > x1 + 0.02) { return vec2f(0.0); }
+  let d = (fract((s - s0) / pitch + 0.5) - 0.5) * pitch;
+  let f = sat((x - x0) / max(x1 - x0, 1e-3));
+  let env = sin(f * 3.14159);
+  let fade = 1.0 - smoothstep(0.004, 0.02, px);
+  var h = -0.0028 * env * (0.5 - 0.5 * cos(6.2831853 * (d / pitch))) * fade;
+  // (The tape: raised, with the rib stitching under it in a row of small bumps.)
+  let t = tape(d, x, 0.016, px) * step(x0, x);
+  let stitch = line(fract(x / 0.065) - 0.5, 0.06) * line(d, 0.004) * (1.0 - smoothstep(0.0005, 0.002, px));
+  h += 0.0005 * t + 0.0003 * stitch;
+  let dirt = 0.45 * line(abs(d) - 0.017, max(px, 0.0012)) * step(x0, x) + 0.25 * stitch;
+  return vec2f(h, dirt * fade);
+}
+fn relief_dr400(pt: u32, uv: vec2f, L: vec3f, px: f32) -> vec3f {
+  var h = 0.0;
+  var dirt = 0.0;
+  let gw = max(0.0007, px * 0.9);
+  let ga = 0.00045 * min(1.0, 0.0012 / gw);
+  // Dope and paint over fabric: a faint weave, and the slight waviness of
+  // a hand-finished wooden airframe.
+  let weave = (1.0 - smoothstep(0.0003, 0.0012, px)) * 0.00004 * (sin(uv.x * 9000.0) + sin(uv.y * 9000.0));
+  h += 0.00035 * (nz(L * 1.7).r - 0.5) + weave;
+  switch pt {
+    case 2u: { // wing
+      let s = abs(uv.x);
+      let x = abs(uv.y);
+      let c = select(1.71 - 0.56 * (s - 1.95) / 2.49, 1.71, s < 1.95);
+      let xc = x / c;
+      if (s > 0.56 && s < 4.3) {
+        let f = fabric(s, x, 0.45, 0.29, 0.30 * c, 0.985 * c, px);
+        h += f.x;
+        dirt += f.y;
+      }
+      // The spar cap tape along the edge of the plywood, the trailing edge tape.
+      h += 0.0003 * tape(xc - 0.30, s, 0.022 / c, px / c) + 0.0003 * tape(xc - 0.985, s, 0.025 / c, px / c);
+      // The joint between the centre section and the outer panel (under its strip).
+      let dk = s - 1.95;
+      h -= ga * line(abs(dk) - 0.006, gw);
+      dirt += line(abs(dk) - 0.006, gw * 2.0);
+      // Black anti-skid walkway on the root of the centre section.
+      if (uv.y > 0.0 && s > 0.58 && s < 0.98 && xc > 0.08 && xc < 0.72) {
+        h += 0.0005 * nz(L * 180.0).r * (1.0 - smoothstep(0.0003, 0.0012, px));
+      }
+      // Access panel round the wing tank's gauge and the aileron cable pulleys.
+      if (uv.y < 0.0) {
+        for (var i = 0; i < 2; i++) {
+          let q = vec2f(s - select(1.35, 2.85, i == 1), x - 0.62);
+          let b = abs(q) - vec2f(0.09, 0.07);
+          let od = length(max(b, vec2f(0.0))) + min(max(b.x, b.y), 0.0) - 0.015;
+          h -= ga * 1.2 * line(od, gw);
+          dirt += line(od, gw * 2.0);
+        }
+      }
+    }
+    case 3u: { // control surfaces: fabric over ribs
+      let s = abs(uv.x);
+      let x = abs(uv.y);
+      let f = fabric(s, x, 0.0, 0.16, -10.0, 12.0, px);
+      h += f.x * 0.6;
+      dirt += f.y;
+    }
+    case 5u: { // fin: plywood ahead of its spar, fabric behind
+      let s = uv.x;
+      let x = abs(uv.y);
+      let f = fabric(s, x, 0.05, 0.2, 0.3, 1.2, px);
+      h += f.x * 0.8;
+      dirt += f.y;
+    }
+    case 1u: { // fuselage: plywood under fabric
+      let z = uv.x;
+      // Inspection hatches on the tail cone, the access panel under the belly.
+      let ax = abs(L.x);
+      if (z > 2.2 && z < 3.2 && ax > 0.1) {
+        let d = length(vec2f(z - 2.65, L.y + 0.12)) - 0.055;
+        h -= ga * 1.5 * line(d, gw);
+        dirt += line(d, gw * 2.5);
+      }
+      if (L.y < -0.6 && z > -0.3 && z < 0.4) {
+        let q = vec2f(z - 0.05, L.x);
+        let b = abs(q) - vec2f(0.20, 0.14);
+        let od = length(max(b, vec2f(0.0))) + min(max(b.x, b.y), 0.0) - 0.02;
+        h -= ga * 1.4 * line(od, gw);
+        dirt += line(od, gw * 2.5);
+      }
+      // The static port, both sides of the tail cone.
+      if (z > 1.5 && z < 1.7) {
+        let d = length(vec2f(z - 1.6, L.y + 0.05)) ;
+        h -= 0.0008 * smoothstep(0.004 + px, 0.004 - px, d);
+        dirt += smoothstep(0.012, 0.004, d) * 0.6;
+      }
+    }
+    case 4u: { // cowling (and the gear fairings, glass fibre too)
+      let z = L.z - 0.55;
+      if (L.y > -0.72 && z < -1.45) {
+        // The split between the upper and lower halves, the nose bowl, the firewall edge.
+        var lines = array<f32, 3>(select(1.0, L.y + 0.12, abs(L.x) > 0.15), z + 2.22, z + 1.52);
+        for (var i = 0; i < 3; i++) {
+          h -= ga * 1.5 * line(lines[i], gw);
+          dirt += line(lines[i], gw * 2.5);
+        }
+        // The oil door on top.
+        if (L.y > 0.05) {
+          let q = vec2f(z + 1.86, L.x);
+          let b = abs(q) - vec2f(0.10, 0.075);
+          let od = length(max(b, vec2f(0.0))) + min(max(b.x, b.y), 0.0) - 0.02;
+          h -= ga * 1.5 * line(od, gw);
+          dirt += line(od, gw * 2.0);
+        }
+      } else if (L.y < -0.72) {
+        // A wheel fairing's halves join down its middle, a mud scraper cut-out underneath.
+        let cx = select(1.30, 0.0, abs(L.x) < 0.6);
+        let d = abs(L.x) - cx;
+        h -= ga * 1.3 * line(d, gw);
+        dirt += line(d, gw * 2.5);
+      }
+    }
+    case 6u: { // tyre tread: circumferential grooves
+      var c = vec3f(sign(L.x) * 1.30, -1.01, 0.15);
+      var r = 0.19;
+      var g = vec2f(0.020, 0.044);
+      if (abs(L.x) < 0.6) { c = vec3f(0.0, -1.035, -1.43); r = 0.165; g = vec2f(0.016, 0.036); }
+      let ax = abs(L.x - c.x);
+      let rad = length(L.yz - c.yz);
+      if (rad > r * 0.9) {
+        let gd = min(abs(ax - g.x), abs(ax - g.y));
+        h -= 0.002 * line(gd, max(0.003, px));
+        dirt += line(gd, max(0.004, px));
+      }
+    }
+    default: {}
+  }
+  return vec3f(h, sat(dirt) * min(1.0, 0.0022 / gw), 0.0);
+}
+
 // Height (m), seam dirt, rivet coverage, for the surface pattern.
+// constant tables live in constant memory, not copied per pixel.
+const FUSE_STATIONS = array<f32, 8>(-1.98, 0.92, 1.52, 2.12, 2.72, 3.32, 3.92, 4.40);
+const WIN747_BAYS = array<vec4f, 2>(vec4f(5.30, 5.86, 0.30, 0.55), vec4f(5.98, 6.40, 0.36, 0.55));
+const LAPS747 = array<f32, 4>(1.7, 3.6, 5.6, 7.7);
+const CHORDS747 = array<f32, 5>(0.44, 1.36, 2.48, 4.94, 6.06);
 fn relief(pt: u32, uv: vec2f, L: vec3f, Nl: vec3f, px: f32) -> vec3f {
   if (kind() == 1u) { return relief747(pt, uv, L, Nl, px); }
+  // The Robin is wood and fabric: no rivets, no laps (its cabin keeps its
+  // upholstery, carpet, crinkle paint and knurling).
+  if (kind() == 8u && pt <= 6u) { return relief_dr400(pt, uv, L, px); }
   var h = 0.0;
   var dirt = 0.0;
   var rv = 0.0;
@@ -574,9 +839,8 @@ fn relief(pt: u32, uv: vec2f, L: vec3f, Nl: vec3f, px: f32) -> vec3f {
     case 1u: { // fuselage
       let z = uv.x;
       let s = abs(uv.y);
-      var st = array<f32, 8>(-1.98, 0.92, 1.52, 2.12, 2.72, 3.32, 3.92, 4.40);
       for (var i = 0; i < 8; i++) {
-        let dz = z - st[i];
+        let dz = z - FUSE_STATIONS[i];
         if (abs(dz) < 0.04) {
           h -= ga * line(dz, gw);
           dirt += line(dz, gw * 2.5);
@@ -664,12 +928,21 @@ fn relief(pt: u32, uv: vec2f, L: vec3f, Nl: vec3f, px: f32) -> vec3f {
       }
     }
     case 7u: { // cabin lining: door gaps, headliner seams, grain
-      if (abs(L.x) > 0.35) {
+      if (kind() == 8u) {
+        // The Robin's vinyl side panels: a stitched seam under the sill and a coarser grain.
+        let d = L.y + 0.035;
+        h -= 0.0012 * line(d, max(0.0018, px));
+        let st = step(0.5, fract(L.z / 0.006)) * line(abs(d) - 0.006, max(0.0006, px));
+        h -= 0.0002 * st;
+        dirt += 0.6 * line(d, max(0.004, px * 2.0)) + 0.3 * st;
+        h += 0.00025 * nz(L * 70.0).r * (1.0 - smoothstep(0.0004, 0.0016, px));
+      }
+      if (kind() != 8u && abs(L.x) > 0.35) {
         let dd = door(L);
         h -= 0.0015 * line(dd, max(0.0015, px));
         dirt += line(dd, max(0.003, px * 2.0));
       }
-      if (L.y > 0.46) {
+      if (kind() != 8u && L.y > 0.46) {
         let d = (fract((L.z + 0.6) / 0.42) - 0.5) * 0.42;
         h -= 0.001 * line(d, max(0.004, px));
         dirt += 0.5 * line(d, 0.006);
@@ -1473,10 +1746,14 @@ fn surface(in: VOut) -> Shaded {
   let dPx = dpdx(in.P);
   let dPy = dpdy(in.P);
   let px = max(length(dPx), length(dPy));
-  let duv = max(length(dpdx(in.uv)), length(dpdy(in.uv)));
+  let duvx = dpdx(in.uv);
+  let duvy = dpdy(in.uv);
+  let duv = max(length(duvx), length(duvy));
   let dLx = dpdx(in.L);
   let dLy = dpdy(in.L);
-  var rel = relief(pt, in.uv, in.L, in.Nl, px);
+  // low preset skips panel lines and rivets, G.quality.x is 1.8 there.
+  var rel = vec3f(0.0);
+  if (G.quality.x <= 1.5) { rel = relief(pt, in.uv, in.L, in.Nl, px); }
   // The Hornet's paint; its panel lines and rivets, darker than the skin
   // round them, are taken to lie a little below it.
   var paint = vec4f(0.0);
@@ -1486,10 +1763,10 @@ fn surface(in: VOut) -> Shaded {
   }
   let hx = dpdx(rel.x);
   let hy = dpdy(rel.x);
-  let cuts = pt == P_FUSE || pt == P_COWL || pt == P_LINING;
+  let cuts = ((pt == P_FUSE || pt == P_COWL || pt == P_LINING) && kind() != 8u) || (pt == P_COWL && kind() == 8u);
   var wd = 1.0;
   var wl = 1.0;
-  if (cuts) { wd = window(in.L); }
+  if (cuts) { wd = select(window(in.L), inlet_dr400(in.L), kind() == 8u); }
   // The 747's lining is cut back round its windows by the width of the trim (b747::deck::lining_window).
   if (kind() == 1u && pt == P_LINING) {
     // Measured on the skin straight outside (radially from 0.3 m up), less the trim.
@@ -1501,7 +1778,10 @@ fn surface(in: VOut) -> Shaded {
   // belly that stretches distances along the skin, so measure the edge there.
   let wl_s = wl * px / max(length(vec2f(dpdx(wl), dpdy(wl))), 1e-7);
   let td = tear_d(in.L);
-  let kill = (cuts && (wd < 0.0 || wl < 0.0)) || id == M_GLASS || id == M_PROPDISC || id == M_PLUME || td > 0.0;
+  // A downloaded aircraft's own texture (fgmodel.rs), its see-through parts cut out.
+  var tex = vec4f(1.0);
+  if (id == M_TEX) { tex = tex_at(in.uv, in.mat.w, duvx, duvy); }
+  let kill = (cuts && (wd < 0.0 || wl < 0.0)) || id == M_GLASS || id == M_PROPDISC || id == M_PLUME || td > 0.0 || tex.a < 0.5;
 
   var n0 = in.N;
   if (dot(n0, n0) < 1e-10) { n0 = -in.P; }
@@ -1547,9 +1827,11 @@ fn surface(in: VOut) -> Shaded {
       // Each skin panel's paint aged a little differently.
       albedo *= 0.985 + 0.03 * fine.a * select(0.4, 1.0, id == 1u);
       if (id == 1u || pt == P_FUSE) {
-        let w = weather(L, in.Nl, albedo);
-        albedo = w.rgb;
-        rough += w.a;
+        if (G.quality.x <= 1.5) {
+          let w = weather(L, in.Nl, albedo);
+          albedo = w.rgb;
+          rough += w.a;
+        }
         // Chipped paint where things get knocked: leading edges, around fasteners.
         let chip = smoothstep(0.80, 0.83, nz(L * 7.0).b + in.wear * 0.07) * sat(in.wear * 1.5);
         albedo = mix(albedo, vec3f(0.55, 0.56, 0.58), chip);
@@ -1570,6 +1852,11 @@ fn surface(in: VOut) -> Shaded {
         albedo = mix(albedo, albedo * 1.8 + vec3f(0.03), sc * 0.6);
         rough = mix(rough, 0.4, sc);
         albedo = mix(albedo, albedo * 0.6, smoothstep(0.62, 0.85, nz(L * 9.0).g) * 0.4);
+      }
+      if (kind() == 8u && pt == P_WING) {
+        let wk = walkway_dr400(L, px);
+        rough = mix(rough, 0.85, wk);
+        spec_k = mix(spec_k, 0.5, wk);
       }
       if (pt == P_NONSLIP) {
         rough = 0.92;
@@ -1616,7 +1903,7 @@ fn surface(in: VOut) -> Shaded {
       }
       // Window sealant and the edges of the gear wells.
       if (pt == P_FUSE || pt == P_COWL) {
-        let gk = smoothstep(0.016 + px, 0.016 - px, wd) * step(-0.001, wd);
+        let gk = smoothstep(0.016 + px, 0.016 - px, wd) * step(-0.001, wd) * select(1.0, 0.0, kind() == 8u);
         let we = smoothstep(0.004 + px, 0.004 - px, wl_s) * step(-0.001, wl);
         albedo = mix(albedo, vec3f(0.012), max(gk, we * 0.6));
         rough = mix(rough, 0.6, gk);
@@ -1766,11 +2053,13 @@ fn surface(in: VOut) -> Shaded {
       ssr = 0.5;
     }
     case 9u: { // instrument face under glass
-      let g = gauge(u32(in.mat.w + 0.5), in.uv, max(duv * 1.2, 0.004));
-      albedo = g.rgb;
-      rough = 0.04;
-      spec_k = 0.5;
-      emit = g.rgb * g.a * G.sun_dir.w * 0.0035 * night;
+      if (INSTR != 0u) {
+        let g = gauge(u32(in.mat.w + 0.5), in.uv, max(duv * 1.2, 0.004));
+        albedo = g.rgb;
+        rough = 0.04;
+        spec_k = 0.5;
+        emit = g.rgb * g.a * G.sun_dir.w * 0.0035 * night;
+      }
     }
     case 10u: { // matte black: scuffed
       rough = 0.65 + 0.2 * fine.g;
@@ -1883,6 +2172,7 @@ fn surface(in: VOut) -> Shaded {
       metal = ero;
     }
     case 14u: { // backlit display under glass
+      if (INSTR == 0u) { break; }
       albedo = vec3f(0.01);
       rough = 0.05;
       let did = u32(in.mat.w + 0.5);
@@ -1901,6 +2191,15 @@ fn surface(in: VOut) -> Shaded {
       } else {
       emit = display(did, in.uv, max(duv * 0.012, 0.00015)) * G.sun_dir.w * mix(0.09, 0.012, night);
       }
+    }
+    case 18u: { // a downloaded aircraft's surface: its texture times its material colour
+      albedo = tex.rgb * in.col.rgb;
+      ao = 1.0;
+      let r = in.mat.z;
+      let glow = r >= 1.5;
+      rough = clamp(select(r, r - 2.0, glow), 0.08, 1.0);
+      if (glow) { emit = albedo * G.sun_dir.w * mix(0.02, 0.004, 1.0 - night); }
+      ssr = select(0.0, 0.25, rough < 0.3);
     }
     default: {}
   }
@@ -1982,7 +2281,10 @@ fn surface(in: VOut) -> Shaded {
   if (kind() == 3u) { inside = step(abs(L.x), F4_TUB.x) * step(F4_TUB.z, L.z) * step(L.z, F4_TUB.w) * step(F4_TUB.y, L.y) * select(0.0, 1.0, pt != P_HORNET); }
   if (kind() == 4u) { inside = step(abs(L.x), F22_TUB.x) * step(F22_TUB.z, L.z) * step(L.z, F22_TUB.w) * step(F22_TUB.y, L.y) * select(0.0, 1.0, pt != P_HORNET); }
   if (kind() == 6u) { inside = step(abs(L.x), CONCORDE_TUB.x) * step(CONCORDE_TUB.z, L.z) * step(L.z, CONCORDE_TUB.w) * step(CONCORDE_TUB.y, L.y) * select(0.0, 1.0, pt != P_HORNET); }
+  if (kind() == 8u) { inside = step(abs(L.x), 0.56) * step(-0.62, L.z) * step(L.z, 1.66) * step(L.y, 0.62) * select(0.0, 1.0, id != M_LIVERY && pt != P_FUSE && pt != P_COWL); }
   if (kind() == 7u) { inside = step(abs(L.x), SR71_TUB.x) * step(SR71_TUB.z, L.z) * step(L.z, SR71_TUB.w) * step(SR71_TUB.y, L.y) * select(0.0, 1.0, pt != P_HORNET); }
+  // (a downloaded aircraft has no cabin of ours where its own model is)
+  if (id == M_TEX) { inside = 0.0; }
   // (The baked occlusion already counts only the sky seen through the
   // windows; the eye adapts to the dimmer cabin, main.rs / cockpit.rs.)
   let amb_ao = mix(ao * ao * (3.0 - 2.0 * ao), 0.06 + 0.94 * ao, inside);
@@ -2011,6 +2313,207 @@ fn surface(in: VOut) -> Shaded {
   let rw = dot(envw, vec3f(0.333));
   let reflect_w = select(0.0, rw, ssr > 0.0 && rough < 0.3 && rw > 0.09) * ssr;
   return Shaded(vec4f(c, 1.0), vec4f(N, -reflect_w), select(0.0, 1.0, kill), amb_share(c));
+}
+
+// ---------------------------------------------------------------- rain on the glass
+
+// Rain on the windows (rain.rs): G.start.y is the rain falling (0..1), .z how
+// wet the glass is (0..1), .w the airspeed over it (kt indicated). A window
+// piece carries the phases of its water: glow.z the beads' turnover
+// (lifetimes), glow.w how far drops have run down (m), tint.w how far the
+// airflow has driven them (m). The water is on the outside: from the cabin
+// each drop is a tiny lens that shows the scene behind it upside down and
+// shrunk, ringed by a dark band where the light is reflected back inside it.
+
+// How hard the airflow drags a drop against the surface tension pinning it,
+// and how fast it then drives the drops (m/s); match rain.rs.
+fn rain_mob(kt: f32) -> f32 { return smoothstep(8.0, 40.0, kt); }
+fn rain_flow_speed(kt: f32) -> f32 { let s = kt / 60.0; return min(rain_mob(kt) * 0.25 * s * s, 6.0); }
+// An integer hash of a cell (exact at any phase, unlike the sine hash).
+fn rh(c: vec2f, s: u32) -> f32 {
+  var x = bitcast<u32>(i32(c.x)) * 1664525u + bitcast<u32>(i32(c.y)) * 2246822519u + s * 3266489917u;
+  x ^= x >> 15u; x *= 2654435761u; x ^= x >> 13u; x *= 1274126177u; x ^= x >> 16u;
+  return f32(x >> 8u) * (1.0 / 16777216.0);
+}
+
+// Water over a point of the glass: height above it (m), its slope along the
+// window's two axes, and how much of the pixel a drop covers.
+struct Water { h: f32, g: vec2f, cov: f32, f: f32 };
+
+// A drop sitting on the glass: a spherical cap of footprint radius r meeting
+// it at a contact angle with sine sc. q is the offset from its middle, y along
+// the way it moves; e stretches it that way (running drops elongate, and a
+// fast one smears over a frame), taper narrows it behind into a tail, k
+// flattens it (a film-thin streak), fade is the share of the frame it is
+// there for (a smeared drop only passes over a point for part of it).
+fn rain_cap(w: ptr<function, Water>, q0: vec2f, r: f32, e: f32, taper: f32, sc: f32, k: f32, px: f32, fade: f32) {
+  let sx = 1.0 + taper * max(-q0.y, 0.0) / r;
+  let q = vec2f(q0.x * sx, q0.y / e);
+  let rho2 = dot(q, q);
+  let rp = r + px;
+  if (rho2 >= rp * rp) { return; }
+  let rho = sqrt(rho2);
+  let R = r / sc;
+  let cc = sqrt(1.0 - sc * sc);
+  let s = sqrt(max(R * R - min(rho2, r * r), 1e-12));
+  let h = max(s - R * cc, 0.0) * k;
+  // Footprint edge, a pixel wide (the cap's own slope is steepest there).
+  let cov = sat((r - rho) / max(px * 0.75, 1e-6) + 0.5) * fade;
+  if (h > (*w).h || ((*w).h == 0.0 && cov > (*w).cov)) {
+    let g = -q / s * k;
+    (*w).h = h;
+    (*w).g = vec2f(g.x * sx, g.y / e);
+  }
+  (*w).cov = max((*w).cov, cov);
+}
+
+// Drops running along a (across c) at speed set by phase, one at most per
+// cell of a column, each with the trail it leaves: a thin rivulet narrowing
+// behind it and the beads it strands (fixed to the glass, so they stay put
+// as the drop moves on). Columns slip at their own pace, in fits and starts
+// (stick) where the drag barely beats the pinning.
+fn rain_run(w: ptr<function, Water>, a: f32, c: f32, cw: f32, cl: f32, phase: f32, r0: f32, dens: f32, e: f32, trail: f32, stick: f32, k: f32, px: f32, seed: u32) {
+  let col = floor(c / cw);
+  let hs = rh(vec2f(col, 0.0), seed);
+  let fq = 6.2831853 / (cl * (0.6 + 0.8 * rh(vec2f(col, 1.0), seed)));
+  let off = (0.55 + 0.9 * hs) * (phase + stick * 0.85 / fq * sin(fq * phase + 6.2831853 * hs));
+  let as_ = a - off;
+  let row = floor(as_ / cl);
+  let kc = vec2f(col, row);
+  if (rh(kc, seed + 1u) > dens) { return; }
+  let r = r0 * (0.6 + 0.8 * rh(kc, seed + 2u));
+  // The drop near the head of its cell, so its trail stays inside it.
+  let ad = (row + 0.72 + 0.2 * rh(kc, seed + 3u)) * cl + off;
+  // The path it wanders down, a function of where along the glass it is.
+  let amp = max(cw * 0.5 - r * 1.6, 0.0) * 0.6;
+  let h1 = rh(kc, seed + 4u) * 6.2831853;
+  let wob = sin(a * 31.0 + h1) * 0.6 + sin(a * 83.0 + h1 * 2.3) * 0.4;
+  let xc = (col + 0.5) * cw + amp * wob;
+  let x = c - xc;
+  let t = ad - a;
+  if (abs(x) > cw * 0.5 || t < -r * e * 1.5 || t > trail + r) { return; }
+  // (Smeared once e is mostly motion blur: fainter, as it passes in part of a frame.)
+  let fade = min(1.0, sqrt(2.5 / e));
+  rain_cap(w, vec2f(x, -t), r, e, 0.35, 0.82, k, px, fade);
+  if (t > r * 0.5 && trail > 0.0) {
+    // The rivulet: a thin cylindrical bead of water (meeting the glass at
+    // some 35 degrees), narrowing to nothing.
+    let f = sat((t - r * 0.5) / trail);
+    let wt = r * 0.32 * sqrt(1.0 - f);
+    if (abs(x) < wt + px) {
+      let R = wt / 0.57;
+      let xm = min(abs(x), wt);
+      let s = sqrt(max(R * R - xm * xm, 1e-12));
+      let h = max(s - R * 0.82, 0.0) * k;
+      let cov = sat((wt - abs(x)) / max(px * 0.75, 1e-6) + 0.5) * (1.0 - f * f) * fade;
+      if (h > (*w).h || ((*w).h == 0.0 && cov > (*w).cov)) { (*w).h = h; (*w).g = vec2f(-sign(x) * xm / s * k, 0.0); }
+      (*w).cov = max((*w).cov, cov);
+    }
+    // Stranded beads, every few millimetres along the glass.
+    let ds = r * 1.3;
+    let bi = floor(a / ds);
+    let kb = vec2f(col, bi);
+    if (rh(kb, seed + 5u) < 0.55) {
+      let ab = (bi + 0.5) * ds;
+      let tb = ad - ab;
+      if (tb > r && tb < trail * (0.6 + 0.4 * rh(kb, seed + 6u))) {
+        let rb = r * (0.18 + 0.22 * rh(kb, seed + 7u));
+        let xb = (col + 0.5) * cw + amp * (sin(ab * 31.0 + h1) * 0.6 + sin(ab * 83.0 + h1 * 2.3) * 0.4) + (rh(kb, seed + 8u) - 0.5) * r * 0.6;
+        rain_cap(w, vec2f(c - xb, a - ab), rb, 1.0, 0.0, 0.85, k, px, 1.0);
+      }
+    }
+  }
+}
+
+// Beads that land and sit, one at most per cell, each living part of every
+// turnover before it merges away and another lands elsewhere in the cell.
+fn rain_beads(w: ptr<function, Water>, p: vec2f, cs: f32, rmin: f32, rmax: f32, dens: f32, phase: f32, px: f32, seed: u32) {
+  let c = floor(p / cs);
+  let ph = phase * (0.6 + 0.8 * rh(c, seed)) + rh(c, seed + 1u);
+  let kc = c + vec2f(floor(ph) * 7.0, 0.0);
+  if (rh(kc, seed + 2u) > dens) { return; }
+  let fr = fract(ph);
+  let r = mix(rmin, rmax, pow(rh(kc, seed + 3u), 2.2)) * smoothstep(0.0, 0.02, fr) * (1.0 - smoothstep(0.96, 1.0, fr));
+  if (r <= 0.0) { return; }
+  let m = rmax / cs;
+  let o = (c + 0.5 + (vec2f(rh(kc, seed + 4u), rh(kc, seed + 5u)) - 0.5) * (1.0 - 2.0 * m)) * cs;
+  // Bigger beads sag a little and sit flatter.
+  let sc = mix(0.88, 0.72, sat((r - 0.0012) / 0.002));
+  rain_cap(w, p - o, r, 1.0, 0.0, sc, 1.0, px, 1.0);
+}
+
+// Folds one layer's water (slopes along its own across/along axes, given as
+// directions in the window's axes) into the total, the higher surface winning.
+fn rain_merge(w: ptr<function, Water>, s: Water, dc: vec2f, da: vec2f) {
+  if (s.h > (*w).h || ((*w).h == 0.0 && s.cov > (*w).cov)) {
+    (*w).h = s.h;
+    (*w).g = s.g.x * dc + s.g.y * da;
+  }
+  (*w).cov = max((*w).cov, s.cov);
+}
+
+// All the water on one window, in its own axes p (m): the airflow runs along
+// fdir over it (unit, in those axes; up a windshield, aft along the side),
+// gravity toward -y. gt: how steeply the glass leans (1 = upright), edge: 1
+// at the frame where the air is slow and beads cling. Returns the film's
+// share in .f.
+fn rain_water(p: vec2f, fdir: vec2f, gt: f32, edge: f32, px: f32) -> Water {
+  var w = Water(0.0, vec2f(0.0), 0.0, 0.0);
+  let rain = G.start.y;
+  let wet = G.start.z;
+  let kt = G.start.w;
+  let mob = rain_mob(kt);
+  let vs = rain_flow_speed(kt);
+  let fast = smoothstep(55.0, 170.0, kt);
+  // Patchy, as rain on glass always is.
+  let patchy = 0.65 + 0.7 * nz(vec3f(p * 0.9, 0.37)).r;
+  // Beads: swept off once the drag beats the pinning, except in the slow air along the frame.
+  let keep = max(1.0 - smoothstep(18.0, 110.0, kt), edge * 0.8 * (1.0 - 0.7 * fast));
+  let bd = sat(wet * 1.25) * keep * patchy;
+  if (bd > 0.0) {
+    rain_beads(&w, p, 0.0072, 0.0007, 0.0021, bd * 0.85, O.glow.z, px, 11u);
+    rain_beads(&w, p + vec2f(0.0041, 0.0023), 0.0145, 0.0015, 0.0044, bd * 0.6, O.glow.z * 0.7, px, 23u);
+  }
+  // Big drops running down while the airflow is weak (and the glass leans enough).
+  let gd = sat(wet * 1.4 - 0.25) * (1.0 - mob) * smoothstep(0.25, 0.6, gt) * patchy;
+  if (gd > 0.0) {
+    var s = Water(0.0, vec2f(0.0), 0.0, 0.0);
+    rain_run(&s, -p.y, p.x, 0.032, 0.17, O.glow.w, 0.004, gd * 0.55, 1.25, 0.10, 1.0, 1.0, px, 37u);
+    rain_merge(&w, s, vec2f(1.0, 0.0), vec2f(0.0, -1.0));
+  }
+  // Driven by the airflow: up and back over a windshield, aft along the side.
+  // (Where the glass curves, so does the flow, and the streams with it.)
+  let da = fdir;
+  let dc = vec2f(da.y, -da.x);
+  let fa = dot(p, da);
+  let fc = dot(p, dc);
+  // Smeared over a frame (1/60 s) once they move fast.
+  let blur = vs * 0.016;
+  let fd = sat(max(wet * 1.3, rain * 0.6)) * mob * (1.0 - fast * 0.85) * patchy;
+  if (fd > 0.0) {
+    let r = 0.0024;
+    var s = Water(0.0, vec2f(0.0), 0.0, 0.0);
+    rain_run(&s, fa, fc, 0.021, 0.13, O.tint.w, r, fd * 0.6, 1.15 + blur / r, 0.05 + 0.04 * mob, 1.0 - mob * 0.7, 1.0, px, 53u);
+    rain_merge(&w, s, dc, da);
+  }
+  // Fast flight: fresh drops torn into streaks that race over the glass.
+  let sd = sat(rain * 0.9 + wet * 0.5) * fast;
+  if (sd > 0.0) {
+    let r = 0.0011;
+    var s = Water(0.0, vec2f(0.0), 0.0, 0.0);
+    rain_run(&s, fa, fc, 0.0075, 0.24, O.tint.w * 1.3, r, sd * 0.3, min(1.6 + blur / r, 60.0), 0.16, 0.0, 0.25, px, 71u);
+    rain_merge(&w, s, dc, da);
+  }
+  // The thin film the airflow leaves, rippled into streaks along the flow.
+  let film = sat(wet * 1.5) * smoothstep(25.0, 140.0, kt);
+  if (film > 0.0) {
+    let n = nz(vec3f(fc * 9.0, (fa - O.tint.w * 0.8) * 0.45, 0.61));
+    let m = nz(vec3f(fc * 31.0, (fa - O.tint.w) * 1.4, 0.13));
+    let gf = ((n.gb - 0.5) * vec2f(0.05, 0.012) + (m.gb - 0.5) * vec2f(0.03, 0.006)) * film;
+    w.g += gf.x * dc + gf.y * da;
+    w.f = film;
+  }
+  return w;
 }
 
 // ---------------------------------------------------------------- transparent pass
@@ -2048,10 +2551,34 @@ fn cabin_mirror(p0: vec3f, r: vec3f, l: Light, ls: vec3f) -> vec3f {
 }
 const GS_Z = -1.30; // cabin::PANEL_Z
 
+// A downloaded aircraft's see-through surfaces (windows, propeller discs):
+// its texture's alpha times its material's, lit, with the sky mirrored on top.
+fn tex_glass(in: VOut) -> vec4f {
+  let t = tex_at(in.uv, in.mat.w, dpdx(in.uv), dpdy(in.uv));
+  let V = normalize(in.P);
+  var N = normalize(in.N);
+  if (dot(N, V) > 0.0) { N = -N; }
+  let l = light_at(in.P);
+  let sh = shadow_at(in.P, N);
+  let Ls = G.sun_dir.xyz;
+  let a = sat(t.a * in.col.a);
+  let base = t.rgb * in.col.rgb;
+  let lit = base * (l.sun * max(dot(N, Ls), 0.0) * sh / PI + l.amb * (0.55 + 0.45 * dot(N, l.upn)));
+  let ndv = max(dot(N, -V), 0.0);
+  let F = 0.04 + 0.96 * pow(1.0 - ndv, 5.0);
+  let R = reflect(V, N);
+  // (a window, whose material is see-through, reflects; a texture's cut-outs, like a propeller's blur, don't)
+  let k = select(0.0, F * (1.0 - a * 0.8), in.col.a < 0.99);
+  let H = normalize(Ls - V);
+  let glint = l.sun * ggx(max(dot(N, H), 0.0), 0.004) * vis(ndv, max(dot(N, Ls), 0.0), 0.004) * F * max(dot(N, Ls), 0.0) * sh;
+  return vec4f(lit * a + env_reflect(in.P, R, l.upn, false) * k + glint * k, sat(a + k));
+}
+
 @fragment fn fs_glass(in: VOut) -> @location(0) vec4f {
   let px = max(length(dpdx(in.P)), length(dpdy(in.P)));
   let id = u32(in.mat.x + 0.5);
   if (id == M_PLUME) { return plume(in); }
+  if (id == M_TEX) { return tex_glass(in); }
   let V = normalize(in.P);
   var N = normalize(in.N);
   let from_inside = dot(N, V) > 0.0;
@@ -2097,6 +2624,7 @@ const GS_Z = -1.30; // cabin::PANEL_Z
   if (kind() == 3u) { in_cabin = from_inside && abs(eye_l.x) < F4_CABIN[0] && eye_l.y > F4_CABIN[1] && eye_l.y < F4_CABIN[2] && eye_l.z > F4_CABIN[3] && eye_l.z < F4_CABIN[4]; }
   if (kind() == 4u) { in_cabin = from_inside && abs(eye_l.x) < F22_CABIN[0] && eye_l.y > F22_CABIN[1] && eye_l.y < F22_CABIN[2] && eye_l.z > F22_CABIN[3] && eye_l.z < F22_CABIN[4]; }
   if (kind() == 6u) { in_cabin = from_inside && abs(eye_l.x) < CONCORDE_CABIN[0] && eye_l.y > CONCORDE_CABIN[1] && eye_l.y < CONCORDE_CABIN[2] && eye_l.z > CONCORDE_CABIN[3] && eye_l.z < CONCORDE_CABIN[4]; }
+  if (kind() == 8u) { in_cabin = from_inside && abs(eye_l.x) < 0.56 && eye_l.y > -0.52 && eye_l.y < 0.62 && eye_l.z > -0.62 && eye_l.z < 1.66; }
   if (kind() == 7u) { in_cabin = from_inside && abs(eye_l.x) < SR71_CABIN[0] && eye_l.y > SR71_CABIN[1] && eye_l.y < SR71_CABIN[2] && eye_l.z > SR71_CABIN[3] && eye_l.z < SR71_CABIN[4]; }
   let wind = abs(in.Nl.x) < 0.5;
   let tb = select(vec3f(0.0, 0.0, 1.0), vec3f(1.0, 0.0, 0.0), wind);
@@ -2106,7 +2634,9 @@ const GS_Z = -1.30; // cabin::PANEL_Z
   var env = l.amb * 0.035;
   if (!from_inside) { env = env_reflect(in.P, R, l.upn, true); }
   // A sheet has two faces, and from inside both mirror the cabin.
-  if (in_cabin) {
+  // low preset skips the cabin reflection, rain spots and scratches.
+  let lowq = G.quality.x > 1.5;
+  if (in_cabin && !lowq) {
     env = select(cabin_mirror(in.L, ml * R, l, ml * Ls), deck_mirror(in.L, ml * R, l, ml * Ls), kind() == 1u) * 2.0 / (1.0 + F);
     if (fighter()) { env = pit_mirror(in.L, ml * R, l, ml * Ls) * 2.0 / (1.0 + F); }
   }
@@ -2123,7 +2653,7 @@ const GS_Z = -1.30; // cabin::PANEL_Z
   // Dried rain: rings of grime left where drops evaporated, in clusters.
   var spots = 0.0;
   let spot_cs = 0.016;
-  let fine = 1.0 - smoothstep(spot_cs * 0.06, spot_cs * 0.25, px);
+  let fine = select(1.0 - smoothstep(spot_cs * 0.06, spot_cs * 0.25, px), 0.0, lowq);
   if (fine > 0.0) {
     let cl = smoothstep(0.5, 0.78, nz(L * 1.6 + vec3f(0.4, 0.0, 0.2)).g);
     if (cl > 0.0) {
@@ -2161,7 +2691,7 @@ const GS_Z = -1.30; // cabin::PANEL_Z
   // scatters sunlight only when it lies across the line to the sun, so the
   // lit ones ring the sun and slide round as the head moves.
   let face = dot(V, Ls);
-  if (face > 0.2) {
+  if (face > 0.2 && !lowq) {
     let dv = V - Ls;
     let d2 = vec2f(dot(dv, normalize((O.model * vec4f(tb, 0.0)).xyz)), dot(dv, normalize((O.model * vec4f(bb, 0.0)).xyz)));
     let dn = d2 / max(length(d2), 1e-5);
@@ -2246,6 +2776,100 @@ const GS_Z = -1.30; // cabin::PANEL_Z
       let q = vec2i(clamp(uv * G.screen.xy, vec2f(0.0), G.screen.xy - 1.0));
       if (textureLoad(t_gdepth, q, 0) <= in.clip.z) { seen = textureSampleLevel(t_scene, s_clamp, uv, 0.0).rgb; }
     }
+    // The Hornet's canopy runs on down inside the sills, in front of the
+    // consoles: no rain where the tub's own parts are what lies behind it.
+    var skirt = false;
+    if (kind() == 2u && (G.start.y > 0.0 || G.start.z > 0.002)) {
+      let uvp = in.clip.xy * G.screen.zw;
+      let pb = G.inv_view_proj * vec4f(uvp.x * 2.0 - 1.0, 1.0 - uvp.y * 2.0, textureLoad(t_gdepth, vec2i(in.clip.xy), 0), 1.0);
+      let lb = ml * (pb.xyz / pb.w - O.model[3].xyz);
+      skirt = abs(lb.x) < 0.6 && lb.z > -6.2 && lb.z < -3.1 && lb.y > 0.0 && lb.y < in.L.y;
+    }
+    if ((G.start.y > 0.0 || G.start.z > 0.002) && !skirt) {
+      // Rain on the outside (rain_water). Its axes: those of the spots, and
+      // on the Hornet's one-piece canopy both sets, blended where they meet.
+      let nl = normalize(in.Nl);
+      let down = ml * -l.upn;
+      let gt = length(down - nl * dot(down, nl));
+      let edge_r = select(1.0 - smoothstep(0.0, 0.05, -d), 0.0, kind() == 2u);
+      let side_w = smoothstep(0.42, 0.58, abs(nl.x));
+      var wa = Water(0.0, vec2f(0.0), 0.0, 0.0);
+      var ws = Water(0.0, vec2f(0.0), 0.0, 0.0);
+      let tw = vec3f(1.0, 0.0, 0.0);
+      let bw = vec3f(0.0, 0.454, 0.891);
+      let ts = vec3f(0.0, 0.0, 1.0);
+      let bs = vec3f(0.0, 1.0, 0.0);
+      // The airflow over the glass: straight back, along it.
+      let f3 = vec3f(0.0, 0.0, 1.0) - nl * nl.z;
+      let fw = vec2f(dot(f3, tw), dot(f3, bw));
+      let fs = vec2f(dot(f3, ts), dot(f3, bs));
+      // Axes about the middle of the cockpit glass, so the turn of the flow
+      // over curved glass bends the streams rather than shearing them apart.
+      var lr = L - vec3f(0.0, 0.4, -1.3);
+      if (kind() == 1u) { lr = L - vec3f(0.0, 4.0, -26.5); }
+      if (kind() == 2u) { lr = L - vec3f(0.0, 1.0, -4.6); }
+      if (side_w < 1.0) { wa = rain_water(vec2f(dot(lr, tw), dot(lr, bw)), select(vec2f(0.0, 1.0), normalize(fw), length(fw) > 0.05), gt, edge_r, px); }
+      if (side_w > 0.0) { ws = rain_water(vec2f(dot(lr, ts), dot(lr, bs)), select(vec2f(1.0, 0.0), normalize(fs), length(fs) > 0.05), gt, edge_r, px); }
+      // Slopes into the body frame, then the world.
+      var gl = wa.g.x * tw + wa.g.y * bw;
+      var wc = wa.cov;
+      var wf = wa.f;
+      if (side_w > 0.0) {
+        let gs = ws.g.x * ts + ws.g.y * bs;
+        let pick = ws.h * side_w > wa.h * (1.0 - side_w);
+        gl = select(select(gl, gs, pick), gs, side_w >= 1.0);
+        wc = mix(wa.cov, ws.cov, side_w);
+        wf = mix(wa.f, ws.f, side_w);
+      }
+      let wv = max(wc, wf);
+      if (wv > 0.0) {
+        let nout = -N;
+        var gw = (O.model * vec4f(gl, 0.0)).xyz;
+        gw -= nout * dot(gw, nout);
+        let nd = normalize(nout - gw);
+        // Through the glass into the water (the flat sheet only bends the
+        // ray once, air to water), then out through the drop's curved face.
+        let vw = refract(V, N, 1.0 / 1.333);
+        let vo = refract(vw, -nd, 1.333);
+        let night = night_at(l.upn);
+        // Bent back inside: the dim cabin and its lights.
+        let inner = env + l.amb * 0.05 + vec3f(1.0, 0.62, 0.38) * G.sun_dir.w * 0.0025 * night * 0.12;
+        // Drops are not perfect lenses: each also scatters some of the light
+        // round it, most at its rim, so bright lights gather a halo of lit drops.
+        var near = vec3f(0.0);
+        let a0 = hash2(in.clip.xy) * 6.2831853;
+        for (var i = 0; i < 8; i++) {
+          let ang = a0 + f32(i) * 2.3999632;
+          let rad = select(9.0, 30.0, i >= 4) * (G.screen.x / 1600.0);
+          let uv = (in.clip.xy + vec2f(cos(ang), sin(ang)) * rad) * G.screen.zw;
+          near += textureSampleLevel(t_scene, s_clamp, uv, 0.0).rgb;
+        }
+        near *= 0.125;
+        var thru = inner + near * 0.3;
+        if (dot(vo, vo) > 0.5) {
+          let ct = max(dot(vo, nd), 0.0);
+          let fr = 0.02 + 0.98 * pow(1.0 - ct, 5.0);
+          // The lensed view out: whatever lies that way on screen beyond
+          // the glass, else the sky or the ground.
+          // (Under a storm that sky is its dark base: the clear sky's blue
+          // lit every runner and bead up as a bright cyan hairline.)
+          var look = (env_reflect(in.P, vo, l.upn, false) + l.sun * sh * pow(max(dot(vo, Ls), 0.0), 3000.0) * 0.5) * (1.0 - 0.85 * G.stormfx.w);
+          let cq = G.view_proj * vec4f(vo, 0.0);
+          if (cq.w > 1e-4) {
+            let uv = vec2f(0.5 + 0.5 * cq.x / cq.w, 0.5 - 0.5 * cq.y / cq.w);
+            if (all(uv > vec2f(0.0)) && all(uv < vec2f(1.0))) {
+              let q = vec2i(uv * G.screen.xy);
+              if (textureLoad(t_gdepth, q, 0) <= in.clip.z) { look = textureSampleLevel(t_scene, s_clamp, uv, 0.0).rgb; }
+            }
+          }
+          // Light scattered through the drops toward the sun.
+          look += l.sun * sh * pow(max(dot(vo, Ls), 0.0), 300.0) * 0.004;
+          thru = look * (1.0 - fr) + (inner + near * 0.3) * fr + near * 0.05;
+        }
+        rgb *= 1.0 - 0.5 * wc;
+        seen = mix(seen, thru, wv);
+      }
+    }
     return vec4f((rgb + seen * trans * tint) * cov, cov);
   }
   let alpha = 1.0 - trans;
@@ -2275,9 +2899,8 @@ fn window747(p: vec3f) -> f32 {
     best = max(sd_poly(vec2f(abs(p.x), p.y), ws, 5) - 0.06, d - 5.26);
   }
   let th = atan2(abs(p.x), p.y - 0.3);
-  var w = array<vec4f, 2>(vec4f(5.30, 5.86, 0.30, 0.55), vec4f(5.98, 6.40, 0.36, 0.55));
   for (var i = 0; i < 2; i++) {
-    let v = w[i];
+    let v = WIN747_BAYS[i];
     var q = vec2f(abs(d - (v.x + v.y) * 0.5) - (v.y - v.x) * 0.5, (abs(th - (v.z + v.w) * 0.5) - (v.w - v.z) * 0.5) * 3.4);
     q += vec2f(0.06);
     best = min(best, length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - 0.06);
@@ -2652,9 +3275,8 @@ fn relief747(pt: u32, uv: vec2f, L: vec3f, Nl: vec3f, px: f32) -> vec3f {
       let bj = (fract((d - 1.6) / 6.096 + 0.5) - 0.5) * 6.096;
       h -= ga * line(bj, gw);
       dirt += line(bj, gw * 2.5);
-      var laps = array<f32, 4>(1.7, 3.6, 5.6, 7.7);
       for (var i = 0; i < 4; i++) {
-        let ds = s - laps[i];
+        let ds = s - LAPS747[i];
         h -= ga * line(ds, gw);
         dirt += line(ds, gw * 2.0);
         rv = max(rv, rivets(d, abs(abs(ds) - 0.014), 0.035, rr) * rf);
@@ -2746,9 +3368,8 @@ fn relief747(pt: u32, uv: vec2f, L: vec3f, Nl: vec3f, px: f32) -> vec3f {
     }
     case 6u: {
       let ax = abs(L.x);
-      var cs = array<f32, 5>(0.44, 1.36, 2.48, 4.94, 6.06);
-      var c = cs[0];
-      for (var i = 1; i < 5; i++) { if (abs(ax - cs[i]) < abs(ax - c)) { c = cs[i]; } }
+      var c = CHORDS747[0];
+      for (var i = 1; i < 5; i++) { if (abs(ax - CHORDS747[i]) < abs(ax - c)) { c = CHORDS747[i]; } }
       if (abs(Nl.x) < 0.6) {
         let o = abs(ax - c);
         let gd = min(abs(o - 0.07), abs(o - 0.16));

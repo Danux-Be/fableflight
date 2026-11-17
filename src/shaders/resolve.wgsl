@@ -8,5 +8,7 @@
 }
 @fragment fn fs(@builtin(position) p: vec4f) -> @builtin(frag_depth) f32 {
   let c = vec2i(p.xy);
-  return max(max(textureLoad(t_d, c, 0), textureLoad(t_d, c, 1)), max(textureLoad(t_d, c, 2), textureLoad(t_d, c, 3)));
+  var d = 0.0;
+  for (var i = 0u; i < textureNumSamples(t_d); i++) { d = max(d, textureLoad(t_d, c, i32(i))); }
+  return d;
 }

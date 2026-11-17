@@ -69,6 +69,8 @@ pub struct Graphics {
     /// temporal anti-aliasing (F2)
     pub taa: bool,
     pub vsync: bool,
+    /// Optional frame limit (0 means no software limit).
+    pub fps_cap: u16,
 }
 
 impl Default for Graphics {
@@ -83,7 +85,7 @@ pub const SCALE_MAX: f32 = 2.0;
 impl Graphics {
     /// One of the presets (taa and vsync on).
     pub fn preset(l: Level) -> Self {
-        let mut g = Graphics { scale: 1.0, shadows: Level::High, clouds: Level::High, terrain: Level::High, scenery: Level::High, city: Level::High, trees: Level::High, cars: Level::High, ao: true, taa: true, vsync: true };
+        let mut g = Graphics { scale: 1.0, shadows: Level::High, clouds: Level::High, terrain: Level::High, scenery: Level::High, city: Level::High, trees: Level::High, cars: Level::High, ao: true, taa: true, vsync: true, fps_cap: 0 };
         g.apply(l);
         g
     }
@@ -91,15 +93,20 @@ impl Graphics {
     /// Sets everything a preset covers (not taa or vsync).
     pub fn apply(&mut self, l: Level) {
         let l = if l == Level::Off { Level::Low } else { l };
-        self.scale = l.pick(0.7, 0.85, 1.0, 1.5) as f32;
-        self.shadows = l;
+        // each preset down roughly halves gpu work, resolution first, then shadows.
+        self.scale = l.pick(0.6, 0.75, 1.0, 1.5) as f32;
+        self.shadows = match l {
+            Level::Off | Level::Low => Level::Off,
+            Level::Medium => Level::Low,
+            h => h,
+        };
         self.clouds = l;
         self.terrain = l;
         self.scenery = l;
         self.city = l;
         self.trees = l;
         self.cars = if l == Level::Ultra { Level::High } else { l };
-        self.ao = l != Level::Low;
+        self.ao = matches!(l, Level::High | Level::Ultra);
     }
 
     /// The preset these settings are, if any.
@@ -109,6 +116,11 @@ impl Graphics {
             p.apply(*l);
             p == *self
         })
+    }
+
+    /// msaa samples, 2 on low, applied on next start.
+    pub fn samples(&self) -> u32 {
+        if self.matches() == Some(Level::Low) { 2 } else { 4 }
     }
 
     /// Side of the sun's shadow map (texels; Off keeps a small unused one).
@@ -180,8 +192,13 @@ impl Graphics {
     pub fn load() -> Self {
         let j: serde_json::Value = Self::path().and_then(|p| std::fs::read(p).ok()).and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or_default();
         let mut g = Self::default();
+        g.fps_cap = j["fps_cap"].as_u64().map(|v| v as u16).filter(|v| [0, 30, 60, 90, 120, 144, 165, 240].contains(v)).unwrap_or(0);
+        // a saved preset follows the code, so retuned presets reach old saves.
         if let Some(l) = j["preset"].as_str().and_then(Level::parse) {
             g.apply(l);
+            g.taa = j["taa"].as_bool().unwrap_or(g.taa);
+            g.vsync = j["vsync"].as_bool().unwrap_or(g.vsync);
+            return g;
         }
         let lvl = |k: &str, d: Level| j[k].as_str().and_then(Level::parse).filter(|l| *l != Level::Off).unwrap_or(d);
         if let Some(s) = j["scale"].as_f64() {
@@ -215,6 +232,7 @@ impl Graphics {
             "ao": self.ao,
             "taa": self.taa,
             "vsync": self.vsync,
+            "fps_cap": self.fps_cap,
         });
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -244,8 +262,8 @@ impl Graphics {
             }
         });
         ui.label(RichText::new(match self.matches() {
-            Some(Level::Low) => "Low: 70% resolution, a coarse shadow map, quicker clouds, nearer scenery, simpler cities and trees, light traffic, no ambient occlusion.",
-            Some(Level::Medium) => "Medium: 85% resolution and a lighter version of everything else.",
+            Some(Level::Low) => "Low: 60% resolution, no shadows, quicker clouds, nearer scenery, simpler cities and trees, light traffic, no ambient occlusion.",
+            Some(Level::Medium) => "Medium: 75% resolution, a coarse shadow map, no ambient occlusion and a lighter version of everything else.",
             Some(Level::High) => "High: the full look at the window's own resolution (what the game has always drawn).",
             Some(Level::Ultra) => "Ultra: past High. Supersampled at 150%, a 6K shadow map, finer clouds, terrain and scenery further out. Wants a strong GPU.",
             _ => "Custom: tuned below.",
@@ -327,6 +345,13 @@ impl Graphics {
             ui.label("VSync");
             let t = if self.vsync { "on (no tearing)" } else { "off (uncapped)" };
             ui.checkbox(&mut self.vsync, t);
+            ui.end_row();
+            ui.label("Frame limit");
+            ui.horizontal_wrapped(|ui| {
+                for cap in [0u16, 30, 60, 90, 120, 144, 165, 240] {
+                    ui.selectable_value(&mut self.fps_cap, cap, if cap == 0 { "Unlimited".to_owned() } else { format!("{cap} FPS") });
+                }
+            });
             ui.end_row();
         });
         ui.add_space(4.0);

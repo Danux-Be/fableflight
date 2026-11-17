@@ -415,6 +415,13 @@ var<workgroup> red_t: array<f32, 64>;
 // Per lighting cell: x = optical depth toward the sun, y = light from the
 // burning gas around it (relative units), z = optical depth straight up,
 // w = whether there is anything here or next to it (for skipping empty space).
+// constant tables live in constant memory.
+const FSIM_DIRS = array<vec3f, 14>(
+  vec3f(1.0, 0.0, 0.0), vec3f(-1.0, 0.0, 0.0), vec3f(0.0, 1.0, 0.0), vec3f(0.0, -1.0, 0.0), vec3f(0.0, 0.0, 1.0), vec3f(0.0, 0.0, -1.0),
+  vec3f(0.577, 0.577, 0.577), vec3f(-0.577, 0.577, 0.577), vec3f(0.577, -0.577, 0.577), vec3f(-0.577, -0.577, 0.577),
+  vec3f(0.577, 0.577, -0.577), vec3f(-0.577, 0.577, -0.577), vec3f(0.577, -0.577, -0.577), vec3f(-0.577, -0.577, -0.577));
+const FSIM_RS = array<f32, 4>(1.5, 4.5, 9.5, 17.0);
+const FSIM_DR = array<f32, 4>(3.0, 4.0, 6.0, 9.0);
 @compute @workgroup_size(4, 4, 4)
 fn light(@builtin(global_invocation_id) id: vec3u, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wg: vec3u) {
   let c = vec3i(id);
@@ -453,18 +460,12 @@ fn light(@builtin(global_invocation_id) id: vec3u, @builtin(local_invocation_ind
   }
   // Fire light: emission seen over a sphere of directions, each ray dimmed
   // by the smoke along it.
-  var dirs = array<vec3f, 14>(
-    vec3f(1.0, 0.0, 0.0), vec3f(-1.0, 0.0, 0.0), vec3f(0.0, 1.0, 0.0), vec3f(0.0, -1.0, 0.0), vec3f(0.0, 0.0, 1.0), vec3f(0.0, 0.0, -1.0),
-    vec3f(0.577, 0.577, 0.577), vec3f(-0.577, 0.577, 0.577), vec3f(0.577, -0.577, 0.577), vec3f(-0.577, -0.577, 0.577),
-    vec3f(0.577, 0.577, -0.577), vec3f(-0.577, 0.577, -0.577), vec3f(0.577, -0.577, -0.577), vec3f(-0.577, -0.577, -0.577));
-  var rs = array<f32, 4>(1.5, 4.5, 9.5, 17.0);
-  var dr = array<f32, 4>(3.0, 4.0, 6.0, 9.0);
   for (var k = 0; k < 14; k++) {
     var tr = 1.0;
     for (var j = 0; j < 4; j++) {
-      let p = g + dirs[k] * rs[j];
+      let p = g + FSIM_DIRS[k] * FSIM_RS[j];
       let s = sc_at(p);
-      let l = dr[j] * h;
+      let l = FSIM_DR[j] * h;
       glow += fl_emitter(s, U.ext, U.k2.z) * fl_radiance(fl_kelvin(s.y)) * l * tr;
       tr *= exp(-fl_sigma(s, U.ext) * l * 0.8);
     }

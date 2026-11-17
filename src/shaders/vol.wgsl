@@ -140,6 +140,13 @@ fn dens(g: vec3f) -> vec2f {
   if (any(uvw < vec3f(0.0)) || any(uvw > vec3f(1.0))) { return vec2f(0.0); }
   return textureSampleLevel(t_vol, s_clamp, uvw, 0.0).rg;
 }
+// constant tables live in constant memory.
+const VOL_DIRS = array<vec3f, 14>(
+  vec3f(1.0, 0.0, 0.0), vec3f(-1.0, 0.0, 0.0), vec3f(0.0, 1.0, 0.0), vec3f(0.0, -1.0, 0.0), vec3f(0.0, 0.0, 1.0), vec3f(0.0, 0.0, -1.0),
+  vec3f(0.577, 0.577, 0.577), vec3f(-0.577, 0.577, 0.577), vec3f(0.577, -0.577, 0.577), vec3f(-0.577, -0.577, 0.577),
+  vec3f(0.577, 0.577, -0.577), vec3f(-0.577, 0.577, -0.577), vec3f(0.577, -0.577, -0.577), vec3f(-0.577, -0.577, -0.577));
+const VOL_RS = array<f32, 4>(0.0, 1.0, 2.5, 4.5);
+const VOL_DR = array<f32, 4>(0.6, 1.2, 1.7, 2.4);
 @compute @workgroup_size(4, 4, 4)
 fn light(@builtin(global_invocation_id) id: vec3u) {
   let c = vec3i(id);
@@ -171,17 +178,11 @@ fn light(@builtin(global_invocation_id) id: vec3u) {
   // Fire light: average emission seen over a sphere of directions, each ray
   // dimmed by the smoke along it.
   var glow = 0.0;
-  var dirs = array<vec3f, 14>(
-    vec3f(1.0, 0.0, 0.0), vec3f(-1.0, 0.0, 0.0), vec3f(0.0, 1.0, 0.0), vec3f(0.0, -1.0, 0.0), vec3f(0.0, 0.0, 1.0), vec3f(0.0, 0.0, -1.0),
-    vec3f(0.577, 0.577, 0.577), vec3f(-0.577, 0.577, 0.577), vec3f(0.577, -0.577, 0.577), vec3f(-0.577, -0.577, 0.577),
-    vec3f(0.577, 0.577, -0.577), vec3f(-0.577, 0.577, -0.577), vec3f(0.577, -0.577, -0.577), vec3f(-0.577, -0.577, -0.577));
-  var rs = array<f32, 4>(0.0, 1.0, 2.5, 4.5);
-  var dr = array<f32, 4>(0.6, 1.2, 1.7, 2.4);
   for (var k = 0; k < 14; k++) {
     var tr = 1.0;
     for (var j = 0; j < 4; j++) {
-      let s = dens(g + dirs[k] * rs[j]);
-      let l = dr[j] * cs;
+      let s = dens(g + VOL_DIRS[k] * VOL_RS[j]);
+      let l = VOL_DR[j] * cs;
       glow += s.y * l * tr;
       tr *= exp(-s.x * l * 0.8);
     }

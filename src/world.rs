@@ -6,6 +6,7 @@ use crate::geo::{self, TileId};
 use crate::render::{BuildGpu, DetailDraw, Inst, NearDraw, Renderer, TileGpu, TreeDraw, TreeInst, MAX_NEAR};
 use crate::roads::RoadNet;
 use crate::trees::{lod_span, tree_jit, NearCell, TreeDim, Under, CARDS, CARD_RANGE, IMP_DIST, LODS, LOD_DIST, LOD_JITTER, TREE_SPECIES, VARIANTS};
+use crate::weapons::{Target, TargetKey};
 use crate::sources::{Job, JobResult, Loader, DATA_ZOOM, GRID, GV};
 use glam::{DMat4, DVec3, DVec4, Vec3};
 use std::collections::{HashMap, VecDeque};
@@ -18,6 +19,8 @@ struct Tile {
     water: Vec<bool>,
     /// how much of the ocean's long waves the water shows (sources.rs TileData::sea)
     sea: Vec<f32>,
+    /// any water on the tile, so the ocean fft can idle without it.
+    wet: bool,
     last_used: u64,
     /// imagery source it was made with; a different one gets it made again
     generation: u32,
@@ -124,6 +127,7 @@ pub struct Wreck {
     pub base: f64,
     pub top: f64,
     pub col: [u8; 3],
+    #[allow(dead_code)]
     pub tile: TileId,
     /// how its walls were drawn (see `Footprint`)
     pub sty: [u8; 4],
@@ -430,10 +434,12 @@ impl World {
     /// Height of our own terrain surface (or water surface) at a lat/lon, from
     /// the most detailed tile currently loaded there.
     pub fn terrain_ground(&self, lat: f64, lon: f64) -> Option<Ground> {
+        let (mx, my) = (geo::lon_to_merc_x(lon).rem_euclid(1.0), geo::lat_to_merc_y(lat));
         for z in (2..=self.max_zoom).rev() {
-            let id = TileId::at(lat, lon, z);
+            let id = TileId::at_merc(mx, my, z);
             if let Some(Slot::Ready(t)) = self.tiles.get(&id) {
-                let (u, v) = id.frac(lat, lon);
+                let n = (1u64 << z) as f64;
+                let (u, v) = (mx * n - id.x as f64, my * n - id.y as f64);
                 let (x, y) = ((u * GRID as f64).clamp(0.0, GRID as f64 - 1e-6), (v * GRID as f64).clamp(0.0, GRID as f64 - 1e-6));
                 let (x0, y0) = (x as usize, y as usize);
                 let (fx, fy) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32);
@@ -786,7 +792,7 @@ impl World {
     /// moving ones that the 3D tiles hide (`photo_car_light`).
     pub fn car_instances(&self, cam: DVec3, activity: f32, sun: f64, out: &mut Vec<(u32, Inst)>, lights: &mut Vec<crate::airfield::Light>) {
         let fr = self.frustum.as_ref();
-        let mut push = |pos: DVec3, fwd: glam::Vec3, up: glam::Vec3, model: u8, col: [f32; 3], out: &mut Vec<(u32, Inst)>| {
+        let push = |pos: DVec3, fwd: glam::Vec3, up: glam::Vec3, model: u8, col: [f32; 3], out: &mut Vec<(u32, Inst)>| {
             let o = (pos - cam).as_vec3();
             if fr.map(|f| f.sphere(pos - cam, 8.0)).unwrap_or(true) {
                 let right = fwd.cross(up).normalize_or_zero();
@@ -853,7 +859,7 @@ impl World {
                     let slot = match res {
                         Ok(td) => {
                             bytes += crate::render::tile_bytes(&td);
-                            Slot::Ready(Box::new(Tile { center: td.center, radius: td.radius, gpu: r.upload_tile(&td), heights: td.heights, water: td.water, sea: td.sea, last_used: self.frame, generation: td.imagery_gen, refreshing: false }))
+                            Slot::Ready(Box::new(Tile { center: td.center, radius: td.radius, gpu: r.upload_tile(&td), heights: td.heights, wet: td.water.iter().any(|w| *w), water: td.water, sea: td.sea, last_used: self.frame, generation: td.imagery_gen, refreshing: false }))
                         }
                         Err(e) => {
                             log::debug!("tile {id:?} failed: {e}");
@@ -1072,15 +1078,22 @@ impl World {
         bytes
     }
 
+    /// whether any drawn terrain tile has water on it.
+    pub fn water_in_view(&self) -> bool {
+        self.draw.iter().any(|id| matches!(self.tiles.get(id), Some(Slot::Ready(t)) if t.wet))
+    }
+
     /// Zoom of the most detailed terrain tile loaded at a spot.
     pub fn ground_zoom(&self, lat: f64, lon: f64) -> Option<u8> {
-        (2..=self.max_zoom).rev().find(|z| matches!(self.tiles.get(&TileId::at(lat, lon, *z)), Some(Slot::Ready(_))))
+        let (mx, my) = (geo::lon_to_merc_x(lon).rem_euclid(1.0), geo::lat_to_merc_y(lat));
+        (2..=self.max_zoom).rev().find(|z| matches!(self.tiles.get(&TileId::at_merc(mx, my, *z)), Some(Slot::Ready(_))))
     }
 
     /// The nearest airfield that is loaded, within `r` metres.
     pub fn airfield_near(&self, p: DVec3, r: f64) -> Option<&Field> {
         self.fields.values().filter_map(|s| if let FSlot::Ready(f) = s { Some(f.as_ref()) } else { None }).filter(|f| (f.geo.center - p).length() < r + f.geo.radius as f64).min_by(|a, b| (a.geo.center - p).length().total_cmp(&(b.geo.center - p).length()))
     }
+    #[allow(dead_code)]
     pub fn airfield(&self, idx: u32) -> Option<&Field> {
         match self.fields.get(&idx) {
             Some(FSlot::Ready(f)) => Some(f),
@@ -1101,6 +1114,26 @@ impl World {
             });
             f.traffic.step(&f.geo, dt, wind_from, wind_kt, activity, pl);
         }
+    }
+
+    /// The airborne aircraft at nearby airports, as missile targets.
+    pub fn air_targets(&self, near: DVec3) -> Vec<Target> {
+        let mut out = Vec::new();
+        for s in self.fields.values() {
+            let FSlot::Ready(f) = s else { continue };
+            if (f.geo.center - near).length() > 40_000.0 {
+                continue;
+            }
+            f.traffic.targets(&f.geo, &mut out);
+        }
+        out
+    }
+
+    /// A missile hit an airport mover: take it out of the traffic.
+    pub fn down_air_target(&mut self, key: &TargetKey) -> bool {
+        let TargetKey::Airport { apt, mover } = key else { return false };
+        let Some(FSlot::Ready(f)) = self.fields.get_mut(apt) else { return false };
+        f.traffic.down(*mover)
     }
 
     /// Pavement to draw: each airfield with its centre relative to the camera.
@@ -1488,6 +1521,10 @@ impl World {
                 close: near,
             });
         }
+        // near to far, so nearer geometry hides what is behind it before it is shaded.
+        tiles.sort_by(|a, b| Vec3::new(a.1[0], a.1[1], a.1[2]).length_squared().total_cmp(&Vec3::new(b.1[0], b.1[1], b.1[2]).length_squared()));
+        let key = |d: &DetailDraw| Vec3::new(d.u[0], d.u[1], d.u[2]).length() - d.radius;
+        details.sort_by(|a, b| key(a).total_cmp(&key(b)));
         (tiles, details, near_inst)
     }
 }
