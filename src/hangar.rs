@@ -912,6 +912,9 @@ fn fit(j: &jsbsim::Aircraft, parts: &[(Option<Part>, Option<Part>)], folder: &st
     let span = j.span_ft * FT;
     let m = mass_half / base.mass;
     let mut s = base.clone();
+    // The body's own derivatives describe its airframe, not this one: an
+    // imported type is flown by the scaled handling until it has its own.
+    s.aero = None;
 
     // Mass, balance, fuel.
     s.mass = mass_half;

@@ -325,7 +325,10 @@ pub enum Engine {
 
 /// The handling: angular accelerations straight from dynamic pressure (see
 /// `Plane::step`). `q_ref` is the dynamic pressure (Pa) at which control
-/// authority is "1"; `damp_v` turns rotation rates into damping.
+/// authority is "1"; `damp_v` turns rotation rates into damping. A type with
+/// a moment-based model (`Spec::aero`, docs/flight-model.md) is not flown by
+/// these: only `q_ref` (the buffet's onset), `roll_ctl` (a hanging aileron's
+/// flapping) and `alpha_ctl` (the autopilot's reference) are still read.
 #[derive(Clone)]
 pub struct Handling {
     pub q_ref: f64,
@@ -357,6 +360,84 @@ pub struct Handling {
     pub stall_pitch: f64,
     pub stall_drop: f64,
     pub stall_yaw: f64,
+}
+
+/// A moment-based aerodynamic model (six degrees of freedom): stability and
+/// control derivatives, per radian, in the usual aerodynamic body axes (x
+/// forward, y right, z down; p rolls the right wing down, q pitches the nose
+/// up, r yaws it right; L, M, N the moments about them), with the rates made
+/// non-dimensional as p·b/2V, q·c/2V, r·b/2V (c the mean aerodynamic chord)
+/// and the moments referred to `cg_ref`. A type that has one is flown through
+/// Euler's rigid-body equations on these moments (`plane/moments.rs`) and its
+/// `Handling` only sets the buffet's onset; the lift and drag polar stays
+/// `Spec`'s own (`plane::lift_drag`), with the increments below added to it.
+///
+/// Control conventions: elevator δe positive trailing edge down (so
+/// `pitch_de` < 0), aileron δa positive with the right aileron up (rolls
+/// right: `roll_da` > 0), rudder δr positive trailing edge left (yaws left:
+/// `yaw_dr` < 0).
+#[derive(Clone)]
+pub struct Aero {
+    /// the CG the moment derivatives are given about (fraction of the MAC);
+    /// at another CG the lift moves the pitching moment by CL·(h − h_ref)
+    pub cg_ref: f64,
+    /// product of inertia Ixz (kg m², aerodynamic body axes)
+    pub ixz: f64,
+    /// lift from the pitch rate, the rate of change of the angle of attack, the elevator
+    pub lift_q: f64,
+    pub lift_adot: f64,
+    pub lift_de: f64,
+    /// side force from sideslip, roll rate, yaw rate, rudder
+    pub side_b: f64,
+    pub side_p: f64,
+    pub side_r: f64,
+    pub side_dr: f64,
+    /// pitch: at zero angle of attack, static stability (and the part of it
+    /// the tailplane gives, lost with it), damping, downwash lag, elevator,
+    /// full flaps, and the nose-down break of a full stall
+    pub pitch_0: f64,
+    pub pitch_a: f64,
+    pub pitch_a_tail: f64,
+    pub pitch_q: f64,
+    pub pitch_adot: f64,
+    pub pitch_de: f64,
+    pub pitch_flap: f64,
+    pub pitch_stall: f64,
+    /// roll: the rigging offset (wing incidence and aileron trim that hold
+    /// the propeller's torque at cruise), dihedral effect, damping, from yaw
+    /// rate, aileron, rudder; in a full stall, the wing that drops first and
+    /// the yaw rate that feeds a spin
+    pub roll_0: f64,
+    pub roll_b: f64,
+    pub roll_p: f64,
+    pub roll_r: f64,
+    pub roll_da: f64,
+    pub roll_dr: f64,
+    pub roll_stall_drop: f64,
+    pub roll_stall_r: f64,
+    /// yaw: the fin's rigging offset, weathercock stability (and the fin's
+    /// share of it), from roll rate, damping, aileron, rudder
+    pub yaw_0: f64,
+    pub yaw_b: f64,
+    pub yaw_b_fin: f64,
+    pub yaw_p: f64,
+    pub yaw_r: f64,
+    pub yaw_da: f64,
+    pub yaw_dr: f64,
+    /// surface travel (rad): elevator up and down, aileron (the mean of the
+    /// up-going and down-going one), rudder either way
+    pub de_max: [f64; 2],
+    pub da_max: f64,
+    pub dr_max: f64,
+    /// a propeller's effects: the share of its slipstream's extra dynamic
+    /// pressure (T/A) the tail surfaces sit in; the arm (m) of the yawing
+    /// moment its spiralling slipstream puts on the fin per newton of thrust,
+    /// and how that grows with the angle of attack (P-factor, per rad); the
+    /// thrust line's height above the CG (m)
+    pub prop_wash: f64,
+    pub prop_yaw_arm: f64,
+    pub prop_p_factor: f64,
+    pub thrust_y: f64,
 }
 
 /// The head-on outline of the hole it punches through a building (m, body
@@ -583,6 +664,8 @@ pub struct Spec {
     pub steer_fade: f64,
     pub engine: Engine,
     pub handling: Handling,
+    /// a moment-based model (see `Aero`); None: flown by `handling`
+    pub aero: Option<Aero>,
 
     // ---- the game around it
     /// starting speed in the air, and on a final approach (m/s) with that flap notch
@@ -614,6 +697,17 @@ impl Spec {
     /// them modelled; other types get an empty list.)
     pub fn missiles(&self) -> &'static [MissileStation] {
         if self.keys.contains(&"fa18") { &fa18::MISSILES } else { &[] }
+    }
+
+    /// The steady change in angle of attack (rad) a full pull on the stick
+    /// buys: with a moment-based model, the elevator's moment over the
+    /// static stability; otherwise the handling's own figure. What an
+    /// autopilot's pitch servo scales its gains by.
+    pub fn alpha_per_stick(&self) -> f64 {
+        match &self.aero {
+            Some(ae) => ae.de_max[0] * (ae.pitch_de / ae.pitch_a).abs(),
+            None => self.handling.alpha_ctl,
+        }
     }
 
     /// Gear that never retracts (no fold rate): always down, the gear key does nothing.

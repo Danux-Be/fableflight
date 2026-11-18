@@ -4,7 +4,7 @@
 //! The cockpit lives in `cabin.rs`.
 pub mod cabin;
 
-use crate::aircraft::{Engine, Handling, Hole, Hull, Leg, Part, Piston, Sound, Spec, Tail};
+use crate::aircraft::{Aero, Engine, Handling, Hole, Hull, Leg, Part, Piston, Sound, Spec, Tail};
 use crate::airframe::*;
 use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -27,6 +27,76 @@ const V_NONE: f64 = 1e9;
 const fn leg(at: DVec3, r: f32, travel: f64, steer: f64, fold_vn: f64, fold_kick: DVec3, name: &'static str) -> Leg {
     Leg { at, wheel_r: r as f64, travel, k: 70_000.0, c: 7_000.0, nf_max: 120_000.0, steer, brakes: at.x != 0.0, side_k: 5000.0, side_mu: 0.9, roll_k: 80.0, roll_mu: 0.025, brake_k: 2500.0, brake_mu: 0.55, fold_vn, fold_kick, name }
 }
+
+/// The six-degree-of-freedom model's derivatives (per radian; see `Aero`
+/// for the axes and signs).
+///
+/// Source: the Cessna 172 cruise set of Roskam, *Airplane Flight Dynamics
+/// and Automatic Flight Controls* (5000 ft, 219 ft/s, CG 25% MAC, 2650 lb,
+/// S 174 ft², b 35.8 ft, MAC 4.9 ft), as tabulated by the UIUC LaRCsim
+/// model (https://us1mirror.flightgear.org/terrasync/fgdata/fgdata_2020_3/Aircraft-uiuc/models/cessna172/linear.html)
+/// and the FlightGear AISim c172p set
+/// (https://git.nayala.duckdns.org/fly/fgdata/src/branch/proj-3d/Aircraft-aisim/README).
+/// Those give δa with the right aileron up and quote Clδa = −0.178 and
+/// Cnδa = +0.053 in UIUC's sign, +0.178 / −0.053 in AISim's: the pair is
+/// the same, and here it is written for δa rolling right. Ixx, Iyy, Izz
+/// (948, 1346, 1967 slug ft²) are `inertia` above; Ixz is given as 0.
+/// Surface travel from the same UIUC table (elevator 28° up, 23° down;
+/// ailerons 20° up, 15° down; rudder 16° each way), which matches the 172
+/// POH rigging. The set is for the fixed-gear 172; the 172RG's wing, tail
+/// and fuselage lines are the same, so it is used as is.
+///
+/// Estimates (no published figure for them; marked so): the tailplane's
+/// and fin's shares of Cmα and Cnβ (used only when the tail is broken off),
+/// the flap and stall pitching moments, the stall's roll terms (converted
+/// from this type's earlier handling values), the slipstream's share on the
+/// tail, its swirl and P-factor arms, and Cl0 and Cn0, the rigging that
+/// cancels the propeller's torque and swirl at cruise power (about 60%, 107
+/// kt: so it flies straight hands off there, and needs right rudder and a
+/// little right aileron climbing at full power, as the real one does). Cm0 is Roskam's −0.015 at his CL0 of 0.31 moved to
+/// this model's angle of attack (CL0 0.25): −0.005.
+pub const AERO: Aero = Aero {
+    cg_ref: 0.25,
+    ixz: 0.0,
+    lift_q: 3.9,
+    lift_adot: 1.7,
+    lift_de: 0.43,
+    side_b: -0.31,
+    side_p: -0.037,
+    side_r: 0.21,
+    side_dr: 0.187,
+    pitch_0: -0.005,
+    pitch_a: -0.89,
+    pitch_a_tail: -1.3,
+    pitch_q: -12.4,
+    pitch_adot: -5.2,
+    pitch_de: -1.28,
+    pitch_flap: -0.06,
+    pitch_stall: -0.16,
+    roll_0: 0.0010,
+    roll_b: -0.089,
+    roll_p: -0.47,
+    roll_r: 0.096,
+    roll_da: 0.178,
+    roll_dr: 0.0147,
+    roll_stall_drop: 0.03,
+    roll_stall_r: 0.2,
+    yaw_0: 0.0012,
+    yaw_b: 0.065,
+    yaw_b_fin: 0.125,
+    yaw_p: -0.03,
+    yaw_r: -0.099,
+    yaw_da: -0.053,
+    yaw_dr: -0.0657,
+    de_max: [28.0 * DEG, 23.0 * DEG],
+    da_max: 17.5 * DEG,
+    dr_max: 16.0 * DEG,
+    prop_wash: 0.5,
+    prop_yaw_arm: 0.3,
+    prop_p_factor: 1.5,
+    thrust_y: 0.0,
+};
+const DEG: f64 = std::f64::consts::PI / 180.0;
 
 pub static SPEC: Spec = Spec {
     id: 0,
@@ -187,6 +257,7 @@ pub static SPEC: Spec = Spec {
         stall_drop: 1.8,
         stall_yaw: 2.5,
     },
+    aero: Some(AERO),
     cruise: 55.0,
     approach: (36.0, 2),
     cam_dist: 16.0,

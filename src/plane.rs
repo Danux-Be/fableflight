@@ -20,6 +20,9 @@ use crate::geo;
 use crate::world::{TreeRef, World};
 use glam::{DMat3, DQuat, DVec3, Mat4, Vec3};
 
+mod moments;
+#[cfg(test)]
+mod modes;
 mod rocket;
 
 #[derive(Default, Clone, Copy)]
@@ -145,6 +148,12 @@ pub struct Plane {
     pub on_ground: bool,
     pub stalled: bool,
     pub alpha: f64,
+    /// a moment-based type's filtered rate of change of the angle of attack
+    /// (rad/s), the angle it came from (NaN: no rate yet), and its propeller
+    /// slipstream's extra dynamic pressure over the tail (Pa)
+    alpha_dot: f64,
+    alpha_prev: f64,
+    wash_q: f64,
     pub g_load: f64,
     /// smoothed control inputs: pitch, yaw, roll
     pub stick: DVec3,
@@ -173,8 +182,14 @@ pub struct Plane {
     pub wheel_spin: [f64; MAX_GEAR],
     /// propeller (or fan) speed, rad/s
     pub prop_rate: f64,
-    /// the angle of attack the auto-trim is holding (drives the trim wheel)
+    /// the angle of attack the auto-trim is holding (drives the trim wheel;
+    /// for a moment-based type, the elevator trim tab's setting read as the
+    /// angle it holds clean at the reference CG)
     pub trim: f64,
+    /// pilot aid for a moment-based type: with the pedals left alone in the
+    /// air, the rudder keeps the ball in the middle (the handling-based types
+    /// coordinate themselves)
+    pub auto_rudder: bool,
     /// trees struck during the last step, for the caller to knock down
     pub tree_hits: Vec<TreeRef>,
     /// recent brushes with foliage
@@ -306,6 +321,9 @@ impl Plane {
             on_ground: false,
             stalled: false,
             alpha: 0.0,
+            alpha_dot: 0.0,
+            alpha_prev: f64::NAN,
+            wash_q: 0.0,
             g_load: 1.0,
             stick: DVec3::ZERO,
             flaps: 0.0,
@@ -325,6 +343,7 @@ impl Plane {
             wheel_spin: [0.0; MAX_GEAR],
             prop_rate: 0.0,
             trim: 0.0,
+            auto_rudder: true,
             tree_hits: Vec::new(),
             brushes: 0.0,
             dmg: Damage::new(spec),
@@ -365,13 +384,14 @@ impl Plane {
         // Nose up by the angle of attack that carries the weight at this speed
         // and height, and trimmed there, so it starts out in level flight.
         let rho = density(alt);
-        p.trim = p.alpha_level(speed, rho, 0.0);
+        let alpha = p.alpha_level(speed, rho, 0.0);
+        p.set_trim(alpha, 0.0);
         // Power for level flight too, and the propeller (or fans) already
         // turning as that power has them, or it starts out climbing or sinking.
         p.throttle = if speed > 20.0 { p.throttle_for(speed, alt, 0.0, 0.0, 0.0) } else { 0.0 };
         p.charge = p.throttle;
         p.settle_engine(speed, alt);
-        p.rot = DQuat::from_mat3(&DMat3::from_cols(f.cross(u), u, -f)) * DQuat::from_rotation_x(p.trim);
+        p.rot = DQuat::from_mat3(&DMat3::from_cols(f.cross(u), u, -f)) * DQuat::from_rotation_x(alpha);
         p
     }
 
@@ -588,14 +608,23 @@ impl Plane {
         let rho = density(h);
         let v = self.airspeed().length();
         let flap_cl = self.spec.flap_cl * self.flaps;
-        let a_old = self.trim;
-        self.trim = self.alpha_level(v, rho, flap_cl);
+        self.alpha_prev = f64::NAN;
+        // (A moment-based type's trim is a tab setting, not its attitude: it
+        // is flying at the angle of attack its airspeed shows.)
+        let a_old = if self.spec.aero.is_some() {
+            let vb = self.rot.inverse() * self.airspeed();
+            (-vb.y).atan2(-vb.z)
+        } else {
+            self.trim
+        };
+        let a_new = self.alpha_level(v, rho, flap_cl);
+        self.set_trim(a_new, self.flaps);
         // Pitch the nose to the new angle of attack and the flight path down the glide.
         let up = self.pos.normalize();
         let fp = (self.airspeed() - up * descent).normalize();
         self.vel = self.wind + fp * v;
         let right = self.right();
-        self.rot = DQuat::from_axis_angle(right, self.trim - a_old - (descent / v).asin()) * self.rot;
+        self.rot = DQuat::from_axis_angle(right, a_new - a_old - (descent / v).asin()) * self.rot;
         self.throttle = self.throttle_for(v, h, self.flaps, self.gear, descent);
         self.charge = self.throttle;
         self.settle_engine(v, h);
@@ -1207,6 +1236,15 @@ impl Plane {
         }
     }
     /// Angle of attack (rad) that carries the weight at true airspeed `v`.
+    /// Trims for steady flight at the angle of attack `alpha` with the flaps
+    /// at `flaps`: for a moment-based type the tab setting that holds it
+    /// (with the load as it is), otherwise that angle itself.
+    fn set_trim(&mut self, alpha: f64, flaps: f64) {
+        self.trim = match &self.spec.aero {
+            Some(ae) => moments::trim_for(self.spec, ae, alpha, flaps, self.cg()),
+            None => alpha,
+        };
+    }
     fn alpha_level(&self, v: f64, rho: f64, flap_cl: f64) -> f64 {
         let s = self.spec;
         let q = 0.5 * rho * v * v;
@@ -1408,6 +1446,17 @@ impl Plane {
         // Control surfaces do not snap.
         let target = DVec3::new(c.pitch, c.yaw, c.roll);
         self.stick += (target - self.stick) * (dt * 7.0).min(1.0);
+        if spec.aero.is_some() && self.auto_rudder && !self.on_ground && c.yaw.abs() < 0.02 {
+            // The auto-rudder: the pedals against the sideslip (the ball) and
+            // against the yaw rate (a yaw damper: the Dutch roll settles at
+            // once). Quick, or its lag would feed the Dutch roll instead.
+            let vb = self.rot.inverse() * self.airspeed();
+            let v = vb.length();
+            if v > 10.0 {
+                let want = (vb.x / v * 2.5 + self.omega.y * 0.6).clamp(-1.0, 1.0);
+                self.stick.y += (want - self.stick.y) * (dt * 25.0).min(1.0);
+            }
+        }
         // Flaps run on an electric motor (or hydraulics), the gear on a pump;
         // the squat switch keeps the gear down while there is weight on the wheels.
         let actuator_power = spec.id != 0 || self.sys.powered();
@@ -1448,6 +1497,8 @@ impl Plane {
         let mut wdot = DVec3::ZERO;
         let q = 0.5 * rho * v * v;
         let k = self.scale();
+        // A moment-based type's moments this step (L, M, N, aerodynamic axes).
+        let mut m_aero = DVec3::ZERO;
 
         // Spoilers: the speedbrake lever in flight; on the ground, with the
         // power off and still rolling fast, they all come up to dump the lift.
@@ -1517,7 +1568,7 @@ impl Plane {
                 self.dmg.vibe += smooth(spec.mmo - 0.02, spec.mmo + 0.05, mach) as f32 * 0.8;
             }
             let lift_dir = DVec3::X.cross(vh).normalize_or_zero();
-            force_b += lift_dir * (q * area * cl) - vh * (q * area * cd) + DVec3::X * (-0.9 * beta * q * spec.wing_area);
+            force_b += lift_dir * (q * area * cl) - vh * (q * area * cd);
 
             // Direct angular accelerations, scaled by dynamic pressure; the
             // damping of a rotation grows only with airspeed (it comes from the
@@ -1538,45 +1589,80 @@ impl Plane {
             if el > 0.05 && self.stick.x.abs() > 0.06 {
                 self.trim += (alpha_1g - self.trim) * (dt * 0.5).min(1.0);
             }
-            // Balance: aft, the static margin shrinks, so the nose is lighter and
-            // quicker to answer (beyond the aft limit, barely stable); forward, it
-            // is stiff and heavy, and the elevator runs out sooner (a hard flare).
-            let shift = self.cg() - spec.cg[0];
-            let margin = 0.15 - shift;
-            let cg_stiff = (0.4 + 0.6 * margin / 0.15).clamp(0.15, 1.8);
-            let cg_auth = (1.0 + 1.5 * shift).clamp(0.5, 1.4);
-            // (The stick sets the elevator; how much angle of attack that buys is
-            // its moment over the stability: less stable, more for the same pull.)
-            let cg_sens = (1.0 / cg_stiff).min(2.5);
-            let mut alpha_cmd = self.trim + self.stick.x * hd.alpha_ctl * el * cg_auth * cg_sens;
-            if spec.fbw_g > 0.0 {
-                // Fly-by-wire: the stick asks for load, never more than the limit.
-                let alpha_for = |g: f64| (g * mass * 9.81 / (q * area).max(1.0) - spec.cl0 - flap_cl) / spec.cl_a;
-                alpha_cmd = alpha_cmd.clamp(alpha_for(-0.4 * spec.fbw_g), alpha_for(spec.fbw_g));
-            }
-            // Pitch stiffness comes from the tailplane; without one the nose wanders off.
-            let stiff = (hd.pitch_k * st - hd.pitch_k_lost * (1.0 - st)) * cg_stiff;
-            wdot.x = a * (stiff * (alpha_cmd - alpha) + self.stick.x * hd.pitch_ctl * el * cg_auth) - hd.pitch_d * ad * (0.3 + 0.7 * st) * om.x;
-            // Roll damping fades in a stall, and past it turns round: the wing going
-            // down meets the air at a still higher angle and loses still more lift.
-            // An airliner's outboard ailerons lock out once the flaps are up.
-            let roll_damp = (1.0 - 1.5 * stall).max(-0.35);
-            let clean = hd.roll_clean + (1.0 - hd.roll_clean) * smooth(0.0, 0.1, self.flaps);
-            wdot.z = a * (-hd.roll_ctl * clean * self.stick.z * roll_auth - hd.roll_beta * beta) - hd.roll_d * ad * roll_damp * om.z;
-            wdot.y = a * (-hd.yaw_ctl * self.stick.y * rud - hd.yaw_beta * beta * fin) - hd.yaw_d * ad * (0.25 + 0.75 * fin) * om.y;
-            // Dihedral: a banked aircraft slips toward the low wing, which then
-            // meets the air at a higher angle and lifts it back, slowly (but not upside down).
-            wdot.z -= a * hd.dihedral * self.right().dot(upw) * self.up().dot(upw).max(0.0);
-            // Adverse yaw: the aileron that goes down drags its wing back.
-            wdot.y += a * hd.adverse * self.stick.z * roll_auth * cl.clamp(0.0, 1.6);
-            // A stalled wing drops the nose, and one wing goes first: which one
-            // wanders, and a yawing aircraft drops the wing that is going back (a spin).
-            // (Only with real airflow over the wing: parked in a tailwind the
-            // angle of attack is backwards, and that is no stall.)
-            let flow = smooth(0.02, 0.1, a);
-            wdot.x -= stall * flow * hd.stall_pitch * alpha.signum();
+            // Which wing a stall drops first wanders.
             self.drop = (self.drop + (self.gauss() * 1.2 - self.drop * 0.4) * dt).clamp(-1.0, 1.0);
-            wdot.z += stall * flow * a.max(0.25) * (hd.stall_drop * self.drop + hd.stall_yaw * om.y);
+            if let Some(ae) = &spec.aero {
+                // The moment-based model (plane/moments.rs): forces and moments
+                // from the stability and control derivatives, integrated below
+                // through Euler's equations.
+                let raw = if self.alpha_prev.is_finite() { (alpha - self.alpha_prev) / dt } else { 0.0 };
+                self.alpha_prev = alpha;
+                self.alpha_dot += (raw.clamp(-5.0, 5.0) - self.alpha_dot) * (dt * 25.0).min(1.0);
+                let out = moments::aero(spec, ae, &moments::State {
+                    alpha,
+                    beta,
+                    alpha_dot: self.alpha_dot,
+                    v,
+                    qbar: q,
+                    omega: om,
+                    stick: self.stick,
+                    trim: self.trim,
+                    flaps: self.flaps,
+                    flap_eff,
+                    stall,
+                    cl,
+                    cg: self.cg(),
+                    elevator: el,
+                    stab: st,
+                    fin,
+                    rudder: rud,
+                    ailerons: roll_auth,
+                    drop: self.drop,
+                    wash_q: self.wash_q,
+                });
+                force_b += lift_dir * (q * area * out.d_cl) + DVec3::X * (q * spec.wing_area * out.cy);
+                m_aero += out.moment;
+            } else {
+                force_b += DVec3::X * (-0.9 * beta * q * spec.wing_area);
+                // Balance: aft, the static margin shrinks, so the nose is lighter and
+                // quicker to answer (beyond the aft limit, barely stable); forward, it
+                // is stiff and heavy, and the elevator runs out sooner (a hard flare).
+                let shift = self.cg() - spec.cg[0];
+                let margin = 0.15 - shift;
+                let cg_stiff = (0.4 + 0.6 * margin / 0.15).clamp(0.15, 1.8);
+                let cg_auth = (1.0 + 1.5 * shift).clamp(0.5, 1.4);
+                // (The stick sets the elevator; how much angle of attack that buys is
+                // its moment over the stability: less stable, more for the same pull.)
+                let cg_sens = (1.0 / cg_stiff).min(2.5);
+                let mut alpha_cmd = self.trim + self.stick.x * hd.alpha_ctl * el * cg_auth * cg_sens;
+                if spec.fbw_g > 0.0 {
+                    // Fly-by-wire: the stick asks for load, never more than the limit.
+                    let alpha_for = |g: f64| (g * mass * 9.81 / (q * area).max(1.0) - spec.cl0 - flap_cl) / spec.cl_a;
+                    alpha_cmd = alpha_cmd.clamp(alpha_for(-0.4 * spec.fbw_g), alpha_for(spec.fbw_g));
+                }
+                // Pitch stiffness comes from the tailplane; without one the nose wanders off.
+                let stiff = (hd.pitch_k * st - hd.pitch_k_lost * (1.0 - st)) * cg_stiff;
+                wdot.x = a * (stiff * (alpha_cmd - alpha) + self.stick.x * hd.pitch_ctl * el * cg_auth) - hd.pitch_d * ad * (0.3 + 0.7 * st) * om.x;
+                // Roll damping fades in a stall, and past it turns round: the wing going
+                // down meets the air at a still higher angle and loses still more lift.
+                // An airliner's outboard ailerons lock out once the flaps are up.
+                let roll_damp = (1.0 - 1.5 * stall).max(-0.35);
+                let clean = hd.roll_clean + (1.0 - hd.roll_clean) * smooth(0.0, 0.1, self.flaps);
+                wdot.z = a * (-hd.roll_ctl * clean * self.stick.z * roll_auth - hd.roll_beta * beta) - hd.roll_d * ad * roll_damp * om.z;
+                wdot.y = a * (-hd.yaw_ctl * self.stick.y * rud - hd.yaw_beta * beta * fin) - hd.yaw_d * ad * (0.25 + 0.75 * fin) * om.y;
+                // Dihedral: a banked aircraft slips toward the low wing, which then
+                // meets the air at a higher angle and lifts it back, slowly (but not upside down).
+                wdot.z -= a * hd.dihedral * self.right().dot(upw) * self.up().dot(upw).max(0.0);
+                // Adverse yaw: the aileron that goes down drags its wing back.
+                wdot.y += a * hd.adverse * self.stick.z * roll_auth * cl.clamp(0.0, 1.6);
+                // A stalled wing drops the nose, and one wing goes first: which one
+                // wanders, and a yawing aircraft drops the wing that is going back (a spin).
+                // (Only with real airflow over the wing: parked in a tailwind the
+                // angle of attack is backwards, and that is no stall.)
+                let flow = smooth(0.02, 0.1, a);
+                wdot.x -= stall * flow * hd.stall_pitch * alpha.signum();
+                wdot.z += stall * flow * a.max(0.25) * (hd.stall_drop * self.drop + hd.stall_yaw * om.y);
+            }
             // A wing that ends short of the tip lifts less than its opposite: it
             // drops, and the drag of its ragged end pulls the nose round.
             let arm = |b: f32| ((b + spec.span) * 0.5) as f64;
@@ -1593,6 +1679,8 @@ impl Plane {
                     self.dmg.vibe += 0.12 * a as f32;
                 }
             }
+        } else {
+            self.alpha_prev = f64::NAN;
         }
         // The engines. A damaged engine (oil leaking away, a pod struck) loses
         // power and fails; a snapped propeller blade shakes it to pieces; with
@@ -1661,11 +1749,20 @@ impl Plane {
                     thrust = 0.0;
                 }
                 force_b += DVec3::NEG_Z * thrust;
-                // The propeller turns clockwise seen from the cockpit: its torque rolls the
-                // aircraft left and its spiralling slipstream (and P-factor, climbing
-                // slowly) yaws it left. The fin and ailerons are rigged for the cruise, so
-                // it is full power at low speed that needs right rudder.
-                if v > 2.0 {
+                let disc = std::f64::consts::FRAC_PI_4 * pe.prop_d * pe.prop_d;
+                if let Some(ae) = &spec.aero {
+                    // The moment-based model takes the propeller's moments as
+                    // they are (plane/moments.rs): its torque's reaction, the
+                    // slipstream's swirl and P-factor, the gyroscopic moment, and
+                    // the slipstream's extra dynamic pressure over the tail.
+                    let torque = if prop_k > 0.0 { q_prop } else { 0.0 };
+                    m_aero += moments::propeller(ae, thrust, torque, self.alpha, pe.prop_i * self.prop_rate, self.omega);
+                    self.wash_q = if disc > 0.01 { thrust.max(0.0) / disc } else { 0.0 };
+                } else if v > 2.0 {
+                    // The propeller turns clockwise seen from the cockpit: its torque rolls the
+                    // aircraft left and its spiralling slipstream (and P-factor, climbing
+                    // slowly) yaws it left. The fin and ailerons are rigged for the cruise, so
+                    // it is full power at low speed that needs right rudder.
                     let slow = (1.0 - v / 60.0).max(0.0);
                     let tk = thrust.max(0.0) / pe.static_thrust;
                     wdot.y += tk * slow * (0.22 + 0.25 * self.alpha.max(0.0));
@@ -1677,7 +1774,6 @@ impl Plane {
                     // term above. A share of it reaches the rudder (the rest passes
                     // below and beside it), and it fades out by 30 m/s, where the
                     // airflow itself does the work.
-                    let disc = std::f64::consts::FRAC_PI_4 * pe.prop_d * pe.prop_d;
                     if self.on_ground && disc > 0.01 {
                         let q_wash = thrust.max(0.0) / disc;
                         let fade = 1.0 - smooth(10.0, 30.0, v);
@@ -1745,6 +1841,9 @@ impl Plane {
                 self.fuel_flow = if self.running { ff[0] + (ff[1] - ff[0]) * dry + (ff[2] - ff[1]) * self.burner * wet } else { 0.0 };
                 thrust *= 1.0 - self.reverser * (1.0 + fe.reverse);
                 force_b += DVec3::NEG_Z * thrust;
+                if let Some(ae) = &spec.aero {
+                    m_aero.y -= thrust * ae.thrust_y;
+                }
                 self.dmg.smoke = if self.dmg.engine < 1.0 { (1.0 - self.dmg.engine) * (0.3 + 0.7 * self.n1 as f32) } else { 0.0 };
             }
             Engine::Rocket(_) => {}
@@ -2110,8 +2209,17 @@ impl Plane {
         // Rough air rattles the cabin.
         self.dmg.vibe += ((self.air.sigma_w - 0.6).max(0.0) * 0.07 * smooth(10.0, 40.0, v)) as f32;
         self.vel += acc * dt;
-        self.omega += (wdot + torque_b / spec.inertia) * dt;
-        self.omega = self.omega.clamp_length_max(6.0);
+        if let Some(ae) = &spec.aero {
+            // Euler's equations on every moment: the air's, the propeller's,
+            // the ground's (and the damage's own angular accelerations). The
+            // cap only guards the integrator in a tumbling crash.
+            let m = m_aero + moments::to_aero(torque_b);
+            self.omega += (moments::euler(spec.inertia, ae.ixz, self.omega, m) + wdot) * dt;
+            self.omega = self.omega.clamp_length_max(15.0);
+        } else {
+            self.omega += (wdot + torque_b / spec.inertia) * dt;
+            self.omega = self.omega.clamp_length_max(6.0);
+        }
         self.pos += self.vel * dt;
         self.rot = (self.rot * DQuat::from_scaled_axis(self.omega * dt)).normalize();
 
@@ -2603,7 +2711,11 @@ mod tests {
         let steps = (secs / dt) as usize;
         for i in 0..steps {
             let roll_err = -p.right().dot(p.pos.normalize());
-            let c = Controls { pitch: pitch(p).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), ..Default::default() };
+            // A moment-based type has no built-in coordination: the test pilot
+            // keeps the ball in the middle with the pedals, as a real one does.
+            let vb = p.rot.inverse() * p.airspeed();
+            let yaw = if p.spec.aero.is_some() { (vb.x / vb.length().max(1.0) * 6.0).clamp(-1.0, 1.0) } else { 0.0 };
+            let c = Controls { pitch: pitch(p).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), yaw, ..Default::default() };
             assert!(p.step(dt, &c, w).is_none());
             if (steps - i) as f64 * dt < 20.0 {
                 sv += p.airspeed().length();
@@ -4107,11 +4219,14 @@ mod tests {
 
     #[test]
     fn tipping_over_at_40_kt_breaks_a_wing_without_fire() {
+        const PUSH: f64 = 18.0;
         let w = flat_world();
         let mut fires = 0;
         for seed in 1..=12u64 {
             let mut p = rolling(40.0, if seed % 2 == 0 { 2.2 } else { -2.2 }, seed * 7919);
-            let (boom, notes) = run_pushed(&mut p, &w, 12.0, Controls::default(), if seed % 2 == 0 { -9.0 } else { 9.0 });
+            // (The gust has to beat the wing's own roll damping, about 4 s⁻¹ at
+            // 40 kt: a sharp one, as it takes to tip a 172 over on the runway.)
+            let (boom, notes) = run_pushed(&mut p, &w, 12.0, Controls::default(), if seed % 2 == 0 { -PUSH } else { PUSH });
             println!("seed {seed}: boom {boom} {}, wings {:?}, folds {:?}, speed {:.1}, wrecked {}: {notes:?}", p.cause, p.dmg.wing, p.dmg.fold.map(|f| f.on), p.vel.length(), p.wrecked());
             fires += boom as usize;
             assert!(p.dmg.wing.iter().any(|&b| b < C172.span) || p.dmg.fold.iter().any(|f| f.on) || !notes.is_empty(), "something breaks");

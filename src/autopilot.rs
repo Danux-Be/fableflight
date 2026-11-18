@@ -333,7 +333,11 @@ impl Autopilot {
         self.i_pitch = (self.i_pitch + e * 1.5 / q * dt).clamp(-0.6, 0.6);
         // (A banked aircraft needs more pull for the same pitch.)
         let turn = (1.0 / s.bank.cos().max(0.5) - 1.0) * 0.6;
-        let pitch = ((e * 4.0 - s.pitch_rate * 1.5) / q + self.i_pitch + turn).clamp(-1.0, 1.0);
+        // (The gains are set for a stick that moves the angle of attack by
+        // the handling's figure; a moment-based type's elevator may buy more
+        // or less for the same travel: the servo scales its output to it.)
+        let servo = p.spec.handling.alpha_ctl / p.spec.alpha_per_stick();
+        let pitch = (((e * 4.0 - s.pitch_rate * 1.5) / q + self.i_pitch + turn) * servo).clamp(-1.0, 1.0);
 
         // ---- autothrottle
         let throttle_set = self.at.then(|| {
