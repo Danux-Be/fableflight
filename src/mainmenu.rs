@@ -26,6 +26,8 @@ enum Tile {
     Again,
     /// the settings' Multiplayer section
     Multiplayer,
+    /// the pilot's logbook.
+    Logbook,
 }
 
 impl Game {
@@ -55,10 +57,12 @@ impl Game {
             let x0 = screen.center().x - (fw + 2.0 * sw + 2.0 * gap) * 0.5;
             // the tiles rise in as the menu opens.
             let lift = |r: Rect, i: usize| r.translate(vec2(0.0, 26.0 * (1.0 - rise(i))));
-            let air = lift(Rect::from_min_size(pos2(x0, cy - sh * 0.5), vec2(sw, sh)), 1);
-            let fly = lift(Rect::from_min_size(pos2(x0 + sw + gap, cy - fh * 0.5), vec2(fw, fh)), 0);
-            // Settings, and Multiplayer as a bar under it: the two as tall as the Aircraft tile.
             let bar_h = 46.0;
+            // the aircraft, and the logbook as a bar under it, mirroring settings and multiplayer.
+            let air = lift(Rect::from_min_size(pos2(x0, cy - sh * 0.5), vec2(sw, sh - bar_h - gap)), 1);
+            let lbb = lift(Rect::from_min_size(pos2(x0, air.bottom() + gap), vec2(sw, bar_h)), 3);
+            let fly = lift(Rect::from_min_size(pos2(x0 + sw + gap, cy - fh * 0.5), vec2(fw, fh)), 0);
+            // Settings, and Multiplayer as a bar under it.
             let set = lift(Rect::from_min_size(pos2(x0 + sw + gap + fw + gap, cy - sh * 0.5), vec2(sw, sh - bar_h - gap)), 2);
             let mpb = lift(Rect::from_min_size(pos2(set.left(), set.bottom() + gap), vec2(sw, bar_h)), 3);
             let mut pw = p.clone();
@@ -99,6 +103,15 @@ impl Game {
             mp_bar(&pm, mpb, &r, &status, col);
             if r.clicked() {
                 press = Some(Tile::Multiplayer);
+            }
+
+            let r = ui.interact(lbb, ui.scope_id().with("tile_log"), Sense::click());
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t!("profile.logbook")));
+            let mut pl = p.clone();
+            pl.set_opacity(rise(3));
+            logbook_bar(&pl, lbb, &r, &self.logbook_short());
+            if r.clicked() {
+                press = Some(Tile::Logbook);
             }
 
             // under fly: the last start, one press away.
@@ -143,6 +156,7 @@ impl Game {
                 self.menu.screen = Screen::Settings;
             }
             Some(Tile::Multiplayer) => self.open_settings(settings_ui::Section::Multiplayer, Screen::Main),
+            Some(Tile::Logbook) => self.menu.screen = Screen::Logbook,
             Some(Tile::Again) => {
                 // over the globe, which shows it preparing.
                 self.restore_last_start();
@@ -214,6 +228,21 @@ fn mp_bar(p: &Painter, r: Rect, resp: &egui::Response, status: &str, col: Color3
     let clip = p.with_clip_rect(Rect::from_min_max(pos2(x, r.top()), pos2(r.right() - 14.0, r.bottom())));
     clip.galley(pos2(x, r.center().y - g.size().y * 0.5), g, DIM);
     p.circle_filled(pos2(x - 10.0, r.center().y), 3.5, col);
+}
+
+/// the logbook: a slim bar under the aircraft tile, a book and the hours flown.
+fn logbook_bar(p: &Painter, r: Rect, resp: &egui::Response, hours: &str) {
+    let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
+    p.rect_filled(r, menu::R_WIDGET, menu::mix(Color32::from_rgba_premultiplied(12, 16, 22, 226), Color32::from_rgba_premultiplied(26, 32, 42, 238), lit));
+    p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, menu::mix(Color32::from_white_alpha(26), ACCENT, lit)), egui::StrokeKind::Inside);
+    let ic = menu::mix(TEXT, ACCENT, lit);
+    // an open book.
+    let c = pos2(r.left() + 24.0, r.center().y);
+    let st = Stroke::new(1.6, ic);
+    p.line(vec![c + vec2(0.0, -6.0), c + vec2(-8.0, -8.0), c + vec2(-8.0, 6.0), c + vec2(0.0, 8.0), c + vec2(8.0, 6.0), c + vec2(8.0, -8.0), c + vec2(0.0, -6.0), c + vec2(0.0, 8.0)], st);
+    p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, t!("profile.logbook"), menu::label(), menu::mix(TEXT, Color32::WHITE, lit));
+    let g = p.layout_no_wrap(hours.to_string(), menu::caption(), DIM);
+    p.galley(pos2(r.right() - 14.0 - g.size().x, r.center().y - g.size().y * 0.5), g, DIM);
 }
 
 /// the wordmark at `at`, a hairline running on to `right`.

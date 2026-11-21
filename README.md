@@ -58,7 +58,11 @@ cargo build --release --locked
 
 - **Aircraft:** Cessna 172RG, Robin DR400, Boeing 747, Gulfstream G650, F/A-18, F-4, F-22, Concorde, SR-71, Starship, and downloadable [FlightGear aircraft](https://wiki.flightgear.org/FGAddon).
 - **Flight systems:** fuel, mass and balance, electrical failures, clickable cockpits, radio navigation, and autopilot.
-- **Flight plans:** on the start screen, add airports, named fixes, VORs, NDBs, coordinates or a whole route string with airways (`KSFO SFO V25 SNS KLAX`), or click waypoints on the globe. US airports get real SIDs, STARs and approaches from the FAA's public domain CIFP (`assets/mkcifp.py` rebuilds it; for the sim only, not real navigation). Every other airport in the world gets generated procedures for each runway: an RNAV approach with left, right and straight in entries on a 3° final, and a runway heading departure. In flight, the minimap shows the route and the next leg, and the autopilot's GPS mode flies it, heading legs and vectors included.
+- **Flight planner:** on the globe, pick a departure and arrival airport and their runways (the one most into the wind is marked), then **Create flight plan**: the planner picks a departure procedure for the runway, the airways and VORs on the way, an arrival, and an approach for the arrival runway, all drawn on the globe with their real fix names and listed in a navigation log (course, distance, altitude and speed constraints). US airports use real SIDs, STARs, approaches and airways from the FAA's public domain CIFP (`assets/mkcifp.py` rebuilds it; for the sim only, not real navigation); elsewhere the route goes VOR to VOR, with generated procedures for every runway. The route string can be edited by hand (`SSTIK DCT ENI J3 FMG`), and fixes can be added on the globe.
+- **SimBrief:** enter your SimBrief username or pilot ID in the planner and **Import latest** loads your last OFP: departure and arrival runways, every navlog fix worldwide with its position, the cruise level, block fuel and payload. **Plan this flight on SimBrief** opens SimBrief's dispatch page with the airports filled in. `--simbrief USER` imports at start.
+- **Autopilot:** an on-screen panel under the heading tape with the modes and four two-ring knobs (heading, altitude, vertical speed, speed): the inner ring turns in fine steps, the outer ring (or Shift) in coarse steps, by dragging round or with the wheel; a click on the middle sets it to what the aircraft is doing. Set a new altitude and it climbs or descends to it. Engaged with a flight plan it follows it in GPS, carries on climbing to the cruise level, and on the approach tunes the ILS and arms APR.
+- **Logbook:** flight time from lift off to the last touchdown, flights, landings, distance, hours by aircraft and airports visited, on the main menu's **Logbook**. Kept in `profile.json` next to the settings.
+- **Contrails:** jets leave ice trails above about FL250 where the air is colder than the contrail threshold (about −40 °C), short in dry air and spreading into lasting cirrus in moist air, drifting with the wind and lit by the low sun at dawn and dusk. Live traffic up high leaves them too.
 - **Mouse yoke:** `J` turns it on: the pointer becomes a dot and its offset from the centre is the stick, the wheel is the throttle.
 - **World:** real METAR weather, seasonal & live snow cover, satellite/road minimap, live ADS-B traffic, and multiplayer.
 - **Controls:** remappable keyboard, joystick, throttle, pedals, and gamepad. Configure them in **Settings → Controls**.
@@ -103,7 +107,7 @@ The game starts in borderless full screen. Turn this off in **Settings → Gener
 
 ## Configuration & Data Paths
 
-| Platform | Config (settings, bindings, Google key, MCP token) | Cache (tiles, downloaded hangar cache) |
+| Platform | Config (settings, bindings, logbook, Google key, MCP token) | Cache (tiles, downloaded hangar cache) |
 | --- | --- | --- |
 | **Linux** | `~/.config/fablegame/` | `~/.cache/fablegame/` |
 | **macOS** | `~/Library/Application Support/fablegame/` | `~/Library/Caches/fablegame/` |

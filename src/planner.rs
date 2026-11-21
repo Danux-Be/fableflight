@@ -1,0 +1,927 @@
+//! the flight planner: from one airport and runway to another, a route made
+//! from the real procedures and airways or imported from simbrief, its fixes
+//! on the globe and in a navigation log.
+
+use crate::flightplan::{self, Kind, Leg, Phase, Pick, Waypoint};
+use crate::menu::{self, ACCENT, DIM, FAINT, TEXT};
+use crate::padui::Hint;
+use crate::{airports, navdata, route, simbrief, t, Game, ROUTE_COLOUR};
+use egui::{pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
+use std::sync::mpsc::Receiver;
+
+/// sid legs on the globe and in the log.
+pub const SID_COLOUR: Color32 = Color32::from_rgb(92, 222, 170);
+/// star and approach legs.
+pub const ARR_COLOUR: Color32 = Color32::from_rgb(118, 192, 255);
+
+/// the colour a waypoint and the leg to it are drawn in.
+pub fn wp_colour(w: &Waypoint) -> Color32 {
+    match w.phase.as_ref().map(|p| p.0) {
+        Some(Phase::Sid) => SID_COLOUR,
+        Some(Phase::Star | Phase::App) => ARR_COLOUR,
+        None => ROUTE_COLOUR,
+    }
+}
+
+/// a waypoint's chart symbol: airports a ring, vors a hexagon, ndbs a dot in a
+/// ring, fixes a triangle, user points a diamond, heading legs a small square.
+pub fn symbol(p: &egui::Painter, c: egui::Pos2, kind: Kind, col: Color32, big: bool) {
+    let s = if big { 7.0 } else { 5.5 };
+    let shade = Stroke::new(3.5, Color32::from_black_alpha(150));
+    let line = Stroke::new(1.8, col);
+    let poly = |n: usize, r: f32, turn: f32| -> Vec<egui::Pos2> { (0..n).map(|i| c + egui::Vec2::angled(turn + i as f32 * std::f32::consts::TAU / n as f32) * r).collect() };
+    for st in [shade, line] {
+        match kind {
+            Kind::Airport => {
+                p.circle_stroke(c, s, st);
+            }
+            Kind::Vor => {
+                p.add(egui::Shape::closed_line(poly(6, s, 0.0), st));
+            }
+            Kind::Ndb => {
+                p.circle_stroke(c, s, st);
+            }
+            Kind::Fix => {
+                p.add(egui::Shape::closed_line(poly(3, s * 1.05, -std::f32::consts::FRAC_PI_2), st));
+            }
+            Kind::User => {
+                p.add(egui::Shape::closed_line(poly(4, s, 0.0), st));
+            }
+            Kind::Leg => {
+                p.rect_stroke(egui::Rect::from_center_size(c, vec2(s, s) * 1.2), 1.0, st, egui::StrokeKind::Middle);
+            }
+        }
+    }
+    if matches!(kind, Kind::Vor | Kind::Ndb | Kind::Airport) {
+        p.circle_filled(c, 1.8, col);
+    }
+}
+
+#[derive(Default)]
+pub struct Planner {
+    pub open: bool,
+    /// the arrival airport chosen, and its runway.
+    pub to: Option<u32>,
+    pub arr_rwy: Option<String>,
+    from_text: String,
+    to_text: String,
+    /// which airport box is being typed in.
+    editing: Option<bool>,
+    pub sb_user: String,
+    sb_rx: Option<Receiver<Result<simbrief::Ofp, String>>>,
+    /// the plan last imported from simbrief.
+    pub ofp: Option<simbrief::Ofp>,
+    /// notes on the plan made, and what went wrong.
+    notes: Vec<String>,
+    err: String,
+    route_edit: String,
+    route_seen: String,
+    /// turn the globe to the route next frame.
+    frame: bool,
+    /// clicks on the globe add waypoints.
+    pub pick_on_globe: bool,
+    /// show the top of the list next frame.
+    top: bool,
+    /// the simbrief tab rather than making the route here.
+    simbrief_tab: bool,
+    /// the route text being typed.
+    route_editing: bool,
+}
+
+impl Planner {
+    pub fn busy(&self) -> bool {
+        self.sb_rx.is_some()
+    }
+}
+
+/// a small round button with a word in it.
+fn chip(ui: &mut egui::Ui, text: &str, on: bool, tip: &str) -> egui::Response {
+    let g = ui.painter().layout_no_wrap(text.to_string(), menu::data(), Color32::WHITE);
+    let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 20.0, 26.0), Sense::click());
+    let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
+    let p = ui.painter();
+    let fill = if on { ACCENT.gamma_multiply(0.85) } else { menu::mix(Color32::from_white_alpha(10), Color32::from_white_alpha(26), lit) };
+    p.rect_filled(r, menu::R_WIDGET, fill);
+    if !on {
+        p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, menu::mix(Color32::from_white_alpha(34), ACCENT, lit)), egui::StrokeKind::Inside);
+    }
+    p.galley(r.center() - g.size() * 0.5, g, if on { Color32::from_rgb(8, 12, 18) } else { TEXT });
+    if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
+}
+
+
+impl Game {
+    /// opens the planner on the globe.
+    pub(crate) fn open_planner(&mut self) {
+        self.planner.open = true;
+        self.planner.frame = true;
+        self.planner.top = true;
+        self.planner.err.clear();
+        if self.planner.sb_user.is_empty() {
+            self.planner.sb_user = self.prefs_simbrief.clone();
+        }
+        if self.planner.to.is_none() {
+            self.planner.to = self.plan.destination().and_then(|w| airports::Db::get().find(&w.ident));
+        }
+    }
+
+    /// turns the globe so the whole route shows beside the planner.
+    fn frame_route(&mut self) {
+        let db = airports::Db::get();
+        let mut pts: Vec<(f64, f64)> = self.plan.wps.iter().filter(|w| !w.is_heading()).map(|w| w.at()).collect();
+        pts.extend(self.menu.pick);
+        pts.extend(self.planner.to.map(|i| (db.apts[i as usize].lat, db.apts[i as usize].lon)));
+        if pts.is_empty() {
+            return;
+        }
+        let a = pts[0];
+        let b = *pts.iter().max_by(|x, y| flightplan::dist(a, **x).total_cmp(&flightplan::dist(a, **y))).unwrap_or(&a);
+        let mid = flightplan::between(a, b, 0.5);
+        let span = pts.iter().map(|p| flightplan::dist(mid, *p)).fold(0.0, f64::max);
+        // the planner covers the left of the screen: look a little left of the middle.
+        let c = flightplan::ahead(mid, 270.0, span * 0.45);
+        self.menu.look_at(c.0, c.1, (span * 2.8).clamp(40_000.0, 9.0e6));
+    }
+
+    /// an airport clicked on the globe: the departure first, then the arrival.
+    pub(crate) fn planner_click_airport(&mut self, i: u32) {
+        match (self.menu.airport, self.planner.to) {
+            (None, _) => self.planner_set_from(i, None),
+            (Some(f), _) if f == i => {}
+            (Some(_), _) => {
+                self.planner.to = Some(i);
+                self.planner.arr_rwy = None;
+            }
+        }
+        self.planner.editing = None;
+    }
+
+    /// sets the departure airport and its runway, as starting on that runway.
+    fn planner_set_from(&mut self, i: u32, rwy: Option<String>) {
+        self.choose_airport(i);
+        self.menu.start = menu::Start::Runway;
+        self.menu.runway = rwy;
+        self.planner.from_text.clear();
+    }
+
+    /// builds the route from the two airports.
+    pub(crate) fn planner_make(&mut self) {
+        let (Some(from), Some(to)) = (self.menu.airport, self.planner.to) else { return };
+        let (plan, made) = route::make(from, self.menu.runway.as_deref(), to, self.planner.arr_rwy.as_deref(), self.spec);
+        self.plan = plan;
+        self.menu.runway = made.dep_rwy;
+        self.menu.start = menu::Start::Runway;
+        self.planner.arr_rwy = made.arr_rwy;
+        self.planner.notes = made.note;
+        self.planner.err.clear();
+        self.planner.ofp = None;
+        self.planner.frame = true;
+    }
+
+    /// starts a fetch of the latest simbrief plan.
+    pub(crate) fn planner_fetch(&mut self) {
+        let who = self.planner.sb_user.trim().to_string();
+        self.prefs_simbrief = who.clone();
+        self.keep_settings(false);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(simbrief::fetch(&who));
+        });
+        self.planner.sb_rx = Some(rx);
+        self.planner.err.clear();
+    }
+
+    /// puts an imported plan in place.
+    fn planner_take(&mut self, o: simbrief::Ofp) {
+        let db = airports::Db::get();
+        let (Some(dep), Some(arr)) = (db.find(&o.dep), db.find(&o.arr)) else {
+            self.planner.err = t!("plan.unknown_airport", dep = o.dep, arr = o.arr);
+            return;
+        };
+        let ends = route::runway_ends(dep);
+        let rwy = o.dep_rwy.clone().filter(|r| ends.iter().any(|e| &e.ident == r));
+        self.planner_set_from(dep, rwy);
+        self.planner.to = Some(arr);
+        let a_ends = route::runway_ends(arr);
+        self.planner.arr_rwy = o.arr_rwy.clone().filter(|r| a_ends.iter().any(|e| &e.ident == r));
+        let mut plan = flightplan::Plan::new();
+        plan.wps = o.fixes.clone();
+        plan.wps.push(Waypoint::airport(arr));
+        if o.cruise_ft > 0.0 {
+            plan.cruise_ft = o.cruise_ft;
+        }
+        // an approach to the planned runway where there is one.
+        if let Some(r) = &self.planner.arr_rwy {
+            let last = plan.wps.iter().rev().find(|w| w.kind != Kind::Airport).map(|w| w.at()).unwrap_or((db.apts[arr as usize].lat, db.apts[arr as usize].lon));
+            let star_end = plan.wps.iter().rev().find(|w| matches!(w.phase, Some((Phase::Star, _)))).map(|w| w.ident.clone());
+            if let Some(app) = route::pick_app(&o.arr, r, last, star_end.as_deref()) {
+                plan.set_proc(Phase::App, Some(app), None);
+            }
+        }
+        self.plan = plan;
+        // fuel and payload as planned, within what the aircraft takes.
+        if let Some(f) = o.ramp_kg {
+            self.menu.fuel = (f / self.spec.fuel_kg.max(1.0)).clamp(0.05, 1.0);
+        }
+        let most = self.spec.payload[1];
+        if let (Some(p), true) = (o.payload_kg, most > 0.0) {
+            self.menu.payload = Some((p / most).clamp(0.0, 1.0));
+        }
+        self.planner.notes.clear();
+        let mine = self.spec.name;
+        if !o.ac_type.is_empty() && !self.spec.keys.iter().any(|k| k.eq_ignore_ascii_case(&o.ac_type)) {
+            self.planner.notes.push(t!("plan.planned_for_type", ty = o.ac_type, mine = mine));
+        }
+        self.planner.ofp = Some(o);
+        self.planner.frame = true;
+    }
+
+    /// the planner sidebar, in place of the start screen's two panels.
+    pub(crate) fn planner_ui(&mut self, ctx: &egui::Context, start: &mut bool) {
+        if let Some(rx) = &self.planner.sb_rx {
+            match rx.try_recv() {
+                Ok(Ok(o)) => {
+                    self.planner.sb_rx = None;
+                    self.planner_take(o);
+                }
+                Ok(Err(e)) => {
+                    self.planner.sb_rx = None;
+                    self.planner.err = e;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint(),
+                Err(_) => self.planner.sb_rx = None,
+            }
+        }
+        if self.planner.frame {
+            self.planner.frame = false;
+            self.frame_route();
+        }
+        const M: f32 = 22.0;
+        let screen = ctx.content_rect();
+        let w = (screen.width() * 0.36).clamp(470.0, 560.0);
+        let top = M + 34.0 + 10.0;
+        let h = screen.bottom() - M - top;
+        let mut close = false;
+        egui::Area::new(egui::Id::unique("planner")).anchor(Align2::LEFT_TOP, [M, top]).show(ctx, |ui| {
+            ui.set_max_height(h);
+            menu::panel().inner_margin(egui::Margin::symmetric(18, 16)).show(ui, |ui| {
+                ui.set_width(w - 36.0);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                // title, the aircraft under it, done on the right.
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(t!("plan.flight_planner")).font(menu::bold(22.0)).color(Color32::WHITE));
+                        ui.add_space(2.0);
+                        ui.label(RichText::new(self.spec.name).font(menu::caption()).color(DIM));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(egui::Button::new(RichText::new(t!("plan.done")).font(menu::label())).min_size(vec2(76.0, 30.0))).clicked() {
+                            close = true;
+                        }
+                    });
+                });
+                ui.add_space(14.0);
+                let foot = if self.plan.is_empty() { 60.0 } else { 130.0 };
+                let mut area = egui::ScrollArea::vertical().max_height((h - foot - 90.0).max(140.0)).auto_shrink([false, true]);
+                if std::mem::take(&mut self.planner.top) {
+                    area = area.vertical_scroll_offset(0.0);
+                }
+                area.show(ui, |ui| {
+                    ui.set_width(ui.available_width() - 8.0);
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    self.planner_trip(ui);
+                    gap(ui);
+                    self.planner_source(ui);
+                    if !self.plan.is_empty() {
+                        gap(ui);
+                        self.planner_procs(ui);
+                        gap(ui);
+                        self.planner_route_text(ui);
+                        gap(ui);
+                        self.planner_log(ui);
+                    }
+                    ui.add_space(6.0);
+                });
+                ui.add_space(12.0);
+                ui.painter().hline(ui.max_rect().x_range(), ui.cursor().top() - 6.0, Stroke::new(1.0, Color32::from_white_alpha(16)));
+                ui.add_space(6.0);
+                self.planner_foot(ui, start);
+            });
+        });
+        if close {
+            self.planner.open = false;
+        }
+    }
+
+    /// from and to side by side, each with its runways.
+    fn planner_trip(&mut self, ui: &mut egui::Ui) {
+        let db = airports::Db::get();
+        let mut pick_from = None;
+        let mut pick_to = None;
+        let mut rw_from = None;
+        let mut rw_to = None;
+        card(ui, |ui| {
+            let full = ui.available_width();
+            let col = (full - 28.0) * 0.5;
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.allocate_ui_with_layout(vec2(col, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_width(col);
+                    caption(ui, t!("plan.departure"));
+                    pick_from = self.planner_airport_box(ui, self.menu.airport, true);
+                    if let Some(i) = self.menu.airport {
+                        let cur = self.menu.runway.clone();
+                        rw_from = self.planner_runways(ui, i, cur.as_deref());
+                    }
+                });
+                // an arrow between the two.
+                let (r, _) = ui.allocate_exact_size(vec2(28.0, 64.0), Sense::hover());
+                ui.painter().text(pos2(r.center().x, r.top() + 36.0), Align2::CENTER_CENTER, "→", menu::bold(18.0), DIM);
+                ui.allocate_ui_with_layout(vec2(col, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_width(col);
+                    caption(ui, t!("plan.arrival"));
+                    pick_to = self.planner_airport_box(ui, self.planner.to, false);
+                    if let Some(i) = self.planner.to {
+                        let cur = self.planner.arr_rwy.clone();
+                        rw_to = self.planner_runways(ui, i, cur.as_deref());
+                    }
+                });
+            });
+            if let (Some(a), Some(b)) = (self.menu.airport, self.planner.to) {
+                let (pa, pb) = ((db.apts[a as usize].lat, db.apts[a as usize].lon), (db.apts[b as usize].lat, db.apts[b as usize].lon));
+                ui.add_space(12.0);
+                let line = t!("plan.great_circle", nm = format!("{:.0}", flightplan::dist(pa, pb) / 1852.0), crs = format!("{:03.0}", flightplan::course(pa, pb)));
+                let wind = t!("plan.wind_now", from = format!("{:03.0}", self.wx.wind_from.rem_euclid(360.0)), kt = format!("{:.0}", self.wx.wind * 1.943_84));
+                ui.label(RichText::new(format!("{line}   ·   {wind}")).font(menu::caption()).color(DIM));
+            }
+        });
+        if let Some(i) = pick_from {
+            self.planner_set_from(i, None);
+            self.planner.frame = true;
+        }
+        if let Some(i) = pick_to {
+            self.planner.to = Some(i);
+            self.planner.arr_rwy = None;
+            self.planner.frame = true;
+        }
+        if let Some(r) = rw_from {
+            self.menu.runway = Some(r.clone());
+            self.menu.start = menu::Start::Runway;
+            self.planner_retarget(Phase::Sid, &r);
+        }
+        if let Some(r) = rw_to {
+            self.planner.arr_rwy = Some(r.clone());
+            self.planner_retarget(Phase::App, &r);
+        }
+    }
+
+    /// a runway changed under a plan: its procedures follow the new runway.
+    fn planner_retarget(&mut self, phase: Phase, rwy: &str) {
+        if self.plan.is_empty() {
+            return;
+        }
+        let db = navdata::Db::get();
+        let dep = self.menu.pick;
+        match phase {
+            Phase::Sid => {
+                let Some(p) = self.plan.sid.clone() else { return };
+                let rws = db.runway_trans(&p.apt, 'D', &p.name);
+                let pick = if rws.is_empty() { Some(p) } else { navdata::trans_for(&rws, rwy).map(|r| Pick { rwy: Some(r), ..p }) };
+                self.plan.set_proc(Phase::Sid, pick, dep);
+            }
+            _ => {
+                let Some(apt) = self.plan.destination().map(|w| w.ident.clone()) else { return };
+                if let Some(s) = self.plan.star.clone() {
+                    let rws = db.runway_trans(&s.apt, 'E', &s.name);
+                    if let Some(r) = navdata::trans_for(&rws, rwy) {
+                        self.plan.set_proc(Phase::Star, Some(Pick { rwy: Some(r), ..s }), dep);
+                    }
+                }
+                let from = self.plan.wps.iter().rev().find(|w| w.phase.is_none() && w.kind != Kind::Airport).map(|w| w.at()).or(dep).unwrap_or((0.0, 0.0));
+                let app = route::pick_app(&apt, rwy, from, None);
+                self.plan.set_proc(Phase::App, app, dep);
+            }
+        }
+        self.planner.frame = true;
+    }
+
+    /// an airport: the one chosen, or a search box with matches under it.
+    fn planner_airport_box(&mut self, ui: &mut egui::Ui, cur: Option<u32>, from: bool) -> Option<u32> {
+        let db = airports::Db::get();
+        let editing = self.planner.editing == Some(from) || cur.is_none();
+        if let (Some(i), false) = (cur, editing) {
+            let a = &db.apts[i as usize];
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 52.0), Sense::click());
+            let lit = menu::ease(ui.ctx(), resp.id, resp.hovered());
+            let p = ui.painter();
+            if lit > 0.0 {
+                p.rect_filled(r.expand(4.0), menu::R_WIDGET, Color32::from_white_alpha((10.0 * lit) as u8));
+            }
+            p.text(r.left_top(), Align2::LEFT_TOP, &a.ident, menu::bold(30.0), Color32::WHITE);
+            let name = p.layout_no_wrap(a.name.clone(), menu::caption(), TEXT);
+            let clip = p.with_clip_rect(Rect::from_min_max(pos2(r.left(), r.top() + 34.0), pos2(r.right(), r.bottom())));
+            clip.galley(pos2(r.left(), r.top() + 35.0), name, TEXT);
+            if lit > 0.0 {
+                p.text(r.right_top() + vec2(0.0, 4.0), Align2::RIGHT_TOP, t!("plan.change"), menu::caption(), ACCENT.gamma_multiply(lit));
+            }
+            let resp = resp.on_hover_text(format!("{}\n{}, {}", a.name, a.city, a.country));
+            if resp.clicked() {
+                self.planner.editing = Some(from);
+            }
+            return None;
+        }
+        let text = if from { &mut self.planner.from_text } else { &mut self.planner.to_text };
+        let hint = if from { t!("plan.from_hint") } else { t!("plan.to_hint") };
+        let resp = ui.add(egui::TextEdit::singleline(text).desired_width(ui.available_width()).hint_text(hint).margin(vec2(8.0, 7.0)).font(menu::body()));
+        // clicked away with nothing typed: back to the airport there was.
+        if cur.is_some() && text.is_empty() && !resp.has_focus() && !resp.clicked() && ui.input(|i| i.pointer.any_click()) {
+            self.planner.editing = None;
+        }
+        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let q = text.trim().to_string();
+        let mut picked = None;
+        if q.len() >= 2 {
+            let hits = db.search(&q, 5);
+            if enter {
+                picked = db.find(&q).or(hits.first().copied());
+            }
+            ui.add_space(4.0);
+            for i in hits {
+                let a = &db.apts[i as usize];
+                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
+                let p = ui.painter();
+                if resp.hovered() {
+                    p.rect_filled(r, menu::R_WIDGET, Color32::from_white_alpha(14));
+                }
+                p.text(pos2(r.left() + 6.0, r.center().y), Align2::LEFT_CENTER, &a.ident, menu::data(), Color32::WHITE);
+                let name = p.layout_no_wrap(a.name.clone(), menu::caption(), DIM);
+                p.with_clip_rect(r.shrink(2.0)).galley(pos2(r.left() + 56.0, r.center().y - name.size().y * 0.5), name, DIM);
+                if resp.clicked() {
+                    picked = Some(i);
+                }
+            }
+        }
+        if picked.is_some() {
+            if from { self.planner.from_text.clear() } else { self.planner.to_text.clear() }
+            self.planner.editing = None;
+        }
+        picked
+    }
+
+    /// runway ends as chips, the one most into the wind marked with an arrow.
+    fn planner_runways(&mut self, ui: &mut egui::Ui, apt: u32, cur: Option<&str>) -> Option<String> {
+        let ends = route::runway_ends(apt);
+        if ends.is_empty() {
+            return None;
+        }
+        let wind = route::into_wind(&ends, self.wx.wind_from).map(|e| e.ident);
+        let mut out = None;
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(5.0, 5.0);
+            for e in &ends {
+                let on = cur == Some(e.ident.as_str());
+                let mark = if wind.as_deref() == Some(e.ident.as_str()) { " ↓" } else { "" };
+                let tip = t!("plan.runway_tip", len = format!("{:.0}", e.len), crs = format!("{:03.0}", e.course));
+                if chip(ui, &format!("{}{mark}", e.ident), on, &tip).clicked() {
+                    out = Some(e.ident.clone());
+                }
+            }
+        });
+        out
+    }
+
+    /// where the route comes from: made here, or imported from simbrief.
+    fn planner_source(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            menu::segments(ui, |ui| {
+                menu::seg(ui, &mut self.planner.simbrief_tab, false, t!("plan.tab_build"));
+                menu::seg(ui, &mut self.planner.simbrief_tab, true, "SimBrief");
+            });
+        });
+        ui.add_space(12.0);
+        if self.planner.simbrief_tab {
+            self.planner_simbrief(ui);
+            return;
+        }
+        let ready = self.menu.airport.is_some() && self.planner.to.is_some() && self.menu.airport != self.planner.to;
+        let label = if self.plan.is_empty() { t!("plan.create_flight_plan") } else { t!("plan.create_it_again") };
+        if menu::wide_button(ui, label, Hint::None, self.plan.is_empty(), ready).on_hover_text(t!("plan.create_hint")).clicked() {
+            self.planner_make();
+        }
+        if !ready {
+            ui.add_space(8.0);
+            ui.label(RichText::new(t!("plan.pick_both_airports")).font(menu::caption()).color(DIM));
+        }
+        for n in &self.planner.notes {
+            ui.add_space(6.0);
+            ui.label(RichText::new(n).font(menu::caption()).color(Color32::from_rgb(255, 190, 110)));
+        }
+    }
+
+    /// simbrief: username, import the latest plan, or plan a new one there.
+    fn planner_simbrief(&mut self, ui: &mut egui::Ui) {
+        let busy = self.planner.busy();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let resp = ui.add_enabled(!busy, egui::TextEdit::singleline(&mut self.planner.sb_user).desired_width(ui.available_width() - 128.0).hint_text(t!("plan.simbrief_user_hint")).margin(vec2(8.0, 7.0)).font(menu::body()));
+            let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            let word = if busy { t!("plan.importing") } else { t!("plan.import") };
+            let ok = !busy && !self.planner.sb_user.trim().is_empty();
+            let go = ui.add_enabled(ok, egui::Button::new(RichText::new(word).font(menu::label())).min_size(vec2(120.0, 32.0))).on_hover_text(t!("plan.import_hint")).clicked();
+            if (go || enter) && ok {
+                self.planner_fetch();
+            }
+        });
+        ui.add_space(10.0);
+        if !self.planner.err.is_empty() {
+            ui.label(RichText::new(&self.planner.err).font(menu::caption()).color(Color32::from_rgb(255, 130, 90)));
+            ui.add_space(6.0);
+        }
+        if let Some(o) = &self.planner.ofp {
+            let mut bits = vec![format!("{} → {}", o.dep, o.arr)];
+            if !o.callsign.is_empty() {
+                bits.insert(0, o.callsign.clone());
+            }
+            if !o.ac_type.is_empty() {
+                bits.push(o.ac_type.clone());
+            }
+            if let Some(d) = o.dist_nm {
+                bits.push(format!("{d:.0} nm"));
+            }
+            if let Some(e) = o.ete {
+                bits.push(flightplan::hm(e));
+            }
+            if let Some(a) = &o.altn {
+                bits.push(format!("ALTN {a}"));
+            }
+            ui.label(RichText::new(bits.join("   ·   ")).font(menu::data()).color(Color32::WHITE));
+            ui.add_space(6.0);
+        }
+        for n in &self.planner.notes {
+            ui.label(RichText::new(n).font(menu::caption()).color(Color32::from_rgb(255, 190, 110)));
+            ui.add_space(4.0);
+        }
+        let db = airports::Db::get();
+        let (dep, arr) = (self.menu.airport.map(|i| db.apts[i as usize].ident.clone()), self.planner.to.map(|i| db.apts[i as usize].ident.clone()));
+        let word = if dep.is_some() && arr.is_some() { t!("plan.plan_this_on_simbrief") } else { t!("plan.open_simbrief") };
+        if link(ui, &format!("{word}  ↗")) {
+            let ty = self.spec.keys.first().map(|k| icao_type(k)).unwrap_or_default();
+            let url = match (dep, arr) {
+                (Some(a), Some(b)) => simbrief::dispatch_url(&a, &b, ty),
+                _ => "https://dispatch.simbrief.com/options/new".into(),
+            };
+            simbrief::open_in_browser(&url);
+        }
+    }
+
+    /// departure, arrival and approach procedures in one aligned grid.
+    fn planner_procs(&mut self, ui: &mut egui::Ui) {
+        let db = navdata::Db::get();
+        let dep_apt = self.menu.airport.map(|i| airports::Db::get().apts[i as usize].ident.clone());
+        let dest_apt = self.plan.destination().map(|w| w.ident.clone());
+        let mut change: Option<(Phase, Option<Pick>)> = None;
+        section_title(ui, t!("game.procedures"));
+        card(ui, |ui| {
+            let rows = [(Phase::Sid, "SID", dep_apt.clone(), self.menu.runway.clone()), (Phase::Star, "STAR", dest_apt.clone(), self.planner.arr_rwy.clone()), (Phase::App, "APP", dest_apt.clone(), None)];
+            for (k, (phase, tag, apt, rwy)) in rows.into_iter().enumerate() {
+                if k > 0 {
+                    ui.add_space(8.0);
+                }
+                let kind = match phase {
+                    Phase::Sid => 'D',
+                    Phase::Star => 'E',
+                    Phase::App => 'F',
+                };
+                let cur = match phase {
+                    Phase::Sid => self.plan.sid.clone(),
+                    Phase::Star => self.plan.star.clone(),
+                    Phase::App => self.plan.app.clone(),
+                };
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let (r, _) = ui.allocate_exact_size(vec2(44.0, 30.0), Sense::hover());
+                    ui.painter().text(r.left_center(), Align2::LEFT_CENTER, tag, menu::bold(12.0), phase_colour(phase));
+                    let Some(apt) = apt else {
+                        ui.label(RichText::new("—").font(menu::body()).color(FAINT));
+                        return;
+                    };
+                    // only the ones that serve the chosen runway.
+                    let names: Vec<String> = db.names(&apt, kind).into_iter().filter(|n| match (&rwy, phase) {
+                        (Some(r), Phase::Sid | Phase::Star) => {
+                            let rws = db.runway_trans(&apt, kind, n);
+                            rws.is_empty() || navdata::trans_for(&rws, r).is_some()
+                        }
+                        _ => true,
+                    }).collect();
+                    if names.is_empty() {
+                        ui.label(RichText::new(t!("game.none")).font(menu::caption()).color(FAINT));
+                        return;
+                    }
+                    let name_w = (ui.available_width() * 0.56).max(120.0);
+                    let none = t!("game.none");
+                    let sel = cur.as_ref().map(|p| navdata::label(kind, &p.name)).unwrap_or_else(|| none.to_string());
+                    egui::ComboBox::from_id_salt(("pl_proc", tag)).width(name_w).selected_text(sel).show_ui(ui, |ui| {
+                        if ui.selectable_label(cur.is_none(), none).clicked() {
+                            change = Some((phase, None));
+                        }
+                        for n in &names {
+                            if ui.selectable_label(cur.as_ref().is_some_and(|p| &p.name == n), navdata::label(kind, n)).clicked() {
+                                let rws = db.runway_trans(&apt, kind, n);
+                                let rw = rwy.as_deref().and_then(|r| navdata::trans_for(&rws, r)).or_else(|| rws.first().cloned());
+                                change = Some((phase, Some(Pick { apt: apt.clone(), name: n.clone(), rwy: if phase == Phase::App { None } else { rw }, trans: None })));
+                            }
+                        }
+                    });
+                    let Some(p) = cur else { return };
+                    let others = db.other_trans(&apt, kind, &p.name);
+                    if others.is_empty() {
+                        return;
+                    }
+                    let none = if phase == Phase::App { t!("game.vectors") } else { t!("game.no_transition") };
+                    egui::ComboBox::from_id_salt(("pl_tr", tag)).width(ui.available_width() - 8.0).selected_text(p.trans.clone().unwrap_or_else(|| none.to_string())).show_ui(ui, |ui| {
+                        if ui.selectable_label(p.trans.is_none(), none).clicked() {
+                            change = Some((phase, Some(Pick { trans: None, ..p.clone() })));
+                        }
+                        for t in &others {
+                            if ui.selectable_label(p.trans.as_ref() == Some(t), t).clicked() {
+                                change = Some((phase, Some(Pick { trans: Some(t.clone()), ..p.clone() })));
+                            }
+                        }
+                    });
+                });
+            }
+        });
+        if let Some((phase, pick)) = change {
+            let dep = self.menu.pick;
+            self.plan.set_proc(phase, pick, dep);
+            self.planner.frame = true;
+        }
+    }
+
+    /// the route as text; edit to retype the enroute part.
+    fn planner_route_text(&mut self, ui: &mut egui::Ui) {
+        let now = self.plan.route_text();
+        if now != self.planner.route_seen && !self.planner.route_editing {
+            self.planner.route_seen = now.clone();
+            self.planner.route_edit = now.clone();
+        }
+        let mut copy = false;
+        header(ui, t!("plan.route"), |ui| {
+            copy = link(ui, t!("plan.copy"));
+            if !self.planner.route_editing && link(ui, t!("plan.edit")) {
+                self.planner.route_editing = true;
+            }
+        });
+        let mut apply = false;
+        card(ui, |ui| {
+            if self.planner.route_editing {
+                ui.add(egui::TextEdit::multiline(&mut self.planner.route_edit).desired_rows(3).desired_width(ui.available_width()).font(menu::data()).frame(egui::Frame::NONE));
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    apply = ui.add(egui::Button::new(RichText::new(t!("plan.apply")).font(menu::caption())).min_size(vec2(72.0, 26.0))).clicked();
+                    if ui.add(egui::Button::new(RichText::new(t!("plan.cancel")).font(menu::caption())).min_size(vec2(72.0, 26.0))).clicked() {
+                        self.planner.route_editing = false;
+                        self.planner.route_edit = self.planner.route_seen.clone();
+                    }
+                });
+                ui.add_space(6.0);
+                ui.label(RichText::new(t!("plan.route_hint")).font(menu::caption()).color(DIM));
+            } else {
+                ui.add(egui::Label::new(RichText::new(&now).font(menu::data()).color(Color32::WHITE)).wrap());
+            }
+        });
+        if copy {
+            ui.ctx().copy_text(now);
+        }
+        if apply {
+            // the enroute part is typed again; procedures and the destination stay.
+            let dest = self.plan.dest_index();
+            let keep: Vec<bool> = self.plan.wps.iter().enumerate().map(|(i, w)| w.phase.is_some() || Some(i) == dest).collect();
+            let mut k = keep.into_iter();
+            self.plan.wps.retain(|_| k.next().unwrap_or(true));
+            let names: Vec<String> = [&self.plan.sid, &self.plan.star, &self.plan.app].into_iter().flatten().flat_map(|p| [p.name.clone(), format!("{}.{}", p.name, p.trans.clone().unwrap_or_default()), format!("{}.{}", p.trans.clone().unwrap_or_default(), p.name)]).collect();
+            let text: Vec<&str> = self.planner.route_edit.split_whitespace().filter(|t| !names.iter().any(|n| n.eq_ignore_ascii_case(t))).collect();
+            let bad = self.plan.add_route(&text.join(" "), self.menu.pick);
+            self.planner.err = if bad.is_empty() { String::new() } else { t!("game.not_found", bad.join(", ")) };
+            self.planner.route_editing = false;
+            self.planner.route_seen.clear();
+            self.planner.frame = true;
+        }
+    }
+
+    /// the navigation log: each fix, how it is reached, course, distance, constraints.
+    fn planner_log(&mut self, ui: &mut egui::Ui) {
+        header(ui, t!("plan.navlog"), |ui| {
+            let word = if self.planner.pick_on_globe { t!("plan.adding_on_globe") } else { t!("plan.add_on_globe") };
+            if link(ui, word) {
+                self.planner.pick_on_globe = !self.planner.pick_on_globe;
+            }
+        });
+        let dep = self.menu.pick;
+        let legs = self.plan.legs(dep);
+        let gs = self.spec.cruise.max(20.0);
+        let mut act: Option<(usize, i8)> = None;
+        let mut look: Option<(f64, f64)> = None;
+        card(ui, |ui| {
+            let wd = ui.available_width();
+            // fix, via, course, distance, constraint as shares of the width.
+            let cols = [0.0, 22.0, wd * 0.25, wd * 0.52, wd * 0.64, wd * 0.76];
+            let head = [t!("plan.col_fix"), t!("plan.col_via"), t!("plan.col_crs"), t!("plan.col_dist"), t!("plan.col_alt")];
+            let (r, _) = ui.allocate_exact_size(vec2(wd, 20.0), Sense::hover());
+            for (k, hd) in head.iter().enumerate() {
+                ui.painter().text(pos2(r.left() + cols[k + 1], r.top() + 6.0), Align2::LEFT_CENTER, *hd, menu::bold(10.0), FAINT);
+            }
+            let n = self.plan.wps.len();
+            let mut run = 0.0;
+            for i in 0..n {
+                let wp = &self.plan.wps[i];
+                let leg = if dep.is_some() { legs.get(i) } else { i.checked_sub(1).and_then(|k| legs.get(k)) };
+                let (r, resp) = ui.allocate_exact_size(vec2(wd, 28.0), Sense::click());
+                let p = ui.painter();
+                p.hline(r.x_range(), r.top(), Stroke::new(1.0, Color32::from_white_alpha(10)));
+                if resp.hovered() {
+                    p.rect_filled(r, 3.0, Color32::from_white_alpha(9));
+                }
+                let col = wp_colour(wp);
+                let y = r.center().y;
+                symbol(p, pos2(r.left() + 7.0, y), wp.kind, col, false);
+                p.text(pos2(r.left() + cols[1], y), Align2::LEFT_CENTER, &wp.ident, menu::data(), Color32::WHITE);
+                let via = match (&wp.phase, &wp.via) {
+                    (Some((_, name)), _) => name.clone(),
+                    (None, Some(v)) if v != "DCT" => v.clone(),
+                    _ => "DCT".into(),
+                };
+                let vg = p.layout_no_wrap(via, menu::caption(), col);
+                p.with_clip_rect(Rect::from_min_max(pos2(r.left() + cols[2], r.top()), pos2(r.left() + cols[3] - 6.0, r.bottom()))).galley(pos2(r.left() + cols[2], y - vg.size().y * 0.5), vg, col);
+                match (wp.leg, leg) {
+                    (Leg::Fix { .. }, Some(l)) => {
+                        run += l.2;
+                        p.text(pos2(r.left() + cols[3], y), Align2::LEFT_CENTER, format!("{:03.0}°", l.3), menu::data(), TEXT);
+                        p.text(pos2(r.left() + cols[4], y), Align2::LEFT_CENTER, format!("{:.0}", l.2 / 1852.0), menu::data(), TEXT);
+                    }
+                    (Leg::Climb { course, .. } | Leg::Intercept { course } | Leg::Vectors { course }, _) => {
+                        p.text(pos2(r.left() + cols[3], y), Align2::LEFT_CENTER, format!("H{course:03.0}"), menu::data(), TEXT);
+                    }
+                    _ => {}
+                }
+                let alt = wp.alt.map(|a| a.text()).unwrap_or_default();
+                let spd = wp.speed.map(|s| format!("  {s:.0}K")).unwrap_or_default();
+                p.text(pos2(r.left() + cols[5], y), Align2::LEFT_CENTER, format!("{alt}{spd}"), menu::caption(), ACCENT);
+                let tip = format!("{}  ·  {}\n{}\n{}", wp.kind.tag(), wp.name, menu::latlon(wp.lat, wp.lon), t!("plan.row_tip", nm = format!("{:.0}", run / 1852.0), time = flightplan::hm(run / gs)));
+                let resp = resp.on_hover_text(tip);
+                if resp.hovered() {
+                    let bw = 24.0;
+                    let mut x = r.right() - bw;
+                    for (k, sym, en) in [(0i8, "", true), (1, "▼", i + 1 < n), (-1, "▲", i > 0)] {
+                        let b = Rect::from_min_size(pos2(x, r.top() + 3.0), vec2(bw - 3.0, r.height() - 6.0));
+                        let br = ui.interact(b, resp.id.with(k), Sense::click());
+                        let p = ui.painter();
+                        let hot = br.hovered();
+                        p.rect_filled(b, 3.0, if hot { Color32::from_rgb(64, 70, 80) } else { Color32::from_rgb(40, 45, 54) });
+                        let c = if en { Color32::WHITE } else { DIM };
+                        if sym.is_empty() {
+                            for d in [vec2(3.5, 3.5), vec2(3.5, -3.5)] {
+                                p.line_segment([b.center() - d, b.center() + d], Stroke::new(1.5, c));
+                            }
+                        } else {
+                            p.text(b.center(), Align2::CENTER_CENTER, sym, menu::caption(), c);
+                        }
+                        if en && br.clicked() {
+                            act = Some((i, k));
+                        }
+                        x -= bw;
+                    }
+                }
+                if resp.double_clicked() {
+                    look = Some(wp.at());
+                }
+            }
+        });
+        if let Some((la, lo)) = look {
+            self.menu.look_at(la, lo, 60_000.0);
+        }
+        match act {
+            Some((i, 0)) => self.plan.remove(i),
+            Some((i, 1)) => self.plan.swap(i, i + 1),
+            Some((i, _)) => self.plan.swap(i, i - 1),
+            None => {}
+        }
+    }
+
+    /// the figures, the cruise level, and the way into the air.
+    fn planner_foot(&mut self, ui: &mut egui::Ui, start: &mut bool) {
+        let dep = self.menu.pick;
+        if !self.plan.is_empty() {
+            let total = self.plan.total(dep);
+            let gs = self.spec.cruise.max(20.0);
+            let fl = self.plan.cruise_ft;
+            let lvl = if fl >= 18_000.0 { format!("FL{:03.0}", fl / 100.0) } else { format!("{fl:.0} ft") };
+            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 40.0), Sense::hover());
+            let p = ui.painter();
+            let cells = [(t!("plan.distance"), format!("{:.0} nm", total / 1852.0)), (t!("plan.time"), flightplan::hm(total / gs)), (t!("game.cruise"), lvl)];
+            let cw = r.width() / 3.0;
+            for (k, (cap, v)) in cells.iter().enumerate() {
+                let x = r.left() + cw * k as f32;
+                p.text(pos2(x, r.top()), Align2::LEFT_TOP, cap.to_uppercase(), menu::bold(10.0), FAINT);
+                p.text(pos2(x, r.bottom()), Align2::LEFT_BOTTOM, v, menu::bold(18.0), Color32::WHITE);
+            }
+            ui.add_space(8.0);
+            ui.spacing_mut().slider_width = ui.available_width();
+            ui.add(egui::Slider::new(&mut self.plan.cruise_ft, 1000.0..=60000.0).step_by(1000.0).show_value(false)).on_hover_text(t!("plan.cruise_hint"));
+            ui.add_space(12.0);
+        }
+        let ready = self.menu.pick.is_some() && !self.menu.starting;
+        let db = airports::Db::get();
+        let label = match (self.menu.airport, &self.menu.runway) {
+            (Some(i), Some(r)) => t!("plan.fly_from", apt = db.apts[i as usize].ident, rwy = r),
+            _ => t!("game.take_off").to_string(),
+        };
+        if menu::wide_button(ui, &label, Hint::of("Enter", "Menu"), true, ready).clicked() {
+            self.planner.open = false;
+            *start = true;
+        }
+    }
+}
+
+/// the colour of a procedure phase.
+fn phase_colour(p: Phase) -> Color32 {
+    match p {
+        Phase::Sid => SID_COLOUR,
+        _ => ARR_COLOUR,
+    }
+}
+
+/// space between the planner's sections.
+fn gap(ui: &mut egui::Ui) {
+    ui.add_space(18.0);
+}
+
+/// a small caps title over a section.
+fn section_title(ui: &mut egui::Ui, title: &str) {
+    ui.label(RichText::new(title.to_uppercase()).font(menu::bold(11.0)).color(DIM).extra_letter_spacing(1.0));
+    ui.add_space(8.0);
+}
+
+/// a section title with links on the right, all on one line.
+fn header(ui: &mut egui::Ui, title: &str, links: impl FnOnce(&mut egui::Ui)) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title.to_uppercase()).font(menu::bold(11.0)).color(DIM).extra_letter_spacing(1.0));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            links(ui);
+        });
+    });
+    ui.add_space(8.0);
+}
+
+/// a small caps caption over a field.
+fn caption(ui: &mut egui::Ui, title: &str) {
+    ui.label(RichText::new(title.to_uppercase()).font(menu::bold(10.0)).color(FAINT).extra_letter_spacing(1.0));
+    ui.add_space(6.0);
+}
+
+/// a quiet box around a section.
+fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new().fill(Color32::from_white_alpha(5)).stroke(Stroke::new(1.0, Color32::from_white_alpha(14))).corner_radius(4).inner_margin(egui::Margin::symmetric(12, 12)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.spacing_mut().item_spacing.y = 0.0;
+        add(ui);
+    });
+}
+
+/// a word that acts as a button, in the accent colour.
+fn link(ui: &mut egui::Ui, text: &str) -> bool {
+    ui.add(egui::Button::new(RichText::new(text).font(menu::caption()).color(ACCENT)).frame(false)).clicked()
+}
+
+
+/// the icao type designator simbrief knows an aircraft by.
+fn icao_type(key: &str) -> &'static str {
+    match key {
+        "c172" => "C172",
+        "dr400" => "DR40",
+        "b747" => "B744",
+        "g650" => "GLF6",
+        "concorde" => "CONC",
+        "fa18" => "F18S",
+        "f22" => "F22",
+        "f4" => "F4",
+        "sr71" => "SR71",
+        _ => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn colours_by_phase() {
+        let mut w = Waypoint::fix("ABCDE", 0.0, 0.0);
+        assert_eq!(wp_colour(&w), ROUTE_COLOUR);
+        w.phase = Some((Phase::Sid, "X1".into()));
+        assert_eq!(wp_colour(&w), SID_COLOUR);
+        assert_eq!(icao_type("b747"), "B744");
+    }
+}

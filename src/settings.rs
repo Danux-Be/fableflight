@@ -46,6 +46,8 @@ pub struct Settings {
     pub multiplayer: bool,
     pub mp_server: String,
     pub mp_name: String,
+    /// simbrief username or pilot id, for the flight planner.
+    pub simbrief: String,
     /// where the last flight started.
     pub last: Option<LastStart>,
 }
@@ -82,7 +84,7 @@ impl LastStart {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { lang: None, sound_on: true, volume: 1.0, cam_mode: 0, cockpit_fov: crate::cockpit::FOV, look_sens: 1.0, show_hud: true, hud_cockpit: false, path_marker: false, minimap: true, landing_guidance: true, arcade: false, minimap_plan: false, minimap_heading_up: false, minimap_zoom: 12, minimap_size: 280.0, minimap_height: 280.0, taa: true, fullscreen: true, live_traffic: true, live_weather: true, real_time: true, snow: crate::snow::Mode::Auto, last: None, multiplayer: false, mp_server: "auto".into(), mp_name: String::new() }
+        Self { lang: None, sound_on: true, volume: 1.0, cam_mode: 0, cockpit_fov: crate::cockpit::FOV, look_sens: 1.0, show_hud: true, hud_cockpit: false, path_marker: false, minimap: true, landing_guidance: true, arcade: false, minimap_plan: false, minimap_heading_up: false, minimap_zoom: 12, minimap_size: 280.0, minimap_height: 280.0, taa: true, fullscreen: true, live_traffic: true, live_weather: true, real_time: true, snow: crate::snow::Mode::Auto, last: None, multiplayer: false, mp_server: "auto".into(), mp_name: String::new(), simbrief: String::new() }
     }
 }
 
@@ -130,6 +132,7 @@ impl Settings {
             multiplayer: b("multiplayer", d.multiplayer),
             mp_server: j["mp_server"].as_str().map(|s| s.trim().chars().take(100).collect()).unwrap_or(d.mp_server),
             mp_name: j["mp_name"].as_str().map(crate::mp_proto::clean_name).unwrap_or(d.mp_name),
+            simbrief: j["simbrief"].as_str().map(|s| s.trim().chars().take(64).collect()).unwrap_or_default(),
             last: LastStart::from_json(&j["last_start"]),
         }
     }
@@ -162,6 +165,7 @@ impl Settings {
             "multiplayer": self.multiplayer,
             "mp_server": self.mp_server,
             "mp_name": self.mp_name,
+            "simbrief": self.simbrief,
             "last_start": self.last.as_ref().map(LastStart::to_json),
         })
     }
@@ -186,7 +190,7 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        let s = Settings { lang: Lang::parse("fr"), sound_on: false, volume: 0.4, cam_mode: 1, cockpit_fov: 50.0, look_sens: 1.5, show_hud: false, hud_cockpit: true, path_marker: true, minimap: false, landing_guidance: false, arcade: true, minimap_plan: true, minimap_heading_up: true, minimap_zoom: 15, minimap_size: 420.0, minimap_height: 300.0, taa: false, fullscreen: false, live_traffic: false, live_weather: false, real_time: false, snow: crate::snow::Mode::Always, last: Some(LastStart { lat: 37.6, lon: -122.4, name: "KSFO".into(), airport: Some("KSFO".into()), start: "approach".into(), runway: Some("28L".into()), aircraft: "c172".into() }), multiplayer: true, mp_server: "example.org:7000".into(), mp_name: "Dany".into() };
+        let s = Settings { lang: Lang::parse("fr"), sound_on: false, volume: 0.4, cam_mode: 1, cockpit_fov: 50.0, look_sens: 1.5, show_hud: false, hud_cockpit: true, path_marker: true, minimap: false, landing_guidance: false, arcade: true, minimap_plan: true, minimap_heading_up: true, minimap_zoom: 15, minimap_size: 420.0, minimap_height: 300.0, taa: false, fullscreen: false, live_traffic: false, live_weather: false, real_time: false, snow: crate::snow::Mode::Always, last: Some(LastStart { lat: 37.6, lon: -122.4, name: "KSFO".into(), airport: Some("KSFO".into()), start: "approach".into(), runway: Some("28L".into()), aircraft: "c172".into() }), multiplayer: true, mp_server: "example.org:7000".into(), mp_name: "Dany".into(), simbrief: "pilot42".into() };
         assert_eq!(Settings::from_json(&s.to_json()), s);
         let tail = Settings { cam_mode: TAIL_VIEW, ..Settings::default() };
         assert_eq!(Settings::from_json(&tail.to_json()), tail);

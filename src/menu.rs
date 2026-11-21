@@ -155,6 +155,8 @@ pub enum Screen {
     Fly,
     Aircraft,
     Settings,
+    /// the pilot's logbook (logbook.rs).
+    Logbook,
 }
 
 impl Screen {
@@ -165,6 +167,7 @@ impl Screen {
             "fly" | "globe" | "start" => Screen::Fly,
             "aircraft" | "hangar" | "planes" => Screen::Aircraft,
             "settings" | "options" => Screen::Settings,
+            "logbook" | "profile" | "log" => Screen::Logbook,
             _ => return None,
         })
     }

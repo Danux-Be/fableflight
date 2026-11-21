@@ -291,3 +291,99 @@ struct BoltOut {
   let col = (vec3f(0.92, 0.94, 1.0) * core + vec3f(0.62, 0.66, 1.0) * halo) * b * BOLT_K / max(G.time.z, 0.05);
   return vec4f(col, clamp(core * min(b * 30.0, 1.0), 0.0, 1.0));
 }
+
+// contrails: ice trails behind engines (contrail.rs), ribbons a few pixels to
+// a few kilometres wide, soft across, lumpy along as they age, lit like thin cirrus.
+struct TrailOut {
+  @builtin(position) clip: vec4f,
+  @location(0) x: f32,
+  @location(1) t: f32,
+  // alphas at the two ends, along coordinates (m).
+  @location(2) @interpolate(flat) c: vec4f,
+  @location(3) P: vec3f,
+  // coverage kept when narrower than drawn, width (m).
+  @location(4) k: f32,
+  @location(5) wm: f32,
+};
+
+@vertex fn vs_trail(@builtin(vertex_index) vi: u32, @location(0) a: vec4f, @location(1) b: vec4f, @location(2) c: vec4f) -> TrailOut {
+  var o: TrailOut;
+  o.clip = vec4f(2.0, 2.0, 2.0, 1.0);
+  var pa = a.xyz;
+  var pb = b.xyz;
+  var wa = a.w;
+  var wb = b.w;
+  var cc = c;
+  let wn = G.misc.x * 2.0;
+  var ca = G.view_proj * vec4f(pa, 1.0);
+  var cb = G.view_proj * vec4f(pb, 1.0);
+  if (ca.w < wn && cb.w < wn) { return o; }
+  if (ca.w < wn) {
+    let f = (wn - ca.w) / (cb.w - ca.w);
+    pa = mix(pa, pb, f); wa = mix(wa, wb, f); cc.x = mix(c.x, c.y, f); cc.z = mix(c.z, c.w, f);
+    ca = G.view_proj * vec4f(pa, 1.0);
+  }
+  if (cb.w < wn) {
+    let f = (wn - cb.w) / (ca.w - cb.w);
+    pb = mix(pb, pa, f); wb = mix(wb, wa, f); cc.y = mix(c.y, c.x, f); cc.w = mix(c.w, c.z, f);
+    cb = G.view_proj * vec4f(pb, 1.0);
+  }
+  let half = G.screen.xy * 0.5;
+  let sa = ca.xy / ca.w * half;
+  let sb = cb.xy / cb.w * half;
+  let dv = sb - sa;
+  let len = length(dv);
+  var dir = vec2f(0.0, 1.0);
+  if (len > 1e-3) { dir = dv / len; }
+  let perp = vec2f(-dir.y, dir.x);
+  // half widths in pixels, never under a pixel, coverage scaled down to match.
+  let ta = 0.5 * wa / (ca.w * G.misc.w);
+  let tb = 0.5 * wb / (cb.w * G.misc.w);
+  let ha = max(ta, 0.8);
+  let hb = max(tb, 0.8);
+  let corners = array<vec2f, 6>(vec2f(-1.0, 0.0), vec2f(1.0, 0.0), vec2f(1.0, 1.0), vec2f(-1.0, 0.0), vec2f(1.0, 1.0), vec2f(-1.0, 1.0));
+  let q = corners[vi];
+  var clip = mix(ca, cb, q.y);
+  let hw = mix(ha, hb, q.y);
+  clip = vec4f(clip.xy + perp * (q.x * hw) / half * clip.w, clip.zw);
+  o.clip = clip;
+  o.x = q.x;
+  o.t = q.y;
+  o.c = cc;
+  o.P = mix(pa, pb, q.y);
+  o.k = mix(ta / ha, tb / hb, q.y);
+  o.wm = mix(wa, wb, q.y);
+  return o;
+}
+
+fn trail_hg(c: f32, g: f32) -> f32 { return (1.0 - g * g) / (4.0 * PI * pow(1.0 + g * g - 2.0 * g * c, 1.5)); }
+
+@fragment fn fs_trail(in: TrailOut) -> @location(0) vec4f {
+  let a0 = mix(in.c.x, in.c.y, in.t);
+  if (a0 < 0.002) { discard; }
+  let along = mix(in.c.z, in.c.w, in.t);
+  let x = in.x;
+  // a denser core, soft edges.
+  let prof = exp(-x * x * 2.4) * (1.0 - smoothstep(0.7, 1.0, abs(x)));
+  // young trails are smooth, old ones break into lumps and streaks.
+  let old = smoothstep(18.0, 160.0, in.wm);
+  let n = textureSampleLevel(t_noise, s_repeat, vec3f(along / (260.0 + in.wm * 2.0), x * 0.22 + 0.5, 0.31 + in.c.z * 1e-5), 0.0);
+  let fbm = n.g * 0.625 + n.b * 0.25 + n.a * 0.125;
+  let lump = mix(0.85 + 0.3 * fbm, clamp(remap(n.r, fbm - 1.0, 1.0, 0.0, 1.0) * 1.7, 0.0, 1.0), old * 0.85);
+  var a = clamp(a0 * prof * lump * in.k, 0.0, 1.0);
+  if (a < 0.002) { discard; }
+  let P = in.P;
+  let d = length(P);
+  let rd = P / max(d, 1e-3);
+  let lgt = light_at_nv(P);
+  // ice crystals scatter forward strongly: bright towards the sun, golden as it sets.
+  let cs = dot(rd, G.sun_dir.xyz);
+  // (a softer forward peak than the crystals have: the bloom would smear a sharp one into a wedge.)
+  let ph = min(trail_hg(cs, 0.6) * 0.35 + trail_hg(cs, -0.15) * 0.65, 0.45);
+  let L = vec3f(0.95, 0.97, 1.0) * (lgt.sun * ph * 3.0 + lgt.amb * 1.05);
+  // the air between thins out with height.
+  let h_mid = max(0.5 * (G.up.w + length(P - G.planet.xyz) - G.planet.w), 0.0);
+  let ext = (RAYLEIGH.g + (MIE_S + MIE_A) * G.weather.w) * 0.8 * exp(-h_mid / 8000.0);
+  a *= exp(-d * ext) * cloud_cover(in.clip.xy, d);
+  return vec4f(L * a, a);
+}

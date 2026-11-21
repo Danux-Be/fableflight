@@ -1051,6 +1051,8 @@ pub struct Frame<'a> {
     pub rain_drops: u32,
     /// lightning channel segments (storm.rs `Lightning::segments`)
     pub bolts: Vec<[f32; 8]>,
+    /// contrail segments relative to the camera (contrail.rs).
+    pub trails: Vec<crate::contrail::Seg>,
     /// COVER_N x COVER_N, row by row: how far the building tile there has faded
     /// in (255 = fully drawn, 0 = none), from the corner tile in
     /// `World::cover_base`. The terrain's city glow gives way to it.
@@ -1170,6 +1172,8 @@ pub struct Renderer {
     p_veil: wgpu::RenderPipeline,
     p_bolt: wgpu::RenderPipeline,
     bolt_buf: wgpu::Buffer,
+    p_trail: wgpu::RenderPipeline,
+    trail_buf: wgpu::Buffer,
     /// loose trees; `p_tree_near` draws the rest short of IMP_DIST (with the
     /// outlines of their crowns cut into clumps), `imp` the ones beyond
     p_tree: wgpu::RenderPipeline,
@@ -2260,11 +2264,12 @@ impl Renderer {
         const A_AIR: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32x4, 3 => Float32, 4 => Float32x2];
         const A_LIGHT: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32, 2 => Float32x3, 3 => Float32, 4 => Unorm8x4, 5 => Uint8x4];
         const A_BOLT: [wgpu::VertexAttribute; 2] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
+        const A_TRAIL: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
 
         let (
             (p_cshadow_in, p_cshadow_out, p_cshadow_in_plain, p_cshadow_out_plain, p_cshadow_mix, p_composite, p_composite_edge, p_cloud, p_cloud_plain, p_cloud_classify, p_cloud_plain_cls, p_cloud_storm_cls, p_cloud_rain, p_cloud_temporal, p_cloud_apply),
             (p_terrain, p_terrain_tess, p_terrain_cells, p_build, p_build_whole, p_build_shadow, p_photo, p_skin, p_photo_shadow, p_photo_shadow_fast, p_photo_mask, p_water_top, p_shore_cover),
-            (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_veil, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow),
+            (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_trail, p_veil, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow),
             (p_trans, p_ms, p_sky, p_gtao, p_ao_blur, p_taa, p_down, p_up, p_final, p_final_taa, p_blit, p_particles, p_psim, p_vol, p_dres),
         ) = std::thread::scope(|s| {
 
@@ -2434,6 +2439,7 @@ impl Renderer {
                 let over = wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha, operation: wgpu::BlendOperation::Add };
                 let p_rain = precip("rain", "vs_rain", "fs_rain", over, cover, &[]);
                 let p_bolt = precip("lightning", "vs_bolt", "fs_bolt", wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add }, cover, &[vb(32, true, &A_BOLT)]);
+                let p_trail = precip("contrails", "vs_trail", "fs_trail", over, cover, &[vb(48, true, &A_TRAIL)]);
                 let p_veil = precip("rain veil", "vs_veil", "fs_veil", over, wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add }, &[]);
                 let p_tree = geom("tree", Some(&l_tileu), &m_tree, &[vb(72, false, &A_TREEV), vb(36, true, &A_TREE)], 0);
                 let imp = crate::impostor::Impostors::new(d, &l0, &l_tileu, &m_tree, if integrated { crate::impostor::CELL_INTEGRATED } else { crate::impostor::CELL });
@@ -2443,7 +2449,7 @@ impl Renderer {
                 let p_card = geom("leaf cards", Some(&l_tileu), &m_tree, &[vb(72, false, &A_TREEV), vb(36, true, &A_TREE)], 3);
                 let p_inst = geom("inst", None, &m_inst, &[vb(40, false, &A_MESH), vb(80, true, &A_INST)], 0);
                 let p_inst_shadow = geom("inst shadow", None, &m_inst, &[vb(40, false, &A_MESH), vb(80, true, &A_INST)], 1);
-                (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_veil, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow)
+                (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_trail, p_veil, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow)
             });
 
             let p_trans = full("trans", &pl0, &m_lut, "fs_trans", HDR, None);
@@ -2564,6 +2570,7 @@ impl Renderer {
         let near_buf = dynbuf("near trees", MAX_NEAR as u64 * 36);
         let dyn_lights = dynbuf("aircraft lights", MAX_DYN_LIGHTS as u64 * 40);
         let bolt_buf = dynbuf("lightning", crate::storm::MAX_SEGS as u64 * 32);
+        let trail_buf = dynbuf("contrails", crate::contrail::MAX_SEGS as u64 * 48);
         // (No paint until the aircraft is known: `set_paint`.)
         let paint = paint_texture(d, &queue, None);
         let paint_ub = d.create_buffer(&wgpu::BufferDescriptor { label: Some("paint"), size: PAINT_UB, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
@@ -2628,7 +2635,7 @@ impl Renderer {
         }
         Ok(Self {
             ground_mats,
-            casc_ub, bg_casc, bg_tileu, l_dres, l_ao, p_gtao, p_ao_blur, p_dres, p_road, p_field, p_lights, dyn_lights, p_rain, p_veil, p_bolt, bolt_buf, p_tree, p_tree_near, imp, p_tree_shadow, p_tree_shadow_fixed, p_card, near_buf, p_inst, p_inst_shadow, inst_buf, fall_buf, tree_lib: None, inst_lib: None,
+            casc_ub, bg_casc, bg_tileu, l_dres, l_ao, p_gtao, p_ao_blur, p_dres, p_road, p_field, p_lights, dyn_lights, p_rain, p_veil, p_bolt, bolt_buf, p_trail, trail_buf, p_tree, p_tree_near, imp, p_tree_shadow, p_tree_shadow_fixed, p_card, near_buf, p_inst, p_inst_shadow, inst_buf, fall_buf, tree_lib: None, inst_lib: None,
             gpu_timer: crate::gputime::GpuTimer::new(&device, &queue),
             globals_ub, bg0, bg0_pre, bg0_shadow, lut_sky, shadow, shadow_res: SHADOW_RES, bg0_src, scale: 1.0, ao: true, cloud_step: 1.0, l_tile, l_build, l_composite, l_cloud, l_cloud_storm, l_cloud_rain, l_cloud_apply, l_cloud_temporal, l_post, l_pdraw, l_glass,
             tile_ub, l_photo, photo_ub, p_photo, p_photo_mask, p_photo_shadow, p_photo_shadow_fast, l_skin, p_skin, skin_slots, p_water_top, p_lamp_top, photo_mask, photo_mask_dirty: true, light_cover, light_cover_view, glow_tex, gclouds_tex, snow_tex, snow_track_tex, build_ub, obj_ub, bg_obj, l_obj, paint_ub, tile_ibuf, tile_nidx: ix.len() as u32,
@@ -3274,6 +3281,10 @@ impl Renderer {
         }
         let field_slot = |i: usize| ((n_builds + 1 + i) * 256) as u32;
         let n_bolt = f.bolts.len().min(crate::storm::MAX_SEGS);
+        let n_trail = f.trails.len().min(crate::contrail::MAX_SEGS);
+        if n_trail > 0 {
+            q.write_buffer(&self.trail_buf, 0, bytemuck::cast_slice(&f.trails[..n_trail]));
+        }
         if n_bolt > 0 {
             q.write_buffer(&self.bolt_buf, 0, bytemuck::cast_slice(&f.bolts[..n_bolt]));
         }
@@ -4103,11 +4114,16 @@ impl Renderer {
             rp.set_bind_group(1, &ft.bg_up, &[]);
             rp.draw(0..3, 0..1);
         }
-        if f.rain_drops > 0 || n_bolt > 0 {
+        if f.rain_drops > 0 || n_bolt > 0 || n_trail > 0 {
             let ds = wgpu::RenderPassDepthStencilAttachment { view: &t.depth, depth_ops: None, stencil_ops: None };
             let mut rp = enc.begin_render_pass(&pass_desc(&[Some(color_att(&t.hdr, false))], Some(ds)));
             rp.set_bind_group(0, &self.bg0, &[]);
             rp.set_bind_group(1, &t.bg_cloud_apply[cf], &[]);
+            if n_trail > 0 {
+                rp.set_pipeline(&self.p_trail);
+                rp.set_vertex_buffer(0, self.trail_buf.slice(..));
+                rp.draw(0..6, 0..n_trail as u32);
+            }
             if f.rain_drops > 0 {
                 rp.set_pipeline(&self.p_veil);
                 rp.draw(0..3, 0..1);
