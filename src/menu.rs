@@ -599,6 +599,7 @@ pub const CONTROLS: &[(&str, &[(&str, &str)])] = &[
         ("A / D", "roll left / right"),
         ("Q / E", "rudder left / right"),
         ("Shift / Ctrl", "throttle up / down"),
+        ("J", "mouse yoke: the pointer flies, the wheel is the throttle"),
         ("Space", "boost"),
         ("B", "wheel brakes"),
         ("F / V", "flaps down / up a notch"),
@@ -626,6 +627,7 @@ pub const CONTROLS: &[(&str, &[(&str, &str)])] = &[
         ("H", "hide / show the HUD"),
         ("`", "hide / show the minimap"),
         ("F12", "screenshot"),
+        ("F11 / Alt+Enter", "full screen / window"),
     ]),
     ("WORLD", &[
         ("T / Y", "time of day forward / back"),
