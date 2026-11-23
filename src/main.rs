@@ -4071,6 +4071,8 @@ impl Game {
             }
         }
         self.ap.engage(&s);
+        // engaging brings its panel up.
+        self.ap_bar_on = true;
         self.ap_alt_seen = (self.ap.alt, self.real);
         log::info!("autopilot on: {:?} {:?}", self.ap.lat, self.ap.vert);
         self.status = t!("game.autopilot_on").into();
@@ -8812,7 +8814,8 @@ impl Game {
             if self.mode == Mode::Fly && !self.show_help && !self.goto_open {
                 self.mouse_yoke_hud(ctx);
             }
-            if self.hud_on() && !self.pause_open && !self.show_help && !self.goto_open && self.mode == Mode::Fly {
+            // opened on purpose and hidden with its own button, so not part of the hud.
+            if !self.pause_open && !self.show_help && !self.goto_open && self.mode == Mode::Fly {
                 self.ap_bar(ctx);
             }
             if self.hud_on() && !self.pause_open && !self.show_help && !self.goto_open {
@@ -8940,13 +8943,27 @@ impl ApplicationHandler for App {
         let scripted = self.args.headless || self.args.bench.is_some() || std::env::args().any(|a| a == "--shot" || a == "--record");
         let windowed = self.args.windowed.unwrap_or(scripted || !settings::Settings::load().fullscreen);
         let title = if self.args.bench.is_some() { "Fable Flight: graphics test" } else { "Fable Flight" };
-        let mut attrs = Window::default_attributes().with_title(title).with_inner_size(winit::dpi::PhysicalSize::new(self.args.size.0, self.args.size.1));
+        // hidden while the game loads, so no blank window sits there for seconds.
+        let mut attrs = Window::default_attributes().with_title(title).with_inner_size(winit::dpi::PhysicalSize::new(self.args.size.0, self.args.size.1)).with_visible(false);
         if !windowed {
             attrs = attrs.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
         }
         let window = Arc::new(el.create_window(attrs).expect("window"));
         match Game::new(window, &self.args) {
-            Ok(g) => self.game = Some(g),
+            Ok(mut g) => {
+                // shown once its first frame is drawn.
+                g.frame();
+                // headless runs stay hidden.
+                if !self.args.headless {
+                    g.window.set_visible(true);
+                    // showing it resizes it before the game is there to hear it.
+                    let s = g.window.inner_size();
+                    g.r.resize(s.width, s.height);
+                }
+                g.window.request_redraw();
+                progress::step("ready");
+                self.game = Some(g);
+            }
             Err(e) => {
                 eprintln!("failed to start: {e:#}");
                 el.exit();

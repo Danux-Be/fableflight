@@ -1,4 +1,4 @@
-//! the autopilot's controls on screen: a strip under the heading tape with
+//! the autopilot's controls on screen: a strip at the bottom with
 //! the modes and four knobs, as on a mode control panel, and the same knobs
 //! on the autopilot page. each knob is two rings: the inner one turns in
 //! fine steps, the outer one in coarse steps; a press on the middle sets it
@@ -190,7 +190,7 @@ impl Game {
         }
     }
 
-    /// the strip on screen under the heading tape.
+    /// the strip at the bottom of the screen, up once picked or engaged.
     pub(crate) fn ap_bar(&mut self, ctx: &egui::Context) {
         if !self.ap_bar_on || self.crashed || self.spec.rocket().is_some() || self.info_open {
             return;
@@ -207,7 +207,9 @@ impl Game {
         let mut toggle = false;
         let mut at = false;
         let mut turns: Vec<(Dial, Turn)> = Vec::new();
-        egui::Area::new(egui::Id::unique("ap_bar")).anchor(Align2::CENTER_TOP, [0.0, 92.0]).show(ctx, |ui| {
+        let mut close = false;
+        let mut page = false;
+        egui::Area::new(egui::Id::unique("ap_bar")).anchor(Align2::CENTER_BOTTOM, [0.0, -16.0]).show(ctx, |ui| {
             let frame = egui::Frame::new().fill(Color32::from_rgba_premultiplied(8, 10, 14, 214)).stroke(Stroke::new(1.0, Color32::from_white_alpha(28))).corner_radius(flightui::R_HUD).inner_margin(egui::Margin::symmetric(10, 8));
             frame.show(ui, |ui| {
                 // the annunciator: what flies now in green, what waits in white.
@@ -277,6 +279,12 @@ impl Game {
                         }
                         ui.add_space(4.0);
                     }
+                    // hide, and the whole autopilot page.
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        close = key(ui, t!("ap.hide"), false, 46.0, 22.0).clicked();
+                        page = key(ui, t!("ap.more"), false, 46.0, 22.0).clicked();
+                    });
                 });
             });
         });
@@ -294,6 +302,12 @@ impl Game {
         }
         if let Some(m) = vert {
             self.ap_vert(m);
+        }
+        if close {
+            self.ap_bar_on = false;
+        }
+        if page {
+            self.toolbar_act(flightui::Bar::Page(menu::Page::Autopilot));
         }
     }
 
