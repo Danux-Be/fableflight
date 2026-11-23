@@ -1700,7 +1700,8 @@ impl Photo {
             budget = budget.saturating_sub(bytes);
             self.uploads.pop_front();
             let State::Decoded(m) = std::mem::replace(&mut n.state, State::Idle) else { unreachable!() };
-            let gpu = r.upload_photo(&m);
+            // no room on the gpu: back to idle, asked for again later.
+            let Some(gpu) = r.upload_photo(&m) else { continue };
             // How far the mesh sits from our terrain, from the finer tiles.
             if n.error <= E_DRAW {
                 // Only against fine terrain (a coarse tile is off by tens of

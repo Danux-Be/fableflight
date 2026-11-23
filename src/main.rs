@@ -15,7 +15,9 @@ mod crash;
 mod damage;
 mod destruct;
 mod fetch;
+mod crashlog;
 mod frame_pacer;
+mod framegen;
 mod fsr3;
 mod fsr4;
 mod fgmodel;
@@ -439,7 +441,7 @@ struct Args {
     mcp_port: u16,
 }
 
-const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--simbrief USER_OR_ID] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
+const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--simbrief USER_OR_ID] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--framegen-install] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
 
 fn parse_args() -> Args {
     let v: Vec<String> = std::env::args().skip(1).collect();
@@ -1274,6 +1276,14 @@ struct Game {
     storms_seen: bool,
     /// dynamic quality asked for on the command line (so it runs in --bench too)
     dyn_cli: bool,
+    /// dynamic resolution: share of the set resolution, smoothed gpu ms, frames seen, frames to skip, last change.
+    /// amd's present count at the last fps log line.
+    shown_at: u64,
+    dyn_k: f32,
+    dyn_ms: f64,
+    dyn_seen: u64,
+    dyn_skip: u32,
+    dyn_t: f64,
     /// where the aircraft was drawn last frame, relative to that frame's camera
     prev_plane: Mat4,
     /// centre and half size of the aircraft in its body frame
@@ -1431,6 +1441,8 @@ struct Game {
     prev_gear: f64,
     prev_flaps: f64,
     quit: bool,
+    /// why the game is quitting, for the log.
+    quit_why: &'static str,
     mode: Mode,
     menu: menu::Menu,
     menu_go: Option<f64>,
@@ -1845,12 +1857,12 @@ impl Game {
             gkey: src.google.key(), gkey_show: false, gm_logo: None, stills: std::collections::HashMap::new(), window, r, world, src, spec, model, piece_mesh, group_mesh, piece_cut, piece_inner, group_pivots, hangar: Vec::new(), building: Vec::new(), crashed: false, crash: None, crash_real: 0.0, egui_ctx, egui_state, keys: HashSet::new(), drag: false, lean_drag: None, last_cursor: None,
             minimap: minimap::Minimap::new(&prefs),
             cam_yaw: cy.to_radians(), cam_pitch: cp, cam_dist: cd, cam_mode: args.start_view.unwrap_or(prefs.cam_mode), view_before_tail: 0, cam_pos, cam_dir: -plane.forward(), cam_look: plane.pos, orbit: 0.0, cam_rise: 0.0, cam_clear_t: 0.0, cam_ang: None, cam_hold: 0.0,
-            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, gfx_eff: gfx, dynq: dynamic::Dynamic::default(), storms_seen: false, dyn_cli: args.dynamic.is_some(), prev_plane: Mat4::IDENTITY, plane_box, lamps,
-            frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, planner: Default::default(), ap_bar_on: true, ap_alt_seen: (0.0, 0.0), ils_auto: None, prefs_simbrief: prefs.simbrief.clone(), profile: profile::Profile::load(), flight_log: None, arcade: args.arcade || prefs.arcade, goto_open: false, goto_text: String::new(), goto_rx: None,
+            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, shown_at: 0, dyn_k: 1.0, dyn_ms: 0.0, dyn_seen: 0, dyn_skip: 0, dyn_t: 0.0, gfx_eff: gfx, dynq: dynamic::Dynamic::default(), storms_seen: false, dyn_cli: args.dynamic.is_some(), prev_plane: Mat4::IDENTITY, plane_box, lamps,
+            frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, planner: Default::default(), ap_bar_on: false, ap_alt_seen: (0.0, 0.0), ils_auto: None, prefs_simbrief: prefs.simbrief.clone(), profile: profile::Profile::load(), flight_log: None, arcade: args.arcade || prefs.arcade, goto_open: false, goto_text: String::new(), goto_rx: None,
             status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, pad_y: false, pad_y_combo: false, pad_held: Vec::new(), pad_note: (String::new(), 0.0), pad_aim: false, pad_live: None, ap: autopilot::Autopilot::default(), ap_off_t: -100.0, ap_script: args.ap_script.clone(), cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
-            record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, snow: args.snow.unwrap_or(prefs.snow), info_open: args.weather_panel, radial: Default::default(), info_page: if args.weather_panel { menu::Page::Weather } else { menu::Page::Flight }, pause_open: false, pause_page: menu::Page::Game, pause_at: args.pause_menu, radial_at: args.flight_menu, settings_sec: args.settings.unwrap_or(settings_ui::Section::General), look_sens: prefs.look_sens, invert_look_cockpit: prefs.invert_look_cockpit, invert_look_outside_x: prefs.invert_look_outside_x, invert_look_outside_y: prefs.invert_look_outside_y, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
-            g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
+            record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, snow: args.snow.unwrap_or(prefs.snow), info_open: args.weather_panel, radial: Default::default(), info_page: if args.weather_panel { menu::Page::Weather } else { menu::Page::Flight }, pause_open: false, pause_page: menu::Page::Game, pause_at: args.pause_menu, radial_at: args.flight_menu, settings_sec: args.settings.unwrap_or(settings_ui::Section::General), settings_find: String::new(), look_sens: prefs.look_sens, invert_look_cockpit: prefs.invert_look_cockpit, invert_look_outside_x: prefs.invert_look_outside_x, invert_look_outside_y: prefs.invert_look_outside_y, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
+            quit_why: "", g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
@@ -5821,6 +5833,7 @@ impl Game {
         }
         if self.r.is_device_lost() {
             eprintln!("GPU device lost; exiting cleanly.");
+            self.quit_why = "gpu device lost";
             self.quit = true;
             return;
         }
@@ -5836,7 +5849,22 @@ impl Game {
             if el >= 1.0 {
                 let n = l.2 as f64;
                 let st = std::mem::take(&mut self.r.stats);
-                log::info!("{:.1} fps avg ({:.1} ms), slowest frame {:.1} ms | game {:.1}  wait-gpu {:.1}  encode {:.1}  submit {:.1} ms", n / el, el / n * 1000.0, l.3 * 1000.0, st[0] / n * 1000.0, st[1] / n * 1000.0, st[2] / n * 1000.0, st[3] / n * 1000.0);
+                // frames shown, generated ones too, while frame generation runs.
+                let shown = self.r.fg.as_ref().map(|f| f.presents()).map(|p| {
+                    let d = p.saturating_sub(self.shown_at);
+                    self.shown_at = p;
+                    format!(" | shown {:.1} fps", d as f64 / el)
+                });
+                let gpu = self.r.frame_gpu_ms().unwrap_or(0.0);
+                let (rw, rh) = self.r.render_size();
+                let vram = self.r.vram().map(|(u, b)| format!(" | vram {} / {} MB", u >> 20, b >> 20)).unwrap_or_default();
+                log::info!("{:.1} fps avg ({:.1} ms), slowest frame {:.1} ms | game {:.1}  wait-gpu {:.1}  encode {:.1}  submit {:.1} ms | gpu {gpu:.1} ms at {rw}x{rh}{}{vram}", n / el, el / n * 1000.0, l.3 * 1000.0, st[0] / n * 1000.0, st[1] / n * 1000.0, st[2] / n * 1000.0, st[3] / n * 1000.0, shown.unwrap_or_default());
+                static VRAM_REPORT: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("FABLE_VRAM_REPORT").is_ok_and(|v| v == "1"));
+                if *VRAM_REPORT {
+                    if let Some(r) = self.r.vram_report() {
+                        log::info!("vram: {r}");
+                    }
+                }
                 (l.1, l.2, l.3) = (now, 0, 0.0);
             }
         }
@@ -5850,6 +5878,7 @@ impl Game {
         if self.frame > 1 && let Some(b) = &mut self.bench {
             let size = (self.r.config.width, self.r.config.height);
             if b.frame(raw_dt, &self.r.gpu.name, size, &self.gfx) {
+                self.quit_why = "graphics test done";
                 self.quit = true;
             }
         }
@@ -5863,6 +5892,8 @@ impl Game {
             let target = dynamic::target_ms(&self.gfx, if self.gfx.vsync || self.gfx.dyn_fps == 0 { hz } else { None });
             // (vsync or a frame limit at the target holds frames back, hiding any room)
             let paced = self.gfx.vsync || (self.gfx.fps_cap > 0 && (1000.0 / self.gfx.fps_cap as f32 - target).abs() < 0.01);
+            // frame generation shows each drawn frame twice, so half as many are drawn.
+            let target = if self.r.fg.is_some() { target * 2.0 } else { target };
             self.dynq.update(raw_dt as f32, self.r.frame_gpu_ms(), target, paced);
         }
 
@@ -6397,6 +6428,7 @@ impl Game {
 
         // ---- camera
         self.apply_graphics();
+        self.dyn_res();
         let size = self.window.inner_size();
         let (w, h) = (size.width.max(1) as f32, size.height.max(1) as f32);
         // the size the scene is drawn at (graphics settings: render resolution)
@@ -6990,7 +7022,11 @@ impl Game {
             }
             // from far outside the cabin interior cannot be seen, skip its vertices.
             let far_out = self.cam_mode != 1 && (cam - self.plane.model_pos()).length() > 40.0;
-            for (i, p) in self.model.pieces.iter().enumerate() {
+            // occluders first so hidden pixels are never shaded, the cockpit from the seat, the skin from outside.
+            let seat = self.cam_mode == 1;
+            let n = self.model.pieces.len();
+            let order: Vec<usize> = (0..n).filter(|&i| self.piece_inner[i] == seat).chain((0..n).filter(|&i| self.piece_inner[i] != seat)).collect();
+            for (i, p) in order.into_iter().map(|i| (i, &self.model.pieces[i])) {
                 if far_out && self.piece_inner[i] {
                     continue;
                 }
@@ -7243,6 +7279,7 @@ impl Game {
         self.r.render(Frame { rain_drops, bolts, contrails: &self.contrail_draw, g, tiles, tess, details, photo, skins, skin_slots, fields, lights: air_lights, objs, insts, fall, near, casc_vp, shore: sf.step, shore_c, shore_tiles, psim, sim_steps: dt > 0.0, fluid, ocean: self.world.water_in_view().then(|| self.world.ocean.uniform()), egui: Some(ui), shot, cover, glow: glow_px, snow: snow_px, snow_tracks: snow_tr_uploads });
         self.finish_mcp_shots();
         if (had_shots && std::env::args().any(|a| a == "--shot") && self.record.is_none()) || rec_done {
+            self.quit_why = "shots or recording done";
             self.quit = true;
         }
     }
@@ -7914,6 +7951,55 @@ impl Game {
         self.src.google.enabled() || self.world.photo().stats.0 > 0
     }
 
+    /// steers the render resolution by gpu frame time to hold the frame rate. drops fast, climbs in
+    /// small steps, and changes rarely since each change remakes the targets and resets the history.
+    fn dyn_res(&mut self) {
+        let g = self.gfx_eff;
+        let Some(ft) = self.r.frame_clock.as_ref() else { return };
+        if !g.dynamic_res || self.record.is_some() || self.bench.is_some() || ft.frames == self.dyn_seen {
+            return;
+        }
+        let new = (ft.frames - self.dyn_seen) as u32;
+        self.dyn_seen = ft.frames;
+        let Some(ms) = ft.last.map(f64::from) else { return };
+        // skip frames right after a change.
+        if self.dyn_skip > 0 {
+            self.dyn_skip = self.dyn_skip.saturating_sub(new);
+            self.dyn_ms = 0.0;
+            return;
+        }
+        let fps = if g.fps_cap > 0 { (g.fps_cap as f64).min(60.0) } else { 60.0 };
+        // with frame generation each drawn frame is shown twice, so half the rate is drawn;
+        // amd's own pass is not in the frame timer, so it keeps more room.
+        let fg = self.r.fg.is_some();
+        let (fps, room) = if fg { (fps / 2.0, 0.82) } else { (fps, 0.92) };
+        // gpu time only, the cpu runs alongside it.
+        let target = 1000.0 / fps * room;
+        // loading spikes count for little.
+        let ms = ms.min(target * 2.0);
+        self.dyn_ms = if self.dyn_ms <= 0.0 { ms } else { self.dyn_ms * 0.92 + ms * 0.08 };
+        let since = self.real - self.dyn_t;
+        let k = self.dyn_k;
+        // pixels cost about k squared, the rest stays.
+        let next = self.dyn_ms * ((k + 0.05) / k).powi(2) as f64;
+        let want = if self.dyn_ms > target * 1.05 && since > 1.0 && k > graphics::DYN_MIN {
+            let k2 = k * (target / self.dyn_ms).sqrt() as f32;
+            ((k2 * 20.0).floor() / 20.0).clamp(k - 0.15, k - 0.05).max(graphics::DYN_MIN)
+        } else if next < target * 0.97 && since > 2.0 && k < 1.0 {
+            (k + 0.05).min(1.0)
+        } else {
+            k
+        };
+        if (want - k).abs() > 1e-3 {
+            log::info!("dynamic resolution: {:.0}% of {:.0}% (gpu {:.1} ms a frame)", want * 100.0, g.render_scale() * 100.0, self.dyn_ms);
+            self.dyn_k = want;
+            self.r.set_scale(g.render_scale() * want);
+            self.dyn_t = self.real;
+            self.dyn_skip = 8;
+            self.dyn_ms = 0.0;
+        }
+    }
+
     /// Hands changed graphics settings to the renderer and the world.
     fn apply_graphics(&mut self) {
         let g = self.dynq.settings(&self.gfx, self.storms_seen);
@@ -7921,11 +8007,19 @@ impl Game {
         // (from the player's setting, not the lowered one: dynamic terrain
         // detail must not drop loaded tiles that would then be fetched again)
         self.world.tile_cap = self.gfx.tile_cap();
+        if self.r.low_vram {
+            // city building tiles are 20 to 30 mb each, keep fewer.
+            self.world.tile_cap = self.world.tile_cap.min(450);
+        }
         if self.gfx_applied == Some(g) {
             return;
         }
         self.r.set_upscaler(g.upscaler);
-        self.r.set_scale(g.render_scale());
+        self.r.set_framegen(g.framegen);
+        if !g.dynamic_res {
+            self.dyn_k = 1.0;
+        }
+        self.r.set_scale(g.render_scale() * self.dyn_k);
         self.r.set_shadow_res(g.shadow_res());
         self.r.set_vsync(g.vsync);
         self.r.ao = g.ao;
@@ -7938,6 +8032,12 @@ impl Game {
         self.world.city_k = g.city_k();
         self.world.spare_builds = g.spare_builds();
         self.world.max_build_jobs = g.max_build_jobs();
+        if self.r.low_vram {
+            self.world.spare_builds = self.world.spare_builds.min(4);
+            self.world.max_build_jobs = self.world.max_build_jobs.min(6);
+            // over a big city the buildings alone would fill the card.
+            self.world.build_budget = self.r.vram().map_or(u64::MAX, |(_, b)| b * 2 / 9);
+        }
         self.world.tree_far = g.tree_far();
         self.world.tree_imp_k = g.tree_imp_k();
         self.world.cars = g.car_density();
@@ -8820,7 +8920,10 @@ impl Game {
                 self.start_airport(i, None, appr, true);
             }
             Some(PauseAct::Globe) => self.to_globe(),
-            Some(PauseAct::Quit) => self.quit = true,
+            Some(PauseAct::Quit) => {
+                self.quit_why = "quit from the pause menu";
+                self.quit = true;
+            }
             None => {}
         }
         let jobs = self.egui_ctx.tessellate(out.shapes, out.pixels_per_point);
@@ -8883,6 +8986,7 @@ impl ApplicationHandler for App {
         }
         match event {
             WindowEvent::CloseRequested => {
+                crashlog::exit("window closed");
                 g.keep_settings(true);
                 if !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench") { g.src.google.save(); }
                 // Dropped here, while the event loop (and with it the Wayland
@@ -9379,7 +9483,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     progress::step("boot");
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,fablegame=info")).init();
+    crashlog::init();
     // A JSBSim aircraft compared with one of ours (see jsbsim.rs), and out.
     let argv: Vec<String> = std::env::args().collect();
     if let Some(i) = argv.iter().position(|a| a == "--jsbsim-compare") {
@@ -9405,6 +9509,26 @@ fn main() -> anyhow::Result<()> {
         });
         eprintln!();
         match r.and_then(|_| fsr4::verify()) {
+            Ok(dir) => println!("installed and verified in {}", dir.display()),
+            Err(e) => {
+                eprintln!("failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        std::process::exit(0);
+    }
+    if argv.iter().any(|a| a == "--framegen-install") {
+        // amd's frame generation runtime, as the graphics settings' button fetches it (framegen.rs).
+        let r = framegen::dir().ok_or_else(|| "no data folder".to_string()).and_then(|d| {
+            let note = "AMD FSR frame generation runtime, downloaded at the player's request.\n";
+            let last = std::cell::Cell::new(0u64);
+            fsr4::fetch(&framegen::FILES, d, note, &|done, total| if done >= last.get() + (4 << 20) || done == total {
+                last.set(done);
+                eprint!("\rframe generation runtime: {} / {}", bytes(done), bytes(total));
+            })
+        });
+        eprintln!();
+        match r.and_then(|_| framegen::verify()) {
             Ok(dir) => println!("installed and verified in {}", dir.display()),
             Err(e) => {
                 eprintln!("failed: {e}");

@@ -169,6 +169,7 @@ impl Game {
             self.pad_home = true;
         }
         if quit {
+            self.quit_why = "quit from the main menu";
             self.quit = true;
         }
     }
