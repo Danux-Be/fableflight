@@ -1392,6 +1392,8 @@ struct Game {
     radial_at: Option<f64>,
     /// the section the settings screen shows (settings_ui.rs)
     settings_sec: settings_ui::Section,
+    /// the settings screen's search.
+    settings_find: String,
     /// mouse-look speed (1 = default)
     look_sens: f64,
     /// Settings › Camera: looking around turns the other way in the cockpit, outside (horizontal / vertical).
@@ -1520,7 +1522,6 @@ struct Game {
     /// the network's servers (started when first wanted: settings, or "auto")
     mp_dir: Option<mp::Directory>,
     /// the server is typed in (not picked from the list)
-    mp_custom: bool,
     /// where the server list is read from, in turn (--mp-list first)
     mp_list: Vec<String>,
     /// the near ones' stand-in aircraft, for posing their models (by player id)
@@ -1871,7 +1872,8 @@ impl Game {
             prefs_t: 0.0,
             live: live::Live::new(prefs.live_traffic),
             mp_on: prefs.multiplayer || args.mp.is_some(),
-            mp_server: args.mp.as_ref().map_or(prefs.mp_server.clone(), |m| m.0.clone()),
+            // the fastest server, always; the command line can still name one.
+            mp_server: args.mp.as_ref().map_or("auto".to_string(), |m| m.0.clone()),
             mp_name: args.mp.as_ref().and_then(|m| m.1.clone()).unwrap_or(prefs.mp_name.clone()),
             mp: None,
             mp_players: Vec::new(),
@@ -1879,7 +1881,6 @@ impl Game {
             mp_world_total: 0,
             mp_world_known: false,
             mp_dir: None,
-            mp_custom: false,
             mp_list: args.mp_list.iter().cloned().chain(mp::DIRECTORY_URLS.iter().map(|u| u.to_string())).collect(),
             mp_puppets: std::collections::HashMap::new(),
             mp_mirror: args.mp_mirror,
@@ -5812,10 +5813,6 @@ impl Game {
                 menu::seg(ui, &mut cur, l, l.name());
             }
         });
-        if ui.small_button(t!("settings.reload_languages")).on_hover_text(t!("settings.reload_languages_hint")).clicked() {
-            i18n::reload();
-            cur = i18n::lang();
-        }
         if cur != i18n::lang() {
             i18n::set_lang(cur);
             self.prefs_lang = Some(cur);
