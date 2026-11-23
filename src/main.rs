@@ -1224,6 +1224,10 @@ struct Game {
     script_cursor: Option<(f64, f64)>,
     /// scripted mouse events (--click, --wheel)
     script_clicks: Vec<MouseScript>,
+    /// `FABLE_UI_CLICKS="x,y@sec;..."`: clicks on the ui at window points, for headless pictures.
+    ui_clicks: Vec<(f64, egui::Pos2)>,
+    /// a scripted ui click held down, let go next pass.
+    ui_release: Option<egui::Pos2>,
     /// a cockpit hotspot the left button went down on: which, when, and
     /// whether its `hold` action has taken over (the key turned to START)
     hot_press: Option<(usize, f64, bool)>,
@@ -1889,6 +1893,8 @@ impl Game {
             mouse_captured: false,
             script_cursor: args.cursor,
             script_clicks: args.clicks.clone(),
+            ui_clicks: ui_clicks_from_env(),
+            ui_release: None,
             hot_press: None,
             wheel_hold: Vec::new(),
             wheel_acc: cockpit::WheelSteps::default(),
@@ -5057,6 +5063,16 @@ impl Game {
             raw.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Tab, .. }));
         }
         raw.events.append(&mut self.pad_events);
+        // scripted clicks on the ui: pressed one pass, let go the next.
+        let press = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        if let Some(pos) = self.ui_release.take() {
+            raw.events.push(press(pos, false));
+        } else if self.ui_clicks.first().is_some_and(|c| self.real >= c.0) {
+            let pos = self.ui_clicks.remove(0).1;
+            raw.events.push(egui::Event::PointerMoved(pos));
+            raw.events.push(press(pos, true));
+            self.ui_release = Some(pos);
+        }
         // The pad works the game whether or not the window has the keyboard,
         // and egui only lets a focused slider take the arrows in a focused window.
         if padui::active() {
@@ -9007,28 +9023,7 @@ impl ApplicationHandler for App {
                 std::process::exit(0);
             }
             WindowEvent::Resized(s) => g.r.resize(s.width, s.height),
-            WindowEvent::RedrawRequested => {
-                // The OS can also request redraws before our frame deadline.
-                let now = Instant::now();
-                if self.frame_pacer.control_flow(now, g.gfx.fps_cap) != ControlFlow::Poll {
-                    return;
-                }
-                self.frame_pacer.frame_started(now);
-                g.frame();
-                if g.frame == 1 {
-                    progress::step("ready");
-                }
-                if g.quit {
-                    g.log_close(false);
-                    g.keep_settings(true);
-                    if !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench") { g.src.google.save(); }
-                    // Worker threads may be mid-download, so the process just
-                    // exits; but the GPU device is torn down first: exiting
-                    // under the driver's shader compiler threads can crash it.
-                    self.game = None;
-                    std::process::exit(0);
-                }
-            }
+            WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::Focused(false) => {
                 g.release_mouse_capture();
                 g.cancel_cockpit_input();
@@ -9219,16 +9214,56 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(g) = &mut self.game {
-            // Answer tool calls even when redraws are delayed; screenshots wait for a frame.
-            g.pump_mcp();
-            let flow = self.frame_pacer.control_flow(Instant::now(), g.gfx.fps_cap);
-            if flow == ControlFlow::Poll {
-                g.window.request_redraw();
-            }
-            event_loop.set_control_flow(flow);
+        let Some(g) = &mut self.game else { return };
+        // Answer tool calls even when redraws are delayed; screenshots wait for a frame.
+        g.pump_mcp();
+        let flow = self.frame_pacer.control_flow(Instant::now(), g.gfx.fps_cap);
+        event_loop.set_control_flow(flow);
+        if flow != ControlFlow::Poll {
+            return;
+        }
+        // a hidden window is never asked to redraw.
+        if self.args.headless { self.redraw() } else { g.window.request_redraw() }
+    }
+}
+
+impl App {
+    fn redraw(&mut self) {
+        let Some(g) = self.game.as_mut() else { return };
+        // The OS can also request redraws before our frame deadline.
+        let now = Instant::now();
+        if self.frame_pacer.control_flow(now, g.gfx.fps_cap) != ControlFlow::Poll {
+            return;
+        }
+        self.frame_pacer.frame_started(now);
+        g.frame();
+        if g.quit {
+            crashlog::exit(g.quit_why);
+            g.log_close(false);
+            g.keep_settings(true);
+            if !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench") { g.src.google.save(); }
+            // Worker threads may be mid-download, so the process just
+            // exits; but the GPU device is torn down first: exiting
+            // under the driver's shader compiler threads can crash it.
+            self.game = None;
+            std::process::exit(0);
         }
     }
+}
+
+/// `FABLE_UI_CLICKS="x,y@sec;x,y@sec"`, in the order they come.
+fn ui_clicks_from_env() -> Vec<(f64, egui::Pos2)> {
+    let Ok(s) = std::env::var("FABLE_UI_CLICKS") else { return Vec::new() };
+    let mut v: Vec<(f64, egui::Pos2)> = s
+        .split(';')
+        .filter_map(|c| {
+            let (xy, t) = c.trim().split_once('@')?;
+            let (x, y) = xy.split_once(',')?;
+            Some((t.parse().ok()?, egui::pos2(x.trim().parse().ok()?, y.trim().parse().ok()?)))
+        })
+        .collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    v
 }
 
 /// The UI library ships no fonts of its own here, so borrow the system's.
