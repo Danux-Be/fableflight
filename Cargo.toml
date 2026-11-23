@@ -64,8 +64,18 @@ lto = "fat"
 codegen-units = 1
 
 # optimised dependencies so debug builds stay playable.
+# line numbers only, not full debug info: a fraction of the size and much faster to link.
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3
+debug = false
+
+# local testing at release speed without the long fat lto link: cargo run --profile fast.
+[profile.fast]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
+incremental = true
