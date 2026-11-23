@@ -5,47 +5,14 @@ use egui::{pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
 
 // the flight panel's pieces.
 
-/// a section's tag and a hairline.
-pub fn pane_section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(14.0);
-    ui.label(tag_text(title));
-    let r = ui.available_rect_before_wrap();
-    ui.painter().hline(r.x_range(), r.top() + 3.0, Stroke::new(1.0, menu::LINE));
-    ui.add_space(8.0);
+/// a small button as wide as its words, lit when chosen (the menus' look).
+pub fn chip(ui: &mut egui::Ui, text: &str, _mono: bool, on: bool) -> egui::Response {
+    menu::choice_sized(ui, text, on, 0.0, 28.0)
 }
 
-/// a small button, yellow when chosen.
-pub fn chip(ui: &mut egui::Ui, text: &str, mono: bool, on: bool) -> egui::Response {
-    let font = if mono { num_s() } else { menu::medium(13.5) };
-    let g = ui.painter().layout_no_wrap(text.to_string(), font, TEXT);
-    let (r, resp) = ui.allocate_exact_size(vec2(g.size().x + 20.0, 26.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, text));
-    let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
-    let p = ui.painter();
-    if on {
-        p.rect_filled(r, R_IN, LIT);
-    } else {
-        p.rect_filled(r, R_IN, white(0.06 + 0.08 * lit));
-        p.rect_stroke(r, R_IN, Stroke::new(1.0, white(0.22 + 0.2 * lit)), egui::StrokeKind::Inside);
-    }
-    p.galley(r.center() - g.size() * 0.5, g, if on { menu::ON_ACCENT } else { Color32::WHITE });
-    resp
-}
-
-/// a button `w` by `h`, filled yellow when on.
+/// a button `w` by `h`, lit when on (the menus' look).
 pub fn key(ui: &mut egui::Ui, text: &str, on: bool, w: f32, h: f32) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, text));
-    let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
-    let p = ui.painter();
-    if on {
-        p.rect_filled(r, R_IN, menu::mix(LIT, menu::ACCENT_HI, lit));
-    } else {
-        p.rect_filled(r, R_IN, white(0.07 + 0.1 * lit));
-        p.rect_stroke(r, R_IN, Stroke::new(1.0, white(0.2 + 0.2 * lit)), egui::StrokeKind::Inside);
-    }
-    p.text(r.center(), Align2::CENTER_CENTER, text, menu::semibold(14.0), if on { menu::ON_ACCENT } else { Color32::WHITE });
-    resp
+    menu::choice_sized(ui, text, on, w, h)
 }
 
 // the flight card: one frosted card in the middle, its pages laid out in tiles.
@@ -216,6 +183,8 @@ pub fn page_icon(p: Page) -> Icon {
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 pub enum Bar {
     Page(Page),
+    /// the autopilot panel at the bottom.
+    Autopilot,
     Map,
     Camera,
 }
@@ -237,6 +206,7 @@ impl Game {
                     self.pad_home = true;
                 }
             }
+            Bar::Autopilot => self.ap_bar_on = !self.ap_bar_on,
             Bar::Map => self.minimap.visible = !self.minimap.visible,
             Bar::Camera => self.next_view(),
         }
@@ -972,11 +942,14 @@ impl Game {
 
     /// the approach line, alerts and damage, bottom centre.
     pub(crate) fn alerts(&self, ctx: &egui::Context, warn: &[(&str, Color32)], report: &[String], guidance: Option<&(String, u8)>) {
-        let ap = self.ap.on || self.real - self.ap_off_t < 4.0;
+        // the panel at the bottom shows the modes itself while it is up.
+        let ap = !self.ap_bar_on && (self.ap.on || self.real - self.ap_off_t < 4.0);
         if warn.is_empty() && report.is_empty() && guidance.is_none() && !ap {
             return;
         }
-        egui::Area::new(egui::Id::unique("hud_alerts")).anchor(Align2::CENTER_BOTTOM, [0.0, -16.0]).interactable(false).show(ctx, |ui| {
+        // above the autopilot panel while it is up.
+        let lift = if self.ap_bar_on { ctx.memory(|m| m.area_rect(egui::Id::unique("ap_bar"))).map_or(0.0, |r| r.height() + 10.0) } else { 0.0 };
+        egui::Area::new(egui::Id::unique("hud_alerts")).anchor(Align2::CENTER_BOTTOM, [0.0, -16.0 - lift]).interactable(false).show(ctx, |ui| {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
                 if let Some((text, col)) = guidance {
@@ -987,7 +960,9 @@ impl Game {
                         ui.label(RichText::new(text).font(num_s()).color(col));
                     });
                 }
-                self.ap_strip(ui);
+                if ap {
+                    self.ap_strip(ui);
+                }
                 if !warn.is_empty() {
                     ui.horizontal(|ui| {
                         for (w, col) in warn {
@@ -1099,7 +1074,7 @@ impl Game {
             (Icon::Flight, t!("flight.flight"), Bar::Page(Page::Flight), page(Page::Flight)),
             (Icon::GoTo, t!("flight.go_to"), Bar::Page(Page::Places), page(Page::Places)),
             (Icon::Radio, t!("flight.radio"), Bar::Page(Page::Radio), page(Page::Radio)),
-            (Icon::Autopilot, t!("flight.autopilot"), Bar::Page(Page::Autopilot), page(Page::Autopilot)),
+            (Icon::Autopilot, t!("flight.autopilot"), Bar::Autopilot, self.ap_bar_on),
             (Icon::Weather, t!("flight.weather"), Bar::Page(Page::Weather), page(Page::Weather)),
             (Icon::Map, t!("flight.map"), Bar::Map, self.minimap.visible),
             (Icon::Camera, match self.cam_mode { 1 => "Cockpit", crate::settings::TAIL_VIEW => t!("flight.fixed_rear"), _ => t!("flight.chase") }, Bar::Camera, false),

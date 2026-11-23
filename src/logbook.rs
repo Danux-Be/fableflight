@@ -1,21 +1,76 @@
 //! the logbook screen: hours, flights and landings, by aircraft, and every flight.
 
-use crate::menu::{self, ACCENT, DIM, FAINT, TEXT};
-use crate::profile::{self, Totals};
+use crate::menu::{self, ACCENT, BAD, DIM, FAINT, TEXT};
+use crate::profile::{self, Entry, Totals};
 use crate::{t, Game};
 use egui::{pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
 
-/// one figure: a big number over a small label.
-fn figure(p: &egui::Painter, at: egui::Pos2, value: &str, unit: &str, label: &str, big: bool) {
-    let size = if big { 54.0 } else { 30.0 };
-    let g = p.layout_no_wrap(value.to_string(), menu::bold(size), Color32::WHITE);
-    let w = g.size().x;
-    let h = g.size().y;
+/// one figure in the strip: a big number, its unit, a small label under it.
+fn figure(p: &egui::Painter, r: Rect, value: &str, unit: &str, label: &str, big: bool) {
+    let g = p.layout_no_wrap(value.to_string(), menu::bold(if big { 46.0 } else { 34.0 }), Color32::WHITE);
+    let (w, h) = (g.size().x, g.size().y);
+    let at = pos2(r.left(), r.center().y - h * 0.5 - 8.0);
     p.galley(at, g, Color32::WHITE);
     if !unit.is_empty() {
-        p.text(pos2(at.x + w + 6.0, at.y + h - 6.0), Align2::LEFT_BOTTOM, unit, menu::medium(if big { 18.0 } else { 14.0 }), DIM);
+        p.text(pos2(at.x + w + 5.0, at.y + h - 7.0), Align2::LEFT_BOTTOM, unit, menu::medium(if big { 18.0 } else { 15.0 }), DIM);
     }
-    p.text(pos2(at.x + 1.0, at.y + h + 4.0), Align2::LEFT_TOP, label.to_uppercase(), menu::bold(11.0), DIM);
+    p.text(pos2(at.x + 1.0, at.y + h + 2.0), Align2::LEFT_TOP, label, menu::caption(), DIM);
+}
+
+/// a place as the logbook keeps it: an airport code as it is, a "lat,lon" pair as degrees.
+fn place(s: &str) -> String {
+    let Some((a, b)) = s.split_once(',') else { return s.to_string() };
+    match (a.trim().parse::<f64>(), b.trim().parse::<f64>()) {
+        (Ok(lat), Ok(lon)) => format!("{:.2}°{} {:.2}°{}", lat.abs(), if lat < 0.0 { 'S' } else { 'N' }, lon.abs(), if lon < 0.0 { 'W' } else { 'E' }),
+        _ => s.to_string(),
+    }
+}
+
+/// a red or yellow tag in a table cell.
+fn tag(p: &egui::Painter, left: f32, y: f32, text: &str, col: Color32) {
+    let g = p.layout_no_wrap(text.to_string(), menu::semibold(12.5), col);
+    let r = Rect::from_min_size(pos2(left, y - 10.0), vec2(g.size().x + 14.0, 20.0));
+    p.rect_filled(r, 10.0, col.gamma_multiply(0.14));
+    p.rect_stroke(r, 10.0, Stroke::new(1.0, col.gamma_multiply(0.5)), egui::StrokeKind::Inside);
+    p.galley(r.center() - g.size() * 0.5, g, col);
+}
+
+/// The table's columns: where each starts as a share of the width, and
+/// whether it is a number (set against its right edge); the last marks the end.
+const COLS: [(f32, bool); 8] = [(0.0, false), (0.16, false), (0.35, false), (0.54, false), (0.71, true), (0.82, true), (0.92, true), (1.0, false)];
+
+/// one flight's row.
+fn flight_row(ui: &mut egui::Ui, e: &Entry, odd: bool) {
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::hover());
+    let p = ui.painter();
+    if resp.hovered() {
+        p.rect_filled(r, 3.0, Color32::from_white_alpha(10));
+    } else if odd {
+        p.rect_filled(r, 3.0, Color32::from_white_alpha(4));
+    }
+    let y = r.center().y;
+    let x = |k: usize| r.left() + 12.0 + (r.width() - 24.0) * COLS[k].0;
+    let room = |k: usize| (r.width() - 24.0) * (COLS[k + 1].0 - COLS[k].0) - 14.0;
+    let cell = |k: usize, text: &str, col: Color32| {
+        let g = menu::one_line(p, text, menu::label(), col, room(k));
+        let at = if COLS[k].1 { pos2(x(k + 1) - 14.0 - g.size().x, y - g.size().y * 0.5) } else { pos2(x(k), y - g.size().y * 0.5) };
+        p.galley(at, g, col);
+    };
+    cell(0, &profile::date(e.unix), DIM);
+    cell(1, &e.aircraft, Color32::WHITE);
+    cell(2, &place(&e.from), TEXT);
+    if e.crashed {
+        tag(p, x(3), y, t!("profile.crashed"), BAD);
+    } else if e.to.is_empty() {
+        // ended without a landing being seen.
+        cell(3, "—", FAINT);
+    } else {
+        cell(3, &place(&e.to), TEXT);
+    }
+    cell(4, &profile::hhmm(e.air_s), Color32::WHITE);
+    cell(5, &format!("{:.0} nm", e.dist_nm), TEXT);
+    cell(6, &e.landings.to_string(), TEXT);
+    resp.on_hover_text(t!("profile.row_tip", alt = format!("{:.0}", e.max_alt_ft)));
 }
 
 impl Game {
@@ -25,92 +80,89 @@ impl Game {
         let tot: Totals = self.profile.totals();
         let mut back = false;
         egui::Area::new(egui::Id::unique("logbook_bg")).order(egui::Order::Background).fixed_pos(screen.min).show(ctx, |ui| {
-            let p = ui.painter();
-            p.rect_filled(screen, 0.0, Color32::from_rgba_premultiplied(4, 6, 10, 210));
+            ui.painter().rect_filled(screen, 0.0, Color32::from_rgba_premultiplied(4, 6, 10, 215));
         });
-        let m = 28.0;
-        let w = (screen.width() - 2.0 * m).min(1240.0);
+        let m = 32.0;
+        let w = (screen.width() - 2.0 * m).min(1280.0);
         let x0 = screen.center().x - w * 0.5;
         egui::Area::new(egui::Id::unique("logbook")).fixed_pos(pos2(x0, m)).show(ctx, |ui| {
             ui.set_width(w);
-            // header: back, title, the pilot's name.
+            // the back button, the title, the pilot's name.
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(RichText::new(format!("‹  {}", t!("game.menu"))).font(menu::label())).min_size(vec2(120.0, 34.0))).clicked() {
+                ui.set_min_height(48.0);
+                if menu::choice(ui, &format!("‹   {}", t!("game.menu")), false, 120.0).clicked() {
                     back = true;
                 }
-                ui.add_space(14.0);
-                ui.label(RichText::new(t!("profile.logbook")).font(menu::bold(30.0)).color(Color32::WHITE));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let r = ui.add(egui::TextEdit::singleline(&mut self.profile.name).desired_width(220.0).hint_text(t!("profile.pilot_name")).margin(vec2(8.0, 6.0)));
+                ui.add_space(18.0);
+                menu::screen_heading(ui, t!("profile.logbook"));
+                menu::at_right(ui, "pilot", |ui| {
+                    ui.label(RichText::new(t!("profile.pilot")).font(menu::label()).color(DIM));
+                    ui.add_space(4.0);
+                    let r = ui.add(egui::TextEdit::singleline(&mut self.profile.name).desired_width(240.0).hint_text(t!("profile.pilot_name")).font(menu::label()).margin(vec2(10.0, 7.0)));
                     if r.lost_focus() {
                         self.profile.save();
                     }
-                    ui.label(RichText::new(t!("profile.pilot")).font(menu::caption()).color(DIM));
                 });
             });
             ui.add_space(18.0);
             // the figures, the hours first and largest.
-            let (r, _) = ui.allocate_exact_size(vec2(w, 112.0), Sense::hover());
+            let (r, _) = ui.allocate_exact_size(vec2(w, 108.0), Sense::hover());
             let p = ui.painter();
             p.rect_filled(r, menu::R_PANEL, menu::PANEL);
             p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, menu::LINE_HI), egui::StrokeKind::Inside);
             p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, ACCENT);
-            let x = r.left() + 30.0;
-            figure(p, pos2(x, r.top() + 14.0), &profile::hours(tot.air_s), t!("profile.h"), t!("profile.flight_time"), true);
             let cols = [
+                (profile::hours(tot.air_s), t!("profile.h"), t!("profile.flight_time")),
                 (tot.flights.to_string(), "", t!("profile.flights")),
                 (tot.landings.to_string(), "", t!("profile.landings")),
                 (format!("{:.0}", tot.dist_nm), "nm", t!("profile.distance")),
                 (profile::hhmm(tot.longest_s), "", t!("profile.longest")),
                 (format!("{:.0}", tot.highest_ft), "ft", t!("profile.highest")),
             ];
-            let step = (r.width() - 300.0) / cols.len() as f32;
+            // the hours take a wider cell, the rest share what is left evenly.
+            let first = 260.0;
+            let step = (r.width() - 32.0 - first) / (cols.len() - 1) as f32;
             for (k, (v, u, l)) in cols.iter().enumerate() {
-                figure(p, pos2(r.left() + 290.0 + step * k as f32, r.top() + 30.0), v, u, l, false);
+                let left = r.left() + 32.0 + if k == 0 { 0.0 } else { first + step * (k - 1) as f32 };
+                if k > 0 {
+                    p.vline(left - 22.0, (r.top() + 24.0)..=(r.bottom() - 24.0), Stroke::new(1.0, Color32::from_white_alpha(12)));
+                }
+                figure(p, Rect::from_min_size(pos2(left, r.top()), vec2(step, r.height())), v, u, l, k == 0);
             }
             ui.add_space(16.0);
-            let rest = (screen.bottom() - ui.cursor().top() - m).max(200.0);
+            let rest = (screen.bottom() - ui.cursor().top() - m).max(220.0);
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 16.0;
-                let left_w = w * 0.64;
+                let left_w = (w * 0.68).floor();
                 // every flight, the latest first.
                 ui.allocate_ui_with_layout(vec2(left_w, rest), egui::Layout::top_down(egui::Align::Min), |ui| {
-                    menu::panel().inner_margin(egui::Margin::symmetric(18, 14)).show(ui, |ui| {
-                        ui.set_width(left_w - 36.0);
-                        ui.set_min_height(rest - 28.0);
-                        ui.label(RichText::new(t!("profile.flights_title")).font(menu::label()).color(Color32::WHITE));
-                        ui.add_space(6.0);
-                        let cols = [0.0, 128.0, 300.0, 430.0, 500.0, 566.0];
-                        let heads = [t!("profile.col_date"), t!("profile.col_aircraft"), t!("profile.col_route"), t!("profile.col_time"), "NM", t!("profile.col_ldg")];
-                        let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), Sense::hover());
+                    menu::panel().inner_margin(egui::Margin::symmetric(20, 16)).show(ui, |ui| {
+                        ui.set_width(left_w - 40.0);
+                        ui.set_min_height(rest - 32.0);
+                        ui.label(menu::section_text(t!("profile.flights_title")));
+                        ui.add_space(10.0);
+                        let heads = [t!("profile.col_date"), t!("profile.col_aircraft"), t!("profile.col_from"), t!("profile.col_to"), t!("profile.col_time"), t!("profile.col_dist"), t!("profile.col_ldg")];
+                        let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
+                        let p = ui.painter();
+                        let x = |k: usize| hr.left() + 12.0 + (hr.width() - 24.0) * COLS[k].0;
                         for (k, h) in heads.iter().enumerate() {
-                            ui.painter().text(pos2(hr.left() + cols[k], hr.center().y), Align2::LEFT_CENTER, *h, menu::bold(10.5), DIM);
+                            if COLS[k].1 {
+                                p.text(pos2(x(k + 1) - 14.0, hr.center().y), Align2::RIGHT_CENTER, *h, menu::caption(), FAINT);
+                            } else {
+                                p.text(pos2(x(k), hr.center().y), Align2::LEFT_CENTER, *h, menu::caption(), FAINT);
+                            }
                         }
+                        p.hline(hr.x_range(), hr.bottom() + 2.0, Stroke::new(1.0, Color32::from_white_alpha(16)));
+                        ui.add_space(6.0);
                         if self.profile.log.is_empty() {
                             ui.add_space(30.0);
-                            ui.label(RichText::new(t!("profile.empty")).font(menu::body()).color(DIM));
+                            menu::hint(ui, t!("profile.empty"));
                             return;
                         }
-                        egui::ScrollArea::vertical().max_height(rest - 100.0).auto_shrink([false, false]).show(ui, |ui| {
-                            for e in self.profile.log.iter().rev() {
-                                let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
-                                let p = ui.painter();
-                                if resp.hovered() {
-                                    p.rect_filled(r, 3.0, Color32::from_white_alpha(8));
-                                }
-                                p.hline(r.x_range(), r.bottom(), Stroke::new(1.0, menu::LINE));
-                                let y = r.center().y;
-                                p.text(pos2(r.left() + cols[0], y), Align2::LEFT_CENTER, profile::date(e.unix), menu::data(), TEXT);
-                                let ac = p.layout(e.aircraft.clone(), menu::caption(), Color32::WHITE, cols[2] - cols[1] - 10.0);
-                                p.galley(pos2(r.left() + cols[1], y - ac.size().y * 0.5), ac, Color32::WHITE);
-                                let to = if e.to.is_empty() { "…".to_string() } else { e.to.clone() };
-                                let route = format!("{}  →  {}", e.from, to);
-                                p.text(pos2(r.left() + cols[2], y), Align2::LEFT_CENTER, route, menu::data(), if e.crashed { Color32::from_rgb(255, 130, 90) } else { Color32::WHITE });
-                                p.text(pos2(r.left() + cols[3], y), Align2::LEFT_CENTER, profile::hhmm(e.air_s), menu::data(), ACCENT);
-                                p.text(pos2(r.left() + cols[4], y), Align2::LEFT_CENTER, format!("{:.0}", e.dist_nm), menu::data(), TEXT);
-                                p.text(pos2(r.left() + cols[5], y), Align2::LEFT_CENTER, e.landings.to_string(), menu::data(), TEXT);
-                                let tip = t!("profile.row_tip", alt = format!("{:.0}", e.max_alt_ft));
-                                resp.on_hover_text(tip);
+                        egui::ScrollArea::vertical().max_height(rest - 112.0).auto_shrink([false, false]).show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            for (k, e) in self.profile.log.iter().rev().enumerate() {
+                                flight_row(ui, e, k % 2 == 1);
                             }
                         });
                     });
@@ -118,40 +170,50 @@ impl Game {
                 // hours by aircraft, and the airports flown from and to.
                 let right_w = w - left_w - 16.0;
                 ui.allocate_ui_with_layout(vec2(right_w, rest), egui::Layout::top_down(egui::Align::Min), |ui| {
-                    menu::panel().inner_margin(egui::Margin::symmetric(18, 14)).show(ui, |ui| {
-                        ui.set_width(right_w - 36.0);
-                        ui.set_min_height(rest - 28.0);
-                        ui.label(RichText::new(t!("profile.by_aircraft")).font(menu::label()).color(Color32::WHITE));
-                        ui.add_space(8.0);
+                    menu::panel().inner_margin(egui::Margin::symmetric(20, 16)).show(ui, |ui| {
+                        ui.set_width(right_w - 40.0);
+                        ui.set_min_height(rest - 32.0);
+                        ui.label(menu::section_text(t!("profile.by_aircraft")));
+                        ui.add_space(10.0);
                         let most = tot.by_type.first().map(|b| b.1).unwrap_or(1.0).max(1.0);
                         for (name, secs, n) in tot.by_type.iter().take(10) {
-                            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
+                            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 42.0), Sense::hover());
                             let p = ui.painter();
-                            p.text(pos2(r.left(), r.top() + 8.0), Align2::LEFT_CENTER, name, menu::caption(), Color32::WHITE);
-                            p.text(pos2(r.right(), r.top() + 8.0), Align2::RIGHT_CENTER, format!("{} h  ·  {n}", profile::hours(*secs)), menu::data(), TEXT);
-                            let bar = Rect::from_min_size(pos2(r.left(), r.top() + 20.0), vec2(r.width(), 5.0));
+                            let figures = t!("profile.short", h = profile::hours(*secs), n = n);
+                            let fg = p.layout_no_wrap(figures, menu::caption(), DIM);
+                            let ng = menu::one_line(p, name, menu::label(), Color32::WHITE, r.width() - fg.size().x - 12.0);
+                            p.galley(pos2(r.left(), r.top() + 2.0), ng, Color32::WHITE);
+                            p.galley(pos2(r.right() - fg.size().x, r.top() + 4.0), fg, DIM);
+                            let bar = Rect::from_min_size(pos2(r.left(), r.top() + 26.0), vec2(r.width(), 4.0));
                             p.rect_filled(bar, 2.0, Color32::from_white_alpha(14));
                             p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * (*secs / most) as f32, bar.height())), 2.0, ACCENT);
                         }
                         if tot.by_type.is_empty() {
                             ui.label(RichText::new("—").font(menu::body()).color(FAINT));
                         }
-                        ui.add_space(14.0);
-                        ui.label(RichText::new(t!("profile.airports")).font(menu::label()).color(Color32::WHITE));
-                        ui.add_space(6.0);
+                        ui.add_space(18.0);
+                        ui.label(menu::section_text(t!("profile.airports")));
+                        ui.add_space(10.0);
                         ui.horizontal_wrapped(|ui| {
                             ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                             for (a, n) in tot.airports.iter().take(40) {
-                                let g = ui.painter().layout_no_wrap(format!("{a}  {n}"), menu::data(), TEXT);
-                                let (r, _) = ui.allocate_exact_size(g.size() + vec2(16.0, 8.0), Sense::hover());
-                                ui.painter().rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, menu::LINE_HI), egui::StrokeKind::Inside);
-                                ui.painter().galley(r.min + vec2(8.0, 4.0), g, TEXT);
+                                let g = ui.painter().layout_no_wrap(a.to_string(), menu::label(), Color32::WHITE);
+                                let ng = ui.painter().layout_no_wrap(n.to_string(), menu::caption(), DIM);
+                                let (r, _) = ui.allocate_exact_size(vec2(g.size().x + ng.size().x + 30.0, 30.0), Sense::hover());
+                                let p = ui.painter();
+                                p.rect_filled(r, menu::R_WIDGET, menu::RAISED);
+                                p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, menu::LINE_HI), egui::StrokeKind::Inside);
+                                p.galley(pos2(r.left() + 10.0, r.center().y - g.size().y * 0.5), g.clone(), Color32::WHITE);
+                                p.galley(pos2(r.right() - 10.0 - ng.size().x, r.center().y - ng.size().y * 0.5), ng, DIM);
                             }
                         });
-                        ui.add_space(14.0);
+                        if tot.airports.is_empty() {
+                            ui.label(RichText::new("—").font(menu::body()).color(FAINT));
+                        }
+                        ui.add_space(18.0);
                         let since = profile::date(self.profile.since);
-                        ui.label(RichText::new(t!("profile.since", date = since.get(..10).unwrap_or(&since))).font(menu::caption()).color(FAINT));
-                        ui.label(RichText::new(t!("profile.how")).font(menu::caption()).color(FAINT));
+                        menu::hint(ui, &t!("profile.since", date = since.get(..10).unwrap_or(&since)));
+                        menu::hint(ui, t!("profile.how"));
                     });
                 });
             });

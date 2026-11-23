@@ -3797,7 +3797,7 @@ impl Game {
     /// the flight plan on the start screen: what it is, and the planner.
     fn plan_section(&mut self, ui: &mut egui::Ui) {
         use egui::{Color32, RichText};
-        use menu::{DIM, TEXT};
+        use menu::TEXT;
         let dep = self.menu.pick;
         let db = airports::Db::get();
         let from = self.menu.airport.map(|i| db.apts[i as usize].ident.clone());
@@ -3809,22 +3809,31 @@ impl Game {
         };
         menu::section(ui, "flightplan", t!("game.flight_plan"), &summary, true, |ui| {
             if self.plan.is_empty() {
-                ui.label(RichText::new(t!("plan.none_yet")).font(menu::caption()).color(DIM));
+                menu::hint(ui, t!("plan.none_yet"));
             } else {
                 let total = self.plan.total(dep);
                 let gs = self.spec.cruise.max(20.0);
                 let fl = self.plan.cruise_ft;
                 let lvl = if fl >= 18_000.0 { format!("FL{:03.0}", fl / 100.0) } else { format!("{fl:.0} ft") };
-                ui.label(RichText::new(format!("{:.0} nm  ·  {}  ·  {lvl}", total / 1852.0, flightplan::hm(total / gs))).font(menu::data()).color(Color32::WHITE));
+                ui.label(RichText::new(format!("{:.0} nm  ·  {}  ·  {lvl}", total / 1852.0, flightplan::hm(total / gs))).font(menu::semibold(15.0)).color(Color32::WHITE));
                 let route = self.plan.route_text();
                 ui.add(egui::Label::new(RichText::new(route).font(menu::caption()).color(TEXT)).wrap());
             }
-            ui.add_space(6.0);
+            ui.add_space(8.0);
             let word = if self.plan.is_empty() { t!("plan.plan_a_flight") } else { t!("plan.open_planner") };
-            if menu::wide_button(ui, word, Hint::None, self.plan.is_empty(), true).clicked() {
-                self.open_planner();
-            }
-            if !self.plan.is_empty() && ui.add(egui::Button::new(RichText::new(t!("game.clear")).font(menu::caption())).frame(false)).clicked() {
+            // (take off is the one yellow button on this screen)
+            let mut clear = false;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let cw = if self.plan.is_empty() { 0.0 } else { 84.0 };
+                if menu::choice(ui, word, false, ui.available_width() - if cw > 0.0 { cw + 6.0 } else { 0.0 }).clicked() {
+                    self.open_planner();
+                }
+                if cw > 0.0 && menu::choice(ui, t!("game.clear"), false, cw).clicked() {
+                    clear = true;
+                }
+            });
+            if clear {
                 self.plan.clear();
                 self.planner.to = None;
                 self.planner.ofp = None;
@@ -7604,97 +7613,102 @@ impl Game {
                 // room for the pinned start point and take off, as last frame.
                 let foot_h = ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("globe_pinned_h"))).unwrap_or(150.0);
                 // the list gives up height first so the panel never overlaps the aircraft card.
-                let body_h = (screen.bottom() - M - top - 40.0 - 28.0 - foot_h).max(48.0);
+                // (the title, the search, its hint and the tabs above the list)
+                let body_h = (screen.bottom() - M - top - 40.0 - 28.0 - 104.0 - foot_h).max(80.0);
+                // whole rows of buttons only (38 each, the last without its gap).
+                let body_h = ((body_h + 6.0) / 38.0).floor().max(2.0) * 38.0 - 6.0;
                 egui::Area::new(egui::Id::unique("menu")).anchor(Align2::LEFT_TOP, [M, top]).show(ctx, |ui| {
                     ui.set_max_height(screen.bottom() - M - top);
                     menu::panel().inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
                         ui.set_width(W - 32.0);
-                        menu::window_title(ui, t!("game.start_location"));
-                        egui::ScrollArea::vertical().max_height(body_h).auto_shrink([false, true]).show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            let summary = if self.menu.search.trim().is_empty() { String::new() } else { self.menu.search.chars().take(18).collect() };
-                            menu::section(ui, "search", t!("game.search"), &summary, true, |ui| {
-                                ui.horizontal(|ui| {
-                                    let resp = ui.add(egui::TextEdit::singleline(&mut self.menu.search).desired_width(ui.available_width() - 56.0).hint_text(t!("game.city_address_or_airport_sfo")).margin(egui::vec2(8.0, 6.0)));
-                                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                    if (ui.add(egui::Button::new(RichText::new(t!("game.go")).font(menu::body())).min_size(egui::vec2(48.0, 28.0))).clicked() || enter) && !self.menu.search.trim().is_empty() {
-                                        go = Some(self.menu.search.trim().to_string());
+                        let tip = if padui::active() { t!("game.or_turn_the_globe_left") } else { t!("game.or_drag_the_globe_scroll") };
+                        menu::window_title_help(ui, t!("game.start_location"), tip);
+                        // the search: a field and its button on one line.
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            let bw = 76.0;
+                            let resp = ui.add(egui::TextEdit::singleline(&mut self.menu.search).desired_width(ui.available_width() - bw - 6.0).hint_text(t!("game.city_address_or_airport_sfo")).font(menu::label()).margin(egui::vec2(10.0, 8.0)));
+                            let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if (menu::choice(ui, t!("game.go"), false, bw).clicked() || enter) && !self.menu.search.trim().is_empty() {
+                                go = Some(self.menu.search.trim().to_string());
+                            }
+                        });
+                        ui.add_space(10.0);
+                        // what is typed, else the places or the airports to pick from.
+                        let hits = airports::Db::get().search(&self.menu.search, 6);
+                        let tab_id = egui::Id::unique("start_tab_airports");
+                        let mut airports_tab = ctx.data(|d| d.get_temp::<bool>(tab_id)).unwrap_or(false);
+                        if hits.is_empty() {
+                            menu::segments(ui, |ui| {
+                                menu::seg(ui, &mut airports_tab, false, t!("game.places"));
+                                menu::seg(ui, &mut airports_tab, true, t!("game.airports"));
+                            });
+                            ctx.data_mut(|d| d.insert_temp(tab_id, airports_tab));
+                            ui.add_space(8.0);
+                        }
+                        egui::ScrollArea::vertical().max_height(body_h).auto_shrink([false, true]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).show(ui, |ui| {
+                            ui.set_width(ui.available_width() - 10.0);
+                            let db = airports::Db::get();
+                            if !hits.is_empty() {
+                                // full width rows: the code, then the name.
+                                for i in hits {
+                                    let a = &db.apts[i as usize];
+                                    let on = self.menu.airport == Some(i);
+                                    let (r, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
+                                    let lit = menu::ease(ctx, resp.id, resp.hovered() || resp.has_focus());
+                                    let p = ui.painter();
+                                    p.rect_filled(r, menu::R_WIDGET, if on { menu::CHOSEN } else { menu::mix(menu::RAISED, menu::RAISED_HI, lit) });
+                                    p.rect_stroke(r, menu::R_WIDGET, egui::Stroke::new(1.0, if on { ACCENT } else { menu::LINE_HI }), egui::StrokeKind::Inside);
+                                    let code = p.layout_no_wrap(a.ident.clone(), menu::semibold(15.0), Color32::WHITE);
+                                    let cw = code.size().x;
+                                    p.galley(egui::pos2(r.left() + 12.0, r.center().y - code.size().y * 0.5), code, Color32::WHITE);
+                                    let name = menu::one_line(p, &a.name, menu::caption(), DIM, r.width() - cw - 36.0);
+                                    p.galley(egui::pos2(r.left() + 24.0 + cw, r.center().y - name.size().y * 0.5), name, DIM);
+                                    if resp.clicked() {
+                                        airport = Some(i);
                                     }
-                                });
-                                // Airports matching what is typed.
-                                let hits = airports::Db::get().search(&self.menu.search, 5);
-                                if !hits.is_empty() {
                                     ui.add_space(2.0);
-                                    ui.horizontal_wrapped(|ui| {
-                                        ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
-                                        for i in hits {
-                                            let a = &airports::Db::get().apts[i as usize];
-                                            let label = format!("{}  {}", a.ident, a.name.chars().take(28).collect::<String>());
-                                            if ui.add(egui::Button::new(RichText::new(label).font(menu::caption())).selected(self.menu.airport == Some(i))).clicked() {
-                                                airport = Some(i);
-                                            }
-                                        }
-                                    });
+                                }
+                            } else if airports_tab {
+                                let codes: Vec<(&str, Option<u32>)> = menu::AIRPORTS.iter().map(|(c, _)| (*c, db.find(c))).filter(|(_, i)| i.is_some()).collect();
+                                let items: Vec<(&str, bool)> = codes.iter().map(|(c, i)| (*c, self.menu.airport == *i)).collect();
+                                if let Some(k) = menu::choice_grid(ui, 4, &items) {
+                                    airport = codes[k].1;
                                 }
                                 ui.add_space(2.0);
-                                let tip = if padui::active() { t!("game.or_turn_the_globe_left") } else { t!("game.or_drag_the_globe_scroll") };
-                                ui.label(RichText::new(tip).font(menu::caption()).color(DIM));
-                            });
-                            let place = menu::QUICK.iter().find(|q| self.menu.pick == Some((q.1, q.2))).map(|q| tr_en(q.0)).unwrap_or("");
-                            menu::section(ui, "places", t!("game.places"), place, false, |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
-                                    for (name, lat, lon) in menu::QUICK {
-                                        let sel = self.menu.pick == Some((*lat, *lon));
-                                        if ui.add(egui::Button::new(RichText::new(tr_en(name)).font(menu::caption())).selected(sel)).clicked() {
-                                            jump = Some((*lat, *lon, name));
-                                        }
-                                    }
-                                });
-                            });
-                            let db = airports::Db::get();
-                            let apt = self.menu.airport.map(|i| db.apts[i as usize].ident.clone()).unwrap_or_default();
-                            menu::section(ui, "airports", t!("game.airports"), &apt, false, |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.spacing_mut().item_spacing = egui::vec2(5.0, 5.0);
-                                    for (code, name) in menu::AIRPORTS {
-                                        if let Some(i) = db.find(code) {
-                                            if ui.add(egui::Button::new(RichText::new(*code).font(menu::data())).selected(self.menu.airport == Some(i))).on_hover_text(tr_en(name)).clicked() {
-                                                airport = Some(i);
-                                            }
-                                        }
-                                    }
-                                });
-                                ui.label(RichText::new(if padui::active() { t!("game.or_put_an_airport_square") } else { t!("game.or_click_an_airport_square") }).font(menu::caption()).color(DIM));
-                            });
+                                menu::hint(ui, if padui::active() { t!("game.or_put_an_airport_square") } else { t!("game.or_click_an_airport_square") });
+                            } else {
+                                let items: Vec<(&str, bool)> = menu::QUICK.iter().map(|(name, lat, lon)| (tr_en(name), self.menu.pick == Some((*lat, *lon)))).collect();
+                                if let Some(k) = menu::choice_grid(ui, 2, &items) {
+                                    let (name, lat, lon) = menu::QUICK[k];
+                                    jump = Some((lat, lon, name));
+                                }
+                            }
                             padui::follow_focus(ui);
                         });
                         // pinned under the list: the start point, a summary and take off.
                         let pin_top = ui.cursor().top();
                         let db = airports::Db::get();
-                        ui.add_space(12.0);
+                        menu::rule(ui);
                         menu::heading(ui, t!("game.start_point"));
-                        ui.add_space(2.0);
+                        ui.add_space(4.0);
                         match self.menu.pick {
                             Some((lat, lon)) => {
                                 let name = if self.menu.pick_name.is_empty() { t!("game.unnamed_spot").to_string() } else { self.menu.pick_name.chars().take(90).collect() };
                                 ui.add(egui::Label::new(RichText::new(name).font(menu::item_title()).color(Color32::WHITE)).wrap());
                                 ui.label(RichText::new(t!("game.local", menu::latlon(lat, lon), menu::hhmm(self.menu.hour))).font(menu::caption()).color(DIM));
-                                ui.add_space(6.0);
+                                ui.add_space(8.0);
                                 match self.menu.airport {
                                     Some(i) => {
                                         let a = &db.apts[i as usize];
-                                        menu::segments(ui, |ui| {
-                                            menu::seg(ui, &mut self.menu.start, menu::Start::Runway, t!("game.runway"));
-                                            menu::seg(ui, &mut self.menu.start, menu::Start::Approach, t!("game.final"));
-                                            menu::seg(ui, &mut self.menu.start, menu::Start::Overhead, t!("game.overhead"));
-                                        });
+                                        let items = [(t!("game.runway"), self.menu.start == menu::Start::Runway), (t!("game.final"), self.menu.start == menu::Start::Approach), (t!("game.overhead"), self.menu.start == menu::Start::Overhead)];
+                                        if let Some(k) = menu::choice_grid(ui, 3, &items) {
+                                            self.menu.start = [menu::Start::Runway, menu::Start::Approach, menu::Start::Overhead][k];
+                                        }
                                         if self.menu.start != menu::Start::Overhead && !a.rwys.is_empty() {
-                                            ui.add_space(4.0);
                                             let into_wind = t!("game.into_the_wind");
-                                            ui.horizontal(|ui| {
-                                                ui.label(RichText::new(t!("game.runway")).font(menu::label()).color(TEXT));
-                                                egui::ComboBox::from_id_salt("start_runway").width(ui.available_width()).selected_text(self.menu.runway.clone().unwrap_or_else(|| into_wind.to_string())).show_ui(ui, |ui| {
+                                            menu::form_row(ui, t!("game.runway"), "", |ui| {
+                                                egui::ComboBox::from_id_salt("start_runway").width(150.0).selected_text(RichText::new(self.menu.runway.clone().unwrap_or_else(|| into_wind.to_string())).font(menu::label())).show_ui(ui, |ui| {
                                                     ui.selectable_value(&mut self.menu.runway, None, into_wind);
                                                     for r in &a.rwys {
                                                         for id in r.ident.iter().filter(|id| !id.is_empty()) {
@@ -7711,9 +7725,8 @@ impl Game {
                                         let near = db.near(lat, lon, 60_000.0).into_iter().find(|(i, _)| db.apts[*i as usize].any_paved());
                                         if let Some((i, d)) = near {
                                             let a = &db.apts[i as usize];
-                                            ui.horizontal(|ui| {
-                                                ui.label(RichText::new(t!("game.nearest_airport_km", a.ident, d / 1000.0)).font(menu::caption()).color(DIM));
-                                                if ui.button(t!("game.start_there")).clicked() {
+                                            menu::form_row(ui, &t!("game.nearest_airport_km", a.ident, d / 1000.0), "", |ui| {
+                                                if menu::button(ui, t!("game.start_there")).clicked() {
                                                     airport = Some(i);
                                                 }
                                             });
@@ -7722,11 +7735,10 @@ impl Game {
                                 }
                             }
                             None => {
-                                ui.label(RichText::new(t!("game.pick_a_place_or_click")).font(menu::body()).color(DIM));
+                                menu::hint(ui, t!("game.pick_a_place_or_click"));
                             }
                         }
-                        ui.add_space(14.0);
-                        ui.painter().hline(ui.max_rect().x_range(), ui.cursor().top() - 7.0, egui::Stroke::new(1.0, menu::LINE));
+                        menu::rule(ui);
                         // the whole flight in one line.
                         if self.menu.pick.is_some() {
                             let ground = self.menu.airport.is_some() && self.menu.start != menu::Start::Overhead;
@@ -7740,7 +7752,7 @@ impl Game {
                             } else {
                                 format!("{:.0} ft · {:03.0}°", (self.menu.start_agl * 3.28084 / 50.0).round() * 50.0, self.heading.to_degrees().rem_euclid(360.0))
                             };
-                            let wx = if self.wx.live { t!("game.real_weather").to_string() } else { self.wx.summary().to_lowercase() };
+                            let wx = if self.wx.live { t!("game.real_weather").to_string() } else { self.wx.summary() };
                             let line = format!("{how}  ·  {}  ·  {wx}", menu::hhmm(self.menu.hour));
                             ui.add(egui::Label::new(RichText::new(line).font(menu::caption()).color(TEXT)).wrap());
                             ui.add_space(8.0);
@@ -7768,7 +7780,6 @@ impl Game {
                         menu::window_title(ui, t!("game.conditions"));
                         egui::ScrollArea::vertical().max_height(right_h - 40.0).auto_shrink([false, true]).show(ui, |ui| {
                             ui.set_width(ui.available_width());
-                            ui.spacing_mut().slider_width = 116.0;
                             let ground = self.menu.airport.is_some() && self.menu.start != menu::Start::Overhead;
                             let flight = if ground {
                                 (if self.menu.start == menu::Start::Runway { t!("game.on_the_runway") } else { t!("game.final_approach") }).to_string()
@@ -7777,25 +7788,22 @@ impl Game {
                             };
                             self.plan_section(ui);
                             menu::section(ui, "flight", t!("game.flight"), &flight, false, |ui| {
-                                if ground {
-                                    ui.label(RichText::new(if self.menu.start == menu::Start::Runway { t!("game.starting_on_the_runway_ready") } else { t!("game.starting_on_a_3_final") }).font(menu::caption()).color(DIM));
+                                menu::hint(ui, if !ground {
+                                    t!("game.starting_in_the_air")
+                                } else if self.menu.start == menu::Start::Runway {
+                                    t!("game.starting_on_the_runway_ready")
                                 } else {
-                                    ui.label(RichText::new(t!("game.starting_in_the_air")).font(menu::caption()).color(DIM));
-                                }
-                                ui.horizontal(|ui| {
-                                    ui.label(t!("game.fuel"));
-                                    let kg = self.spec.fuel_kg;
-                                    ui.add(egui::Slider::new(&mut self.menu.fuel, 0.05..=1.0).custom_formatter(move |v, _| format!("{:.0}%  ·  {:.0} kg", v * 100.0, v * kg)));
+                                    t!("game.starting_on_a_3_final")
                                 });
+                                ui.add_space(6.0);
+                                let kg = self.spec.fuel_kg;
+                                menu::slider(ui, t!("game.fuel"), "", &mut self.menu.fuel, menu::Scale::new(0.05, 1.0).step(0.01), |v| format!("{:.0}%  ·  {:.0} kg", v * 100.0, v * kg as f64));
                                 let [usual, most, _] = self.spec.payload;
                                 if most > usual {
-                                    ui.horizontal(|ui| {
-                                        ui.label(t!("game.payload"));
-                                        let mut f = self.menu.payload.unwrap_or(usual / most);
-                                        if ui.add(egui::Slider::new(&mut f, 0.15..=1.0).custom_formatter(move |v, _| format!("{:.0} kg", v * most))).changed() {
-                                            self.menu.payload = Some(f);
-                                        }
-                                    });
+                                    let mut f = self.menu.payload.unwrap_or(usual / most);
+                                    if menu::slider(ui, t!("game.payload"), "", &mut f, menu::Scale::new(0.15, 1.0).step(0.01), |v| format!("{:.0} kg", v * most as f64)).changed() {
+                                        self.menu.payload = Some(f);
+                                    }
                                 }
                                 {
                                     // Mass and balance as it will be loaded.
@@ -7808,32 +7816,20 @@ impl Game {
                                     ui.label(RichText::new(text).font(menu::caption()).color(if out { Color32::from_rgb(255, 120, 70) } else { DIM }));
                                 }
                                 if ground {
-                                    ui.checkbox(&mut self.menu.cold, t!("game.engine_off_cold_start_f4"));
+                                    ui.add_space(4.0);
+                                    menu::toggle_row(ui, t!("game.cold_start"), t!("game.engine_off_cold_start_f4"), &mut self.menu.cold);
+                                } else {
+                                    ui.add_space(6.0);
+                                    let mut ft = self.menu.start_agl * 3.28084;
+                                    if menu::slider(ui, t!("game.height"), t!("game.above_the_ground"), &mut ft, menu::Scale::new(100.0, 15000.0).log().step(50.0), |v| format!("{:.0} ft", (v / 50.0).round() * 50.0)).changed() {
+                                        self.menu.start_agl = ft / 3.28084;
+                                    }
+                                    let mut hd = self.heading.to_degrees().rem_euclid(360.0);
+                                    if menu::slider(ui, t!("game.heading"), "", &mut hd, menu::Scale::new(0.0, 359.0).step(1.0), |v| format!("{v:03.0}°")).changed() {
+                                        self.heading = hd.to_radians();
+                                    }
+                                    ui.vertical_centered(|ui| menu::heading_compass(ui, &mut self.heading));
                                 }
-                                ui.add_enabled_ui(!ground, |ui| {
-                                    egui::Grid::new("start_air").num_columns(2).min_col_width(92.0).spacing([10.0, 5.0]).show(ui, |ui| {
-                                        ui.label(t!("game.height"));
-                                        let mut ft = self.menu.start_agl * 3.28084;
-                                        if ui.add(egui::Slider::new(&mut ft, 100.0..=15000.0).logarithmic(true).step_by(50.0).suffix(" ft").custom_formatter(|v, _| format!("{:.0}", (v / 50.0).round() * 50.0))).changed() {
-                                            self.menu.start_agl = ft / 3.28084;
-                                        }
-                                        ui.end_row();
-                                        ui.label("");
-                                        ui.label(RichText::new(t!("game.above_the_ground")).font(menu::caption()).weak());
-                                        ui.end_row();
-                                        ui.label(t!("game.heading"));
-                                        let mut hd = self.heading.to_degrees().rem_euclid(360.0);
-                                        if ui.add(egui::Slider::new(&mut hd, 0.0..=359.0).step_by(1.0).custom_formatter(|v, _| format!("{v:03.0}°"))).changed() {
-                                            self.heading = hd.to_radians();
-                                        }
-                                        ui.end_row();
-                                        if !ground {
-                                            ui.label("");
-                                            menu::heading_compass(ui, &mut self.heading);
-                                            ui.end_row();
-                                        }
-                                    });
-                                });
                             });
                             let wx = self.wx.summary();
                             menu::section(ui, "weather", t!("game.weather"), &wx, false, |ui| {
@@ -8381,7 +8377,7 @@ impl Game {
             if key(ui, t!("game.respawn_here"), false, w, 40.0).on_hover_text("R").clicked() {
                 *act = Some(PauseAct::Respawn);
             }
-            if key(ui, t!("game.search_a_place"), true, w, 40.0).on_hover_text("G").clicked() {
+            if key(ui, t!("game.search_a_place"), false, w, 40.0).on_hover_text("G").clicked() {
                 *act = Some(PauseAct::GoTo);
             }
         });

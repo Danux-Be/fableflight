@@ -351,30 +351,46 @@ impl crate::Game {
         ui.add(egui::Label::new(RichText::new(tr_en(spec.blurb)).size(16.0).color(TEXT)).wrap());
         let liveries = crate::aircraft::liveries(spec);
         if !liveries.is_empty() {
-            ui.add_space(14.0);
-            ui.label(RichText::new(t!("hangar.livery")).font(menu::caption()).color(DIM));
+            ui.add_space(18.0);
+            ui.label(menu::section_text(t!("hangar.livery")).color(DIM));
+            ui.add_space(8.0);
             let mut changed = false;
             let current = self.menu.livery(spec);
-            ui.horizontal_wrapped(|ui| {
-                for (i, l) in liveries.iter().enumerate() {
-                    let selected = current == i;
-                    let button = egui::Button::new(RichText::new(tr_en(l.name)).color(if selected { Color32::WHITE } else { TEXT }))
-                        .fill(if selected { Color32::from_rgb(48, 59, 78) } else { menu::SURFACE })
-                        .stroke(Stroke::new(if selected { 1.5 } else { 1.0 }, if selected { ACCENT } else { menu::LINE }))
-                        .corner_radius(menu::R_WIDGET);
-                    if ui.add(button).clicked() && !selected {
-                        self.menu.liveries.insert(spec.name, i);
-                        changed = true;
+            // even cards, each with its colours beside its name.
+            let gap = 8.0;
+            let cols = ((w + gap) / (190.0 + gap)).floor().clamp(1.0, liveries.len().max(1) as f32) as usize;
+            let cw = ((w - gap * (cols as f32 - 1.0)) / cols as f32).min(240.0);
+            for (r, row) in liveries.chunks(cols).enumerate() {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for (k, l) in row.iter().enumerate() {
+                        let i = r * cols + k;
+                        let selected = current == i;
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(cw, 48.0), egui::Sense::click());
+                        let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
+                        let p = ui.painter();
+                        p.rect_filled(rect, menu::R_WIDGET, if selected { menu::CHOSEN } else { menu::mix(menu::RAISED, menu::RAISED_HI, lit) });
+                        p.rect_stroke(rect, menu::R_WIDGET, Stroke::new(1.0, if selected { ACCENT } else { menu::mix(menu::LINE_HI, Color32::from_white_alpha(60), lit) }), egui::StrokeKind::Inside);
+                        // the swatch: the main colour over the trim.
+                        let srgb = |c: [f32; 3]| Color32::from(egui::Rgba::from_rgb(c[0], c[1], c[2]));
+                        let (top, under) = (srgb(l.swatch[0]), srgb(l.swatch[1]));
+                        let sw = egui::Rect::from_min_size(egui::pos2(rect.left() + 10.0, rect.center().y - 14.0), egui::vec2(28.0, 28.0));
+                        let split = sw.top() + 19.0;
+                        p.rect_filled(egui::Rect::from_min_max(sw.min, egui::pos2(sw.right(), split)), egui::CornerRadius { nw: 3, ne: 3, sw: 0, se: 0 }, top);
+                        p.rect_filled(egui::Rect::from_min_max(egui::pos2(sw.left(), split), sw.max), egui::CornerRadius { nw: 0, ne: 0, sw: 3, se: 3 }, under);
+                        p.rect_stroke(sw, 3.0, Stroke::new(1.0, Color32::from_white_alpha(40)), egui::StrokeKind::Inside);
+                        let col = if selected { Color32::WHITE } else { menu::mix(TEXT, Color32::WHITE, lit) };
+                        let g = menu::one_line(p, tr_en(l.name), menu::label(), col, rect.width() - 60.0);
+                        p.galley(egui::pos2(sw.right() + 12.0, rect.center().y - g.size().y * 0.5), g, col);
+                        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, tr_en(l.name)));
+                        if resp.clicked() && !selected {
+                            self.menu.liveries.insert(spec.name, i);
+                            changed = true;
+                        }
                     }
-                    // A swatch: the main colour over the trim.
-                    let srgb = |c: [f32; 3]| Color32::from(egui::Rgba::from_rgb(c[0], c[1], c[2]));
-                    let (top, under) = (srgb(l.swatch[0]), srgb(l.swatch[1]));
-                    let swatch = ui.allocate_exact_size(egui::vec2(35.0, 14.0), egui::Sense::hover()).0;
-                    let split = swatch.top() + 10.0;
-                    ui.painter().rect_filled(egui::Rect::from_min_max(swatch.min, egui::pos2(swatch.right(), split)), 2.0, top);
-                    ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(swatch.left(), split), swatch.max), 1.0, under);
-                }
-            });
+                });
+                ui.add_space(gap - ui.spacing().item_spacing.y);
+            }
             // (Shown on the flown aircraft at once; another type takes it when it is picked.)
             if changed && std::ptr::eq(spec, self.spec) { self.apply_livery(); }
             ui.add_space(12.0);
