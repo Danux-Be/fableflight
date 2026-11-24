@@ -389,9 +389,17 @@ impl Atc {
         out
     }
 
-    /// the station on the active frequency, the nearest one using it.
+    /// the station on the active frequency, the nearest one using it (a part
+    /// time tower's frequency is also its ctaf: the tower first).
     pub fn tuned(&self, c: &Ctx) -> Option<Freq> {
-        Self::nearby(c).into_iter().find(|(f, _)| (f.mhz - self.com).abs() < 0.004).map(|x| x.0)
+        let rank = |k: Kind| match k {
+            Kind::Twr => 0,
+            Kind::Gnd | Kind::Del => 1,
+            Kind::App | Kind::Dep | Kind::Ctr => 2,
+            Kind::Atis => 3,
+            _ => 4,
+        };
+        Self::nearby(c).into_iter().filter(|(f, _)| (f.mhz - self.com).abs() < 0.004).min_by(|a, b| a.1.total_cmp(&b.1).then(rank(a.0.kind).cmp(&rank(b.0.kind)))).map(|x| x.0)
     }
 
     fn atis_letter(&mut self, apt: u32, utc: f64) -> char {
