@@ -97,6 +97,7 @@ pub struct Plan {
 }
 
 /// the gpu's queue families, and which can show on the window.
+#[cfg(any(windows, target_os = "linux"))]
 #[derive(Clone, Debug)]
 pub struct Families {
     pub flags: Vec<ash::vk::QueueFlags>,
@@ -104,7 +105,19 @@ pub struct Families {
     pub present: Vec<bool>,
 }
 
+/// no vulkan here (macos): no queue families to read.
+#[cfg(not(any(windows, target_os = "linux")))]
+#[derive(Clone, Debug)]
+pub struct Families;
+
+/// no vulkan here: never any families.
+#[cfg(not(any(windows, target_os = "linux")))]
+pub fn families(_: &wgpu::Adapter, _: &wgpu::Surface) -> Option<Families> {
+    None
+}
+
 /// reads the queue families before the device is opened.
+#[cfg(any(windows, target_os = "linux"))]
 pub fn families(adapter: &wgpu::Adapter, surface: &wgpu::Surface) -> Option<Families> {
     use wgpu::hal::api::Vulkan;
     unsafe {
@@ -120,10 +133,12 @@ pub fn families(adapter: &wgpu::Adapter, surface: &wgpu::Surface) -> Option<Fami
 }
 
 /// priorities for every queue asked for (vulkan reads them while the device is made).
+#[cfg(any(windows, target_os = "linux"))]
 static PRIO: [f32; 32] = [1.0; 32];
 
 /// picks amd's queues the way amd's own samples do and asks for them alongside wgpu's.
 /// all four must be different queues; none if the gpu cannot give that.
+#[cfg(any(windows, target_os = "linux"))]
 pub fn add_queues(f: &Families, infos: &mut Vec<ash::vk::DeviceQueueCreateInfo<'_>>) -> Option<Plan> {
     let plan = plan(f, infos.first()?.queue_family_index)?;
     let mut extra = vec![0u32; f.counts.len()];
@@ -144,6 +159,7 @@ pub fn add_queues(f: &Families, infos: &mut Vec<ash::vk::DeviceQueueCreateInfo<'
 }
 
 /// the plan for wgpu's queue (family `game`, index 0).
+#[cfg(any(windows, target_os = "linux"))]
 pub fn plan(f: &Families, game: u32) -> Option<Plan> {
     use ash::vk::QueueFlags as Q;
     let mut used = vec![0u32; f.counts.len()];
@@ -945,7 +961,6 @@ mod stub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ash::vk::QueueFlags as Q;
 
     #[test]
     fn files_are_pinned() {
@@ -957,6 +972,13 @@ mod tests {
         // the loader is the same file fsr 4 uses.
         assert_eq!(FILES[0].sha256, crate::fsr4::FILES[0].sha256);
     }
+}
+
+/// the queue picking, where there is vulkan.
+#[cfg(all(test, any(windows, target_os = "linux")))]
+mod queue_tests {
+    use super::*;
+    use ash::vk::QueueFlags as Q;
 
     #[test]
     fn nvidia_style_queues() {

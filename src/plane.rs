@@ -3086,7 +3086,7 @@ mod tests {
                 // the stick does a lot at Mach 1: the test pilot goes gently
                 let gentle = (120.0 / p.airspeed().length()).powi(2).min(1.0);
                 let roll_err = -p.right().dot(p.pos.normalize());
-                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, ..Default::default() };
+                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, reheat_set: Some(if boost { 1.0 } else { 0.0 }), ..Default::default() };
                 assert!(p.step(dt, &c, &w).is_none());
                 if i as f64 * dt > 60.0 {
                     gmax = gmax.max((p.g_load - 1.0).abs());
@@ -3166,7 +3166,7 @@ mod tests {
                 // the stick does a lot at speed: the test pilot goes gently
                 let gentle = (120.0 / p.airspeed().length()).powi(2).min(1.0);
                 let roll_err = -p.right().dot(p.pos.normalize());
-                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, ..Default::default() };
+                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, reheat_set: Some(if boost { 1.0 } else { 0.0 }), ..Default::default() };
                 assert!(p.step(dt, &c, &w).is_none());
                 if i as f64 * dt > 60.0 {
                     gmax = gmax.max((p.g_load - 1.0).abs());
@@ -3198,7 +3198,7 @@ mod tests {
             // hold the speed with the nose
             let v = p.airspeed().length();
             let roll_err = -p.right().dot(p.pos.normalize());
-            let c = Controls { pitch: ((v - 180.0) * 0.02 - p.omega.x * 1.0).clamp(-0.5, 0.5), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost: true, ..Default::default() };
+            let c = Controls { pitch: ((v - 180.0) * 0.02 - p.omega.x * 1.0).clamp(-0.5, 0.5), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost: true, reheat_set: Some(1.0), ..Default::default() };
             assert!(p.step(dt, &c, &w).is_none());
             vs = p.vel.dot(p.pos.normalize());
         }
@@ -3261,7 +3261,7 @@ mod tests {
                 // the stick does a lot at speed: the test pilot goes gently
                 let gentle = (120.0 / p.airspeed().length()).powi(2).min(1.0);
                 let roll_err = -p.right().dot(p.pos.normalize());
-                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, ..Default::default() };
+                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, reheat_set: Some(if boost { 1.0 } else { 0.0 }), ..Default::default() };
                 assert!(p.step(dt, &c, &w).is_none());
                 if i as f64 * dt > 60.0 {
                     gmax = gmax.max((p.g_load - 1.0).abs());
@@ -3339,7 +3339,7 @@ mod tests {
             // Rotate at 190 kt to 10 degrees nose up and hold it there.
             let pitch_deg = p.forward().dot(p.pos.normalize()).asin().to_degrees();
             let pitch = if v * KT > 190.0 { ((10.0 - pitch_deg) * 0.15 - p.omega.x * 1.0).clamp(-1.0, 1.0) } else { 0.0 };
-            let c = Controls { throttle: 1.0, boost: true, pitch, ..Default::default() };
+            let c = Controls { throttle: 1.0, boost: true, reheat_set: Some(1.0), pitch, ..Default::default() };
             assert!(p.step(dt, &c, &w).is_none(), "{:?}", p.notes);
             if lifted.is_none() && !p.on_ground && t > 5.0 {
                 lifted = Some(((p.pos - start).length(), v, t));
@@ -3365,7 +3365,7 @@ mod tests {
             let gentle = (120.0 / p.airspeed().length()).powi(2).min(1.0);
             let roll_err = -p.right().dot(p.pos.normalize());
             let pitch = ((p.ias() * KT - 450.0) * 0.004 - p.vel.dot(p.pos.normalize()) * 0.0005) * 8.0 * gentle - p.omega.x * 1.0;
-            let c = Controls { pitch: pitch.clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost: true, ..Default::default() };
+            let c = Controls { pitch: pitch.clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost: true, reheat_set: Some(1.0), ..Default::default() };
             assert!(p.step(dt, &c, &w).is_none());
             t += dt;
             let (_, _, h) = geo::pos_to_lla(p.pos);
@@ -3388,7 +3388,7 @@ mod tests {
             for i in 0..(secs / dt) as usize {
                 let gentle = (120.0 / p.airspeed().length()).powi(2).min(1.0);
                 let roll_err = -p.right().dot(p.pos.normalize());
-                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, ..Default::default() };
+                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, reheat_set: Some(if boost { 1.0 } else { 0.0 }), ..Default::default() };
                 assert!(p.step(dt, &c, &w).is_none(), "{:?}", p.notes);
                 top = top.max(p.mach());
                 if i as f64 * dt > 60.0 {
@@ -3434,7 +3434,7 @@ mod tests {
             let vs = p.vel.dot(p.pos.normalize());
             let pitch = if phase == 1 { ((p.eas() * KT - 450.0) * 0.004 - vs * 0.0005) * 8.0 * gentle - p.omega.x * 1.0 } else { hold(&p) * gentle };
             let roll_err = -p.right().dot(p.pos.normalize());
-            let c = Controls { pitch: pitch.clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost: true, ..Default::default() };
+            let c = Controls { pitch: pitch.clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost: true, reheat_set: Some(1.0), ..Default::default() };
             assert!(p.step(dt, &c, &w).is_none(), "{:?}", p.notes);
             t += dt;
         }
@@ -3489,7 +3489,7 @@ mod tests {
         let (mut t, mut t25) = (0.0, None);
         while t < 300.0 {
             let gentle = (120.0 / p.airspeed().length()).powi(2).min(1.0);
-            let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: wings_level(&p), throttle: 1.0, ..Default::default() };
+            let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: wings_level(&p), throttle: 1.0, reheat_set: Some(0.0), ..Default::default() };
             assert!(p.step(dt, &c, &w).is_none(), "{:?}", p.notes);
             t += dt;
             if t25.is_none() && p.mach() < 2.5 {
@@ -3510,7 +3510,7 @@ mod tests {
         let mut worst: f64 = 0.0;
         for _ in 0..(120.0 / dt) as usize {
             let gentle = (120.0 / p.airspeed().length()).powi(2).min(1.0);
-            let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: wings_level(&p), throttle: 1.0, ..Default::default() };
+            let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: wings_level(&p), throttle: 1.0, reheat_set: Some(0.0), ..Default::default() };
             if p.step(dt, &c, &w).is_some() {
                 break;
             }
@@ -3569,7 +3569,7 @@ mod tests {
                 4 => up_at(&p, 450.0, gentle),
                 _ => hold(&p) * gentle,
             };
-            let c = Controls { pitch: pitch.clamp(-1.0, 1.0), roll: wings_level(&p), throttle: 1.0, boost: true, ..Default::default() };
+            let c = Controls { pitch: pitch.clamp(-1.0, 1.0), roll: wings_level(&p), throttle: 1.0, boost: true, reheat_set: Some(1.0), ..Default::default() };
             assert!(p.step(dt, &c, &w).is_none(), "phase {phase} at {t:.0} s: {:?}", p.notes);
             assert!(p.notes.is_empty(), "phase {phase} at {t:.0} s: {:?}", p.notes);
             t += dt;
@@ -3698,7 +3698,7 @@ mod tests {
         while t < 90.0 {
             if ticks % 12 == 0 {
                 let (pd, kt) = (pitch_deg(&p), p.vel.length() * KT);
-                c = Controls { throttle: 1.0, boost: true, ..Default::default() };
+                c = Controls { throttle: 1.0, boost: true, reheat_set: Some(1.0), ..Default::default() };
                 if kt > 200.0 {
                     pulled.get_or_insert(t);
                     // nose to 10 degrees, then to whatever holds 400 kt in the climb
@@ -3737,14 +3737,14 @@ mod tests {
             let mut p = Plane::spawn(bird, 0.6, -2.1, alt, 0.0, v);
             p.fuel = 20_000.0;
             for _ in 0..(2.0 / dt) as usize {
-                assert!(p.step(dt, &Controls { roll: 1.0, boost: alt > 20_000.0, ..Default::default() }, &w).is_none());
+                assert!(p.step(dt, &Controls { roll: 1.0, boost: alt > 20_000.0, reheat_set: Some(if alt > 20_000.0 { 1.0 } else { 0.0 }), ..Default::default() }, &w).is_none());
                 rate = rate.max(p.omega.z.abs().to_degrees());
             }
             let mut p = Plane::spawn(bird, 0.6, -2.1, alt, 0.0, v);
             p.fuel = 20_000.0;
             let mut g: f64 = 0.0;
             for _ in 0..(2.0 / dt) as usize {
-                assert!(p.step(dt, &Controls { pitch: 1.0, boost: alt > 20_000.0, ..Default::default() }, &w).is_none(), "{:?}", p.notes);
+                assert!(p.step(dt, &Controls { pitch: 1.0, boost: alt > 20_000.0, reheat_set: Some(if alt > 20_000.0 { 1.0 } else { 0.0 }), ..Default::default() }, &w).is_none(), "{:?}", p.notes);
                 g = g.max(p.g_load);
             }
             (rate, g, p.notes.clone())
@@ -3764,7 +3764,7 @@ mod tests {
             if ticks % 12 == 0 {
                 let (_, _, h) = geo::pos_to_lla(p.pos);
                 let vs = p.vel.dot(up(&p));
-                c = Controls { boost: true, ..Default::default() };
+                c = Controls { boost: true, reheat_set: Some(1.0), ..Default::default() };
                 c.roll = key(30.0 - bank_deg(&p) + p.omega.z.to_degrees() * 0.6, 1.5);
                 c.pitch = key((alt - h) * 0.02 - vs * 0.25 - p.omega.x.to_degrees() * 2.0, 1.0);
             }
@@ -3849,7 +3849,7 @@ mod tests {
                 most = most.max(pitch_deg);
             }
             let pitch = if v * KT > 199.0 { ((want - pitch_deg) * 0.25 - rate * 0.08).clamp(-1.0, 1.0) } else { 0.0 };
-            let c = Controls { throttle: 1.0, boost: true, pitch, ..Default::default() };
+            let c = Controls { throttle: 1.0, boost: true, reheat_set: Some(1.0), pitch, ..Default::default() };
             assert!(p.step(dt, &c, &w).is_none(), "{:?}", p.notes);
             if lifted.is_none() && !p.on_ground && t > 5.0 {
                 lifted = Some(((p.pos - start).length(), v, t, pitch_deg));
@@ -3880,7 +3880,7 @@ mod tests {
                 // the stick does a lot at speed: the test pilot goes gently
                 let gentle = (120.0 / p.airspeed().length()).powi(2).min(1.0);
                 let roll_err = -p.right().dot(p.pos.normalize());
-                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, ..Default::default() };
+                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, reheat_set: Some(if boost { 1.0 } else { 0.0 }), ..Default::default() };
                 assert!(p.step(dt, &c, &w).is_none());
                 if i as f64 * dt > 60.0 {
                     gmax = gmax.max((p.g_load - 1.0).abs());
@@ -3917,7 +3917,7 @@ mod tests {
             while p.mach() < 1.7 && t < 900.0 {
                 let gentle = (120.0 / p.airspeed().length()).powi(2).min(1.0);
                 let roll_err = -p.right().dot(p.pos.normalize());
-                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, ..Default::default() };
+                let c = Controls { pitch: (hold(&p) * gentle).clamp(-1.0, 1.0), roll: (-roll_err * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0), throttle: 1.0, boost, reheat_set: Some(if boost { 1.0 } else { 0.0 }), ..Default::default() };
                 assert!(p.step(dt, &c, &w).is_none());
                 t += dt;
             }

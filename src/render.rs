@@ -1529,7 +1529,10 @@ pub fn vram_of(device: &wgpu::Device) -> Option<(u64, u64)> {
         (total > 0).then_some((used, total))
     }
     #[cfg(not(any(windows, target_os = "linux")))]
-    None
+    {
+        let _ = device;
+        None
+    }
 }
 
 /// The sun's shadow map: one layer per cascade and one for the aircraft, as

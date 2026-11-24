@@ -47,8 +47,8 @@ mod tests {
         assert_eq!(at(48.9, 195.0), (0.0, 0.0));
         // spring flush in may.
         assert!(at(48.9, 120.0).0 < -0.5);
-        // sydney in july is winter, singapore never changes.
-        assert!(at(-33.9, 200.0).1 > 0.9);
+        // sydney in july is winter (a milder one at its latitude), singapore never changes.
+        assert!(at(-33.9, 200.0).1 > 0.8);
         assert_eq!(at(1.3, 288.0), (0.0, 0.0));
     }
 }

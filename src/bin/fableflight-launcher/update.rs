@@ -232,15 +232,9 @@ fn html_to_notes(html: &str) -> String {
         }
     }
     out.push_str(rest);
+    // one line per heading, item or paragraph, no blank lines between them.
     let text = unescape(&out);
-    let lines: Vec<&str> = text.lines().map(str::trim_end).collect();
-    let mut tidy: Vec<&str> = Vec::new();
-    for l in lines {
-        if l.trim().is_empty() && tidy.last().is_none_or(|p: &&str| p.trim().is_empty()) {
-            continue;
-        }
-        tidy.push(l);
-    }
+    let tidy: Vec<&str> = text.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect();
     tidy.join("\n").trim().to_string()
 }
 
