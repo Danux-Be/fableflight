@@ -255,11 +255,13 @@ pub struct Run {
     vs_air: f64,
     /// the steps' first second: starting on the ground after a teleport is not a landing.
     settle: f64,
+    /// the pilot's live weather and real time switches before the mission set its own weather.
+    wx_was: Option<(bool, bool)>,
 }
 
 impl Run {
     pub fn new(m: &'static Mission, now: f64) -> Self {
-        Self { m, step: 0, since: now, held: 0.0, rating: None, done: false, failed: None, up_for: 0.0, ground: true, vs_air: 0.0, settle: 3.0 }
+        Self { m, step: 0, since: now, held: 0.0, rating: None, done: false, failed: None, up_for: 0.0, ground: true, vs_air: 0.0, settle: 3.0, wx_was: None }
     }
 
     pub fn text(&self) -> &'static str {
@@ -287,6 +289,8 @@ impl Game {
         }
         self.menu.cold = m.cold;
         self.menu.hour = m.hour;
+        // (an earlier mission's weather is not the pilot's own: keep the first one's record)
+        let was = self.mission.as_ref().and_then(|r| r.wx_was).unwrap_or((self.wx.live, self.wx.real_time));
         if let Some(w) = m.weather {
             self.wx.live = false;
             self.wx.real_time = false;
@@ -315,7 +319,16 @@ impl Game {
                 }
             }
         }
-        self.mission = Some(Run::new(m, self.time));
+        let mut run = Run::new(m, self.time);
+        run.wx_was = m.weather.map(|_| was);
+        self.mission = Some(run);
+    }
+
+    /// stops the mission, the pilot's weather switches as they were.
+    pub(crate) fn end_mission(&mut self) {
+        if let Some((live, real)) = self.mission.take().and_then(|r| r.wx_was) {
+            (self.wx.live, self.wx.real_time) = (live, real);
+        }
     }
 
     fn goal_met(&self, g: Goal, held: f64, run: &Run) -> bool {
@@ -499,7 +512,7 @@ impl Game {
             let m = run.m;
             self.start_mission(m);
         } else if close {
-            self.mission = None;
+            self.end_mission();
         }
     }
 

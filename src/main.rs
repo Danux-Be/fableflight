@@ -5113,6 +5113,8 @@ impl Game {
     /// Back to the globe, looking at where we were.
     fn to_globe(&mut self) {
         self.log_close(false);
+        self.end_mission();
+        self.career_flight = None;
         self.set_pause_menu(false);
         self.info_open = false;
         let (lat, lon, _) = geo::pos_to_lla(self.plane.pos);
@@ -5274,6 +5276,8 @@ impl Game {
         self.contrails.clear();
         self.atc.reset();
         self.checks.reset(checklist::lists(aircraft::nth(self.menu.aircraft)));
+        self.end_mission();
+        self.career_flight = None;
         if let Some(i) = self.menu.airport.filter(|_| self.menu.start != menu::Start::Overhead) {
             self.stand_start = self.menu.start == menu::Start::Stand;
             self.start_airport(i, self.menu.runway.clone(), self.menu.start == menu::Start::Approach, false);

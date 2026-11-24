@@ -480,9 +480,7 @@ impl Game {
         self.menu.fuel = (need / spec.fuel_kg.max(1.0)).clamp(0.25, 1.0);
         self.menu.cold = false;
         self.stand_start = true;
-        self.wx.live = true;
-        self.wx.real_time = true;
-        self.mission = None;
+        self.end_mission();
         self.atc.reset();
         self.start_airport(bi, None, false, true);
         self.plan.clear();
