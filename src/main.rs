@@ -1028,6 +1028,11 @@ fn parse_args_from(v: &[String]) -> Result<Args, String> {
                 a.no_hud = true;
                 used = 1;
             }
+            "--no-aircraft" => {
+                // (read by `no_aircraft`): the scenery alone in --shot pictures
+                a.no_hud = true;
+                used = 1;
+            }
             "--fuel" => a.fuel = Some(req_num(flag, i)?.clamp(0.0, 1.0)),
             "--arcade" => {
                 a.arcade = true;
@@ -1133,6 +1138,12 @@ fn mp_kept_off(a: &Args) -> bool {
 fn still_mode() -> bool {
     static S: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *S.get_or_init(|| std::env::args().any(|a| a == "--still"))
+}
+
+/// `--no-aircraft`: frames of the scenery alone (the menu's pictures), the aircraft not drawn.
+fn no_aircraft() -> bool {
+    static S: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *S.get_or_init(|| std::env::args().any(|a| a == "--no-aircraft"))
 }
 
 fn url_encode(s: &str) -> String {
@@ -7491,7 +7502,7 @@ impl Game {
             let n = self.model.pieces.len();
             let order: Vec<usize> = (0..n).filter(|&i| self.piece_inner[i] == seat).chain((0..n).filter(|&i| self.piece_inner[i] != seat)).collect();
             for (i, p) in order.into_iter().map(|i| (i, &self.model.pieces[i])) {
-                if far_out && self.piece_inner[i] {
+                if (far_out && self.piece_inner[i]) || no_aircraft() {
                     continue;
                 }
                 let hide = match p.vis {
@@ -7586,7 +7597,7 @@ impl Game {
         let mut insts = Vec::new();
         let mut scenery = Vec::new();
         let mut fall = Vec::new();
-        let mut air_lights = own_lights;
+        let mut air_lights = if no_aircraft() { Vec::new() } else { own_lights };
         if !in_menu {
             let local = (self.utc + clon.to_degrees() / 15.0).rem_euclid(24.0);
             let sun_up = geo::enu(cam).2.dot(self.sun_dir());

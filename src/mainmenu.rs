@@ -16,11 +16,11 @@ use egui::{pos2, vec2, Align2, Color32, FontId, Painter, Pos2, Rect, Sense, Stro
 /// its size beyond the aspect (it is cropped to fill the tile).
 pub const GLOBE_PICTURE: &[u8] = include_bytes!("../assets/ui/globe.jpg");
 
-/// the pictures behind fly's two choices, the game's own frames at 1600 x 1200
-/// with the hud off, scaled to 1200 x 900. free flight: the 172 over the golden
-/// gate (`--lat 37.79 --lon -122.52 --alt 500 --heading 70 --aircraft c172
-/// --time 16 --weather fair --tail-view`). career: the 747 lined up at san
-/// francisco at sunrise (`--airport KSFO --aircraft 747 --time 7.4`).
+/// the pictures behind fly's two choices: the game's own scenery, no aircraft
+/// (`--no-aircraft --weather fair --tail-view`, 1600 x 1200 scaled to 1200 x 900).
+/// free flight: the golden gate in the afternoon (`--lat 37.79 --lon -122.52
+/// --alt 500 --heading 70 --time 16`). career: the bay at sunrise with san
+/// francisco's runways (`--lat 37.56 --lon -122.30 --alt 700 --heading 330 --time 7.3`).
 pub const FREE_PICTURE: &[u8] = include_bytes!("../assets/ui/free.jpg");
 pub const CAREER_PICTURE: &[u8] = include_bytes!("../assets/ui/career.jpg");
 
