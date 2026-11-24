@@ -376,11 +376,72 @@ static FIGHTER: &[List] = &[
     ] },
 ];
 
+/// a glider (the ask 21's manual and the cb sift cbe drill before a launch).
+static GLIDER: &[List] = &[
+    List { name: "Before launch", items: &[
+        i("Controls", "FREE AND CORRECT", Is::Hand),
+        i("Ballast", "CHECKED", Is::Hand),
+        i("Straps", "TIGHT", Is::Hand),
+        i("Instruments", "SET", Is::Hand),
+        i("Trim", "SET for the launch", Is::Hand),
+        i("Canopy", "CLOSED AND LOCKED", Is::CanopyOpen(false)),
+        i("Airbrakes", "CLOSED AND LOCKED", Is::SpeedbrakeIn),
+        i("Eventualities", "BRIEFED: a cable break", Is::Hand),
+    ] },
+    List { name: "Launch", items: &[
+        i("Wheel brake", "OFF", Is::ParkingBrake(false)),
+        i("Airborne", "HOLD the attitude", Is::Airborne),
+        i("Release", "AT THE TOP", Is::Hand),
+    ] },
+    List { name: "Before landing", items: &[
+        i("Approach speed", "55 KT plus half the wind", Is::Hand),
+        i("Airbrakes", "UNLOCKED, as needed", Is::Hand),
+        i("Field", "CHOSEN, circuit planned", Is::Hand),
+    ] },
+    List { name: "After landing", items: &[
+        i("Stopped", "WINGS LEVEL as it slows", Is::Stopped),
+        i("Canopy", "OPEN", Is::CanopyOpen(true)),
+    ] },
+];
+
+/// a piston helicopter (the r44's pilot's operating handbook, section 4, cut down).
+static HELI: &[List] = &[
+    List { name: "Before starting engine", items: &[
+        i("Seat belts", "FASTENED", Is::Hand),
+        i("Collective", "FULL DOWN, friction on", Is::ThrottleIdle),
+        i("Cyclic and pedals", "NEUTRAL", Is::Hand),
+        i("Battery", "ON", Is::Master(true)),
+    ] },
+    List { name: "Starting engine", items: &[
+        i("Rotor area", "CLEAR", Is::Hand),
+        i("Key", "START, release when it fires", Is::Running(true)),
+        i("Clutch", "ENGAGE, rotor turning", Is::Hand),
+        i("Governor", "ON, rotor 101 to 102 %", Is::Hand),
+    ] },
+    List { name: "Before takeoff", items: &[
+        i("Doors", "LATCHED", Is::Hand),
+        i("Warning lights", "OUT", Is::Hand),
+        i("Rotor speed", "102 %", Is::Hand),
+    ] },
+    List { name: "Takeoff", items: &[
+        i("Collective", "RAISE SLOWLY to a hover", Is::Airborne),
+        i("Hover check", "WEIGHT, BALANCE, POWER", Is::Hand),
+        i("Transition", "NOSE DOWN, accelerate through 15 KT", Is::Hand),
+    ] },
+    List { name: "Shutdown", items: &[
+        i("Collective", "FULL DOWN", Is::ThrottleIdle),
+        i("Key", "OFF", Is::Ignition(false)),
+        i("Battery", "OFF", Is::Master(false)),
+    ] },
+];
+
 /// the checklists for a type: by its own kind, or the body it borrows.
 pub fn lists(spec: &Spec) -> &'static [List] {
     let body = spec.origin.map(|o| o.body).unwrap_or(spec.keys.first().copied().unwrap_or(""));
     match spec.id {
         _ if spec.rocket().is_some() => &[],
+        _ if spec.rotor.is_some() => HELI,
+        _ if spec.fuel_kg <= 0.0 => GLIDER,
         0 => PISTON_RG,
         8 => PISTON_FIXED,
         1 | 9 => JET,

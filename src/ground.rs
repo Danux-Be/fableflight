@@ -35,6 +35,8 @@ pub struct Ground {
     /// stairs at the door, baggage at the hold.
     pub stairs: bool,
     pub baggage: bool,
+    /// a glider's winch launch: how long it has been pulling (s).
+    pub winch: Option<f64>,
 }
 
 /// how fast a tug pushes (m/s), and how far before it stops by itself (m).
@@ -43,7 +45,7 @@ const PUSH_MAX: f64 = 90.0;
 
 impl Ground {
     pub fn busy(&self) -> bool {
-        self.push.is_some() || self.bridge > 0.0 || self.fuel_to.is_some() || self.board_to.is_some() || self.stairs || self.baggage
+        self.push.is_some() || self.bridge > 0.0 || self.fuel_to.is_some() || self.board_to.is_some() || self.stairs || self.baggage || self.winch.is_some()
     }
 }
 
@@ -68,6 +70,22 @@ impl Game {
     /// once a frame: the tug, the bridge, the fuel and the boarding move on.
     pub(crate) fn ground_step(&mut self, dt: f64) {
         let p = &mut self.plane;
+        // the winch: pulls the glider ahead and up the cable for a minute, then lets go at the top.
+        if let Some(t) = self.ground.winch.as_mut() {
+            *t += dt;
+            let (la, lo, h) = geo::pos_to_lla(p.pos);
+            let agl = self.world.ground(la, lo).map_or(0.0, |g| h - g.h);
+            if *t > 70.0 || agl > 450.0 || p.parking_brake {
+                self.ground.winch = None;
+                p.tow = None;
+                self.status = tr_en("Cable released: find a thermal.").into();
+                self.status_until = self.real + 5.0;
+            } else {
+                // (a cable pulls along the glider's axis, harder as it builds speed)
+                p.tow = Some(-30.0);
+            }
+            return;
+        }
         if let Some(push) = self.ground.push.as_mut() {
             push.gone = (p.pos - push.from).length();
             // the brakes set, or far enough: the tug lets go.
@@ -207,11 +225,28 @@ impl Game {
         let p = &self.plane;
         let stopped = p.on_ground && p.vel.length() < 0.5;
         if !p.on_ground {
+            if self.ground.winch.is_some() {
+                if key(ui, tr_en("Release the cable"), false, ui.available_width(), 26.0).clicked() {
+                    self.ground.winch = None;
+                    self.plane.tow = None;
+                }
+                return;
+            }
             note(ui, tr_en("Ground services come to an aircraft standing on the ground."));
             return;
         }
         let big = self.spec.mass > 20_000.0;
         let mut act: Option<&'static str> = None;
+        // a glider launches on a winch cable.
+        if self.spec.fuel_kg <= 0.0 && self.spec.rotor.is_none() {
+            wide_tile(ui, |ui| {
+                tag(ui, tr_en("WINCH LAUNCH"));
+                note(ui, tr_en("The winch pulls you up to about 1,500 feet and lets go. Hold the nose up gently once airborne."));
+                if key(ui, if self.ground.winch.is_some() { tr_en("Launching") } else { tr_en("Take up slack, all out") }, self.ground.winch.is_some(), ui.available_width(), 26.0).clicked() && stopped && self.ground.winch.is_none() {
+                    act = Some("winch");
+                }
+            });
+        }
         wide_tile(ui, |ui| {
             tag(ui, tr_en("PUSHBACK"));
             match self.ground.push {
@@ -282,6 +317,10 @@ impl Game {
         }
         let Some(a) = act else { return };
         match a {
+            "winch" => {
+                self.plane.parking_brake = false;
+                self.ground.winch = Some(0.0);
+            }
             "push" => {
                 self.plane.parking_brake = false;
                 self.ground.bridge_on = false;
