@@ -598,7 +598,8 @@ pub struct FieldGpu {
 pub struct TileGpu {
     vbuf: wgpu::Buffer,
     bind: wgpu::BindGroup,
-    /// gpu bytes, for the streaming budget (world.rs `keep_budget`)
+    /// gpu bytes, for the memory figures (`--features mem-stats`)
+    #[cfg_attr(not(feature = "mem-stats"), allow(dead_code))]
     pub bytes: usize,
     radius: f32,
     wet: bool,
@@ -658,8 +659,6 @@ pub struct BuildGpu {
     bind: wgpu::BindGroup,
     road: Option<(wgpu::Buffer, wgpu::Buffer, u32)>,
     pub trees: Option<wgpu::Buffer>,
-    /// gpu bytes, for the streaming budget (world.rs `keep_budget`)
-    pub bytes: usize,
 }
 impl BuildGpu {
     /// gpu memory the tile holds.
@@ -737,10 +736,6 @@ impl BuildGpu {
 /// The bytes each of `BuildGpu::targets` is filled with.
 pub fn building_payload(b: &crate::buildings::BuildingData) -> [&[u8]; 5] {
     [bytemuck::cast_slice(&b.verts), bytemuck::cast_slice(&b.indices), bytemuck::cast_slice(&b.road_verts), bytemuck::cast_slice(&b.road_idx), bytemuck::cast_slice(&b.trees)]
-}
-/// gpu bytes of a building tile, for the streaming budget.
-pub fn building_bytes(b: &crate::buildings::BuildingData) -> usize {
-    building_payload(b).iter().map(|p| p.len()).sum::<usize>() + b.atlas.iter().map(|m| m.len()).sum::<usize>()
 }
 /// Bytes of a terrain tile's upload, for the per-frame upload budget.
 pub fn tile_bytes(t: &crate::sources::TileData) -> usize {
@@ -3348,17 +3343,6 @@ impl Renderer {
             // (a redraw begun at the old pace starts over, whole)
             self.cshadow.ok = false;
         }
-    }
-
-    /// rough gpu bytes the renderer holds outside world streaming, at this render scale.
-    pub fn fixed_bytes(&self, scale: f32) -> u64 {
-        let (w, h) = ((self.config.width as f32 * scale) as u64, (self.config.height as f32 * scale) as u64);
-        let px = w * h;
-        // msaa targets, full size targets, half size cloud and bloom
-        let targets = px * (msaa() as u64 * (8 + 8 + 1 + 4) + 7 * 8 + 4 + 4) + px / 4 * (4 * 8 + 2 * 4 + 16 + 2) + px / 4 * 8 * 4 / 3;
-        let shadow = (CASCADES as u64 + 1) * self.shadow_res as u64 * self.shadow_res as u64 * 4;
-        // the rest measured on an rtx 2050, the tree impostors alone are 426 mb
-        targets + shadow + (950 << 20)
     }
 
     /// A new sun shadow map of this side (texels).

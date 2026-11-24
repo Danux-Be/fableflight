@@ -1978,7 +1978,7 @@ impl Game {
             gkey: src.google.key(), gkey_show: false, gm_logo: None, stills: std::collections::HashMap::new(), window, r, world, src, spec, model, piece_mesh, group_mesh, piece_cut, piece_inner, group_pivots, hangar: Vec::new(), building: Vec::new(), crashed: false, crash: None, crash_real: 0.0, egui_ctx, egui_state, keys: HashSet::new(), drag: false, lean_drag: None, last_cursor: None,
             minimap: minimap::Minimap::new(&prefs),
             cam_yaw: cy.to_radians(), cam_pitch: cp, cam_dist: cd, cam_mode: args.start_view.unwrap_or(prefs.cam_mode), view_before_tail: 0, cam_pos, cam_dir: -plane.forward(), cam_look: plane.pos, orbit: 0.0, cam_rise: 0.0, cam_clear_t: 0.0, cam_ang: None, cam_hold: 0.0,
-            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, shown_at: 0, dyn_k: 1.0, dyn_ms: 0.0, dyn_seen: 0, dyn_skip: 0, dyn_t: 0.0, gfx_eff: gfx, dynq: dynamic::Dynamic::default(), storms_seen: false, dyn_cli: args.dynamic.is_some(), prev_plane: Mat4::IDENTITY, plane_box, lamps,
+            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, shown_at: 0, dyn_k: 1.0, dyn_ms: 0.0, dyn_seen: 0, dyn_skip: 0, dyn_t: 0.0, gfx_eff: gfx, dynq: dynamic::Dynamic::default(), storms_seen: false, casc_keep: [([[0.0; 4]; 4], DVec3::ZERO); 2], casc_ok: 0, casc_res: 0, dyn_cli: args.dynamic.is_some(), prev_plane: Mat4::IDENTITY, plane_box, lamps,
             frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, planner: Default::default(), ap_bar_on: false, ap_alt_seen: (0.0, 0.0), ils_auto: None, prefs_simbrief: prefs.simbrief.clone(), profile: profile::Profile::load(), toasts: Vec::new(), pilot_tab: 0, activity_tab: 0, arcade: args.arcade || prefs.arcade, goto_open: false, goto_text: String::new(), goto_rx: None,
             status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, pad_y: false, pad_y_combo: false, pad_held: Vec::new(), pad_note: (String::new(), 0.0), pad_aim: false, pad_live: None, ap: autopilot::Autopilot::default(), ap_off_t: -100.0, ap_script: args.ap_script.clone(), cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
@@ -8450,9 +8450,6 @@ impl Game {
         if self.gfx_applied == Some(g) {
             return;
         }
-        // The streaming budget, from the GPU's memory less what the renderer
-        // holds at the player's resolution (not the lowered one, which comes back up).
-        self.world.set_vram(self.r.vram, self.r.fixed_bytes(self.gfx.render_scale()));
         self.r.set_upscaler(g.upscaler);
         self.r.set_framegen(g.framegen);
         if !g.dynamic_res {

@@ -711,25 +711,6 @@ impl Minimap {
         painter.text(chip.center() - Vec2::new(0.0, 3.0), egui::Align2::CENTER_CENTER, distance_label(meters, crate::i18n::lang()), crate::menu::medium(12.5), Color32::WHITE);
         let a = Pos2::new(rect.center().x - 30.0, chip.bottom() - 6.0);
         painter.line_segment([a, a + Vec2::new(60.0, 0.0)], Stroke::new(1.5, Color32::WHITE));
-        // the next waypoint on a chip.
-        if let Some((plan, gs)) = route {
-            let at = (aircraft.0.to_degrees(), aircraft.1.to_degrees());
-            if let (Some(st), Some(wp)) = (plan.steer(at), plan.target()) {
-                let ete = plan.ete(at, gs).map(|(t, _)| format!("  ·  {}", crate::flightplan::hm(t))).unwrap_or_default();
-                let cons = wp.alt.map(|a| format!("  ·  {}", a.text())).unwrap_or_default();
-                let text = match wp.leg {
-                    crate::flightplan::Leg::Climb { course, until } => format!("HDG {course:03.0}°  to {until:.0} ft"),
-                    crate::flightplan::Leg::Intercept { course } => format!("HDG {course:03.0}°  INTC"),
-                    crate::flightplan::Leg::Vectors { course } => format!("HDG {course:03.0}°  VECTORS"),
-                    _ => format!("{}  {:.1} nm  ·  {:03.0}°{ete}{cons}", wp.ident, st.dist / 1852.0, st.bearing),
-                };
-                let galley = painter.layout_no_wrap(text, crate::menu::medium(12.5), Color32::WHITE);
-                let chip = egui::Rect::from_center_size(Pos2::new(rect.center().x, rect.bottom() - 52.0), galley.size() + Vec2::new(26.0, 8.0));
-                painter.rect_filled(chip, crate::flightui::R_IN, Color32::from_black_alpha(170));
-                painter.circle_filled(Pos2::new(chip.left() + 9.0, chip.center().y), 3.5, ROUTE);
-                painter.galley(Pos2::new(chip.left() + 18.0, chip.center().y - galley.size().y * 0.5), galley, Color32::WHITE);
-            }
-        }
         clip_to_disc(ctx, painter.layer_id(), first_shape, &outline);
         // the next waypoint on a chip.
         if let Some((plan, gs)) = route {

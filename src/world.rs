@@ -305,12 +305,6 @@ pub struct World {
     pub tree_dims: Vec<TreeDim>,
     tick: u32,
     pub stats: (usize, usize, usize), // drawn tiles, loading, building tiles
-    /// gpu bytes allowed for terrain and buildings, unlimited if vram is unknown
-    budget: (usize, usize),
-    /// lod_k factor while terrain in view alone is over budget
-    t_squeeze: f64,
-    /// building load radius while over budget, m
-    b_cap: f64,
     last_update: Option<std::time::Instant>,
     uploads: VecDeque<Upload>,
     fields: HashMap<u32, FSlot>,
@@ -1033,10 +1027,6 @@ impl World {
                     self.in_flight -= 1;
                     budget -= 3;
                     match res {
-                        // no room even after dropping farther tiles
-                        Ok(bd) if !self.make_room(crate::render::building_bytes(&bd), (bd.center - cam).length(), cam) => {
-                            self.builds.remove(&id);
-                        }
                         Ok(bd) => {
                             // The slot stays Loading until the geometry is all on the GPU.
                             bytes += bd.atlas.iter().map(|m| m.len()).sum::<usize>();
@@ -1120,8 +1110,7 @@ impl World {
                     let id = TileId::new(DATA_ZOOM, x as u32, y as u32);
                     let (lat, lon) = id.lat_lon(0.5, 0.5);
                     let d = (geo::lla_to_pos(lat, lon, gh) - cam).length();
-                    // b_cap only applies while over budget
-                    if d > reach + w || d >= self.b_cap {
+                    if d > reach + w {
                         continue;
                     }
                     match self.builds.get_mut(&id) {
@@ -1244,9 +1233,6 @@ impl World {
             k += 1;
             !sent[k - 1]
         });
-        if self.frame % 30 == 0 {
-            self.keep_budget(cam);
-        }
 
         // Evict what has not been needed for a while.
         if self.frame % 120 == 0 {
@@ -1432,9 +1418,10 @@ impl World {
     }
 
     /// (count, bytes) of terrain and building tiles on the gpu.
+    #[cfg(feature = "mem-stats")]
     pub fn gpu_usage(&self) -> ((usize, usize), (usize, usize)) {
         let t = self.tiles.values().filter_map(|s| if let Slot::Ready(t) = s { Some(t.gpu.bytes) } else { None });
-        let b = self.builds.values().filter_map(|s| if let BSlot::Ready(b) = s { b.gpu.as_ref().map(|g| g.bytes) } else { None });
+        let b = self.builds.values().filter_map(|s| if let BSlot::Ready(b) = s { b.gpu.as_ref().map(|g| g.bytes() as usize) } else { None });
         let sum = |i: &mut dyn Iterator<Item = usize>| i.fold((0, 0), |(n, s), x| (n + 1, s + x));
         (sum(&mut { t }), sum(&mut { b }))
     }
