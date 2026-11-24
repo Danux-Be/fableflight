@@ -1338,6 +1338,12 @@ struct Game {
     dynq: dynamic::Dynamic,
     /// storm cells were on screen last frame (dynamic quality lowers them first)
     storms_seen: bool,
+    /// the outer shadow cascades as last drawn (matrix, camera), which the
+    /// next frame may reuse (they take turns), which of them are valid, and
+    /// the shadow map's size they were drawn at
+    casc_keep: [([[f32; 4]; 4], DVec3); 2],
+    casc_ok: u8,
+    casc_res: u32,
     /// dynamic quality asked for on the command line (so it runs in --bench too)
     dyn_cli: bool,
     /// dynamic resolution: share of the set resolution, smoothed gpu ms, frames seen, frames to skip, last change.
@@ -6230,6 +6236,14 @@ impl Game {
                     }
                 }
                 (l.1, l.2, l.3) = (now, 0, 0.0);
+                // GPU memory in use (cargo build --features mem-stats).
+                #[cfg(feature = "mem-stats")]
+                {
+                    let c = self.r.device.get_internal_counters().hal;
+                    let mb = |v: isize| v as f64 / (1 << 20) as f64;
+                    let ((nt, bt), (nb, bb)) = self.world.gpu_usage();
+                    log::info!("gpu memory: buffers {:.0} MB ({}), textures {:.0} MB ({}) | terrain {nt} tiles {:.0} MB, buildings {nb} tiles {:.0} MB", mb(c.buffer_memory.read()), c.buffers.read(), mb(c.texture_memory.read()), c.textures.read(), mb(bt as isize), mb(bb as isize));
+                }
             }
         }
         if self.record.is_some() {
@@ -7216,6 +7230,25 @@ impl Game {
             let lview = look_to(centre + sun.as_vec3() * pb, -sun.as_vec3(), upl.as_vec3());
             casc_vp[3] = (ortho(-pr, pr, -pr, pr, 0.0, PSHADOW_DEPTH) * lview).to_cols_array_2d();
         }
+        // The two outer cascades take turns: the one skipped keeps last
+        // frame's map, its matrix moved by how far the camera has moved since.
+        let mut casc_skip = 0u8;
+        let sres_now = self.r.shadow_res();
+        if !shadow_on || sres_now != self.casc_res {
+            self.casc_ok = 0;
+            self.casc_res = sres_now;
+        }
+        let turn = 1 + (self.frame % 2) as usize;
+        for i in 1..3 {
+            let (vp, at) = self.casc_keep[i - 1];
+            if i != turn && self.casc_ok & (1 << i) != 0 && (cam - at).length() < 300.0 {
+                casc_vp[i] = (Mat4::from_cols_array_2d(&vp) * Mat4::from_translation((cam - at).as_vec3())).to_cols_array_2d();
+                casc_skip |= 1 << i;
+            } else if shadow_on {
+                self.casc_keep[i - 1] = (casc_vp[i], cam);
+                self.casc_ok |= 1 << i;
+            }
+        }
         let mut shadow_vp = [[[0f32; 4]; 4]; 3];
         shadow_vp.copy_from_slice(&casc_vp[..3]);
         let mut g = Globals {
@@ -7703,7 +7736,7 @@ impl Game {
         crate::gputime::cpu("sim.contrails");
         let rain_drops = if in_menu || (self.cam_rain < 0.002 && self.cam_blow < 0.01) { 0 } else { render::RAIN_DROPS };
         crate::gputime::cpu("shore+fields+misc");
-        self.r.render(Frame { rain_drops, bolts, contrails: &self.contrail_draw, g, tiles, tess, details, photo, skins, skin_slots, fields, lights: air_lights, objs, insts, scenery, fall, near, casc_vp, shore: sf.step, shore_c, shore_tiles, psim, sim_steps: dt > 0.0, fluid, ocean: self.world.water_in_view().then(|| self.world.ocean.uniform()), egui: Some(ui), shot, cover, glow: glow_px, snow: snow_px, snow_tracks: snow_tr_uploads });
+        self.r.render(Frame { rain_drops, bolts, contrails: &self.contrail_draw, g, tiles, tess, details, photo, skins, skin_slots, fields, lights: air_lights, objs, insts, scenery, fall, near, casc_vp, casc_skip, shore: sf.step, shore_c, shore_tiles, psim, sim_steps: dt > 0.0, fluid, ocean: self.world.water_in_view().then(|| self.world.ocean.uniform()), egui: Some(ui), shot, cover, glow: glow_px, snow: snow_px, snow_tracks: snow_tr_uploads });
         self.finish_mcp_shots();
         if (had_shots && std::env::args().any(|a| a == "--shot") && self.record.is_none()) || rec_done {
             self.quit_why = "shots or recording done";
@@ -8417,6 +8450,9 @@ impl Game {
         if self.gfx_applied == Some(g) {
             return;
         }
+        // The streaming budget, from the GPU's memory less what the renderer
+        // holds at the player's resolution (not the lowered one, which comes back up).
+        self.world.set_vram(self.r.vram, self.r.fixed_bytes(self.gfx.render_scale()));
         self.r.set_upscaler(g.upscaler);
         self.r.set_framegen(g.framegen);
         if !g.dynamic_res {

@@ -731,6 +731,25 @@ impl Minimap {
             }
         }
         clip_to_disc(ctx, painter.layer_id(), first_shape, &outline);
+        // the next waypoint on a chip.
+        if let Some((plan, gs)) = route {
+            let at = (aircraft.0.to_degrees(), aircraft.1.to_degrees());
+            if let (Some(s), Some(wp)) = (plan.steer(at), plan.target()) {
+                let ete = plan.ete(at, gs).map(|(t, _)| format!("  ·  {}", crate::flightplan::hm(t))).unwrap_or_default();
+                let cons = wp.alt.map(|a| format!("  ·  {}", a.text())).unwrap_or_default();
+                let text = match wp.leg {
+                    crate::flightplan::Leg::Climb { course, until } => format!("HDG {course:03.0}°  to {until:.0} ft"),
+                    crate::flightplan::Leg::Intercept { course } => format!("HDG {course:03.0}°  INTC"),
+                    crate::flightplan::Leg::Vectors { course } => format!("HDG {course:03.0}°  VECTORS"),
+                    _ => format!("{}  {:.1} nm  ·  {:03.0}°{ete}{cons}", wp.ident, s.dist / 1852.0, s.bearing),
+                };
+                let galley = painter.layout_no_wrap(text, crate::menu::medium(12.5), Color32::WHITE);
+                let chip = egui::Rect::from_center_size(Pos2::new(rect.center().x, rect.bottom() - 52.0), galley.size() + Vec2::new(26.0, 8.0));
+                painter.rect_filled(chip, crate::flightui::R_IN, Color32::from_black_alpha(170));
+                painter.circle_filled(Pos2::new(chip.left() + 9.0, chip.center().y), 3.5, ROUTE);
+                painter.galley(Pos2::new(chip.left() + 18.0, chip.center().y - galley.size().y * 0.5), galley, Color32::WHITE);
+            }
+        }
         // a dark line outside, a bright hairline inside.
         painter.rect_stroke(rect, crate::flightui::R_HUD, Stroke::new(1.0, Color32::from_black_alpha(90)), egui::StrokeKind::Outside);
         painter.rect_stroke(rect, crate::flightui::R_HUD, Stroke::new(1.0, Color32::from_white_alpha(72)), egui::StrokeKind::Inside);
@@ -818,7 +837,8 @@ impl Minimap {
         }
     }
 
-    /// The map: the minimap in the corner, or the full-size map over the view.
+    /// The map: the minimap in the corner, or the full-size map over the view,
+    /// with the flight plan and the ground speed (m/s) for its times, if any.
     #[allow(clippy::too_many_arguments)]
     pub fn show(&mut self, ctx: &egui::Context, src: &Arc<Sources>, lat: f64, lon: f64, heading: Option<f64>, info_open: bool, guide: Option<&crate::approach::Guide>, world: &crate::world::World, route: Option<(&crate::flightplan::Plan, f64)>) {
         self.frame += 1;

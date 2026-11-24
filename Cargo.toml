@@ -6,6 +6,10 @@ rust-version = "1.85"
 license = "MIT"
 default-run = "fablegame"
 
+[features]
+# gpu memory use in the --fps-log lines, for profiling
+mem-stats = ["wgpu/counters"]
+
 [dependencies]
 anyhow = "1.0.104"
 bytemuck = { version = "1.25.2", features = ["derive"] }
