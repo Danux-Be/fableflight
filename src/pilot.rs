@@ -104,8 +104,6 @@ pub static BADGES: &[Badge] = &[
     b("sound_barrier", "Sound barrier", "Fly faster than Mach 1.", 300),
     b("mach3", "Blackbird", "Fly at Mach 3.", 600),
     b("edge", "Edge of space", "Climb above 70,000 feet.", 500),
-    b("rotor", "Rotorhead", "Fly the helicopter.", 150),
-    b("soaring", "Silent wings", "Land the glider after fifteen minutes aloft.", 250),
     b("all_types", "Type collector", "Fly every built-in aircraft.", 1000),
     b("graduate", "Graduate", "Finish every tutorial.", 500),
     b("precision", "Precision", "Score 90 or more in a landing challenge.", 400),
@@ -117,7 +115,6 @@ pub static BADGES: &[Badge] = &[
     b("flawless", "Flawless", "A five star career job.", 400),
     b("owner", "Aircraft owner", "Buy an aircraft.", 400),
     b("chief_pilot", "Chief pilot", "Hire a pilot for your company.", 400),
-    b("millionaire", "Millionaire", "Have $1,000,000 in the bank.", 1500),
 ];
 
 pub fn badge(id: &str) -> Option<&'static Badge> {
@@ -193,7 +190,6 @@ impl Game {
         if crate::missions::ALL.iter().filter(|m| m.cat == crate::missions::Cat::Tutorial).all(|m| p.best.contains_key(m.id)) { got.push("graduate"); }
         if crate::challenge::ALL.iter().all(|c| self.challenge_records.top(c.id).is_some()) { got.push("challenger"); }
         if crate::challenge::ALL.iter().any(|c| self.challenge_records.top(c.id).is_some_and(|s| s >= 90)) { got.push("precision"); }
-        if self.career.money >= 1_000_000.0 { got.push("millionaire"); }
         for id in got {
             self.unlock(id);
         }
@@ -204,9 +200,6 @@ impl Game {
         let name = self.spec.name;
         if self.profile.types.insert(name.to_string()) {
             self.award(&format!("{} {}", tr_en("First flight in the"), name), 100);
-        }
-        if self.spec.rotor.is_some() {
-            self.unlock("rotor");
         }
         self.unlock("first_flight");
         self.award(tr_en("Take-off"), 25);
@@ -243,9 +236,6 @@ impl Game {
         }
         if f.distance / 1852.0 >= 1000.0 && f.outcome != Outcome::Crashed {
             self.unlock("long_haul");
-        }
-        if f.outcome == Outcome::Landed && f.air_time >= 900.0 && self.spec.keys.contains(&"ask21") {
-            self.unlock("soaring");
         }
         self.sweep_badges();
     }

@@ -164,18 +164,6 @@ pub static ALL: &[Mission] = &[
         st("Land at San Carlos: a stable approach and a touchdown on the centreline.", Goal::LandAt("KSQL")),
         st("Stop on the runway.", Goal::Stopped),
     ] },
-    Mission { id: "e_heli", cat: Cat::Exam, title: "Helicopter checkride", brief: "Lift off, climb out, come back and set the R44 down gently on the runway.", aircraft: "r44", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 10.0, weather: Some("clear"), cold: false, steps: &[
-        st("Raise the collective (hold Left Shift) and lift into a hover.", Goal::Airborne),
-        st("Ease the cyclic forward and climb to 500 feet above the ground.", Goal::AglAbove(500.0)),
-        st("Come back over the runway and set it down gently.", Goal::LandAt("KHAF")),
-        st("Collective down, settle.", Goal::Stopped),
-    ] },
-    Mission { id: "e_glider", cat: Cat::Exam, title: "Glider checkride", brief: "No engine: from 2,000 feet over the coast, plan the circuit and land on runway 30.", aircraft: "ask21", airport: "KHAF", runway: Some("30"), start: Start::Air { nm: 2.5, bearing: 40.0, ft: 2000.0, kt: 55.0 }, hour: 13.0, weather: Some("fair"), cold: false, steps: &[
-        st("You are released. Keep about 55 knots and plan your way down to the runway.", Goal::Read(8.0)),
-        st("Join the circuit for runway 30 below 1,000 feet.", Goal::AglBelow(1000.0)),
-        st("Airbrakes to hold the glide path, then land on runway 30.", Goal::Landed),
-        st("Stop.", Goal::Stopped),
-    ] },
     Mission { id: "m_golden_gate", cat: Cat::Mission, title: "Golden Gate sightseeing", brief: "Take a passenger up the coast to the Golden Gate Bridge and back to Half Moon Bay.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 17.5, weather: Some("fair"), cold: false, steps: &[
         st("Take off and head north up the coast.", Goal::Airborne),
         st("Fly over the Golden Gate Bridge, below 2,000 feet.", Goal::Reach(37.8199, -122.4783, 0.8)),
@@ -592,7 +580,6 @@ mod tests {
 
     #[test]
     fn every_mission_starts_somewhere_real_in_a_real_aircraft() {
-        aircraft::register_variants();
         let db = Db::get();
         for m in ALL {
             assert!(db.find(m.airport).is_some(), "{}: {}", m.id, m.airport);

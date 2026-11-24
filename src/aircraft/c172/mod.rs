@@ -3,7 +3,6 @@
 //! superellipse fuselage, NACA-section wings and tail, a twisted propeller.
 //! The cockpit lives in `cabin.rs`.
 pub mod cabin;
-pub mod floats;
 
 use crate::aircraft::{Engine, Governor, Handling, Hole, Hull, Leg, Livery, Part, Piston, Sound, Spec, Tail};
 use crate::airframe::*;

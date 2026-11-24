@@ -162,11 +162,13 @@ impl Game {
                 pa.text(pos2(tx, r.top() + 30.0), Align2::LEFT_TOP, tr_en(pilot::rank(lvl.n)).to_uppercase(), menu::semibold(13.0), ACCENT);
                 pa.text(pos2(tx, r.top() + 48.0), Align2::LEFT_TOP, &name, menu::bold(36.0), Color32::WHITE);
                 pa.text(pos2(tx, r.top() + 94.0), Align2::LEFT_TOP, format!("{} {}", tr_en("Level"), lvl.n), menu::semibold(18.0), TEXT);
-                let bar = Rect::from_min_size(pos2(tx, r.top() + 128.0), vec2(r.right() - tx - 30.0, 8.0));
+                // the bar, and how far along it right beside it.
+                let next = if lvl.span == 0 { tr_en("Highest level").to_string() } else { format!("{} / {} XP", lvl.into, lvl.span) };
+                let ng = pa.layout_no_wrap(next, menu::label(), TEXT);
+                let by = r.top() + 136.0;
+                let bar = Rect::from_min_max(pos2(tx, by - 4.0), pos2(r.right() - 30.0 - ng.size().x - 14.0, by + 4.0));
                 meter(pa, bar, lvl.frac(), ACCENT);
-                let next = if lvl.span == 0 { tr_en("Highest level").to_string() } else { format!("{} / {} XP  ·  {} {}", lvl.into, lvl.span, lvl.span - lvl.into, tr_en("to the next level")) };
-                pa.text(pos2(tx, r.top() + 146.0), Align2::LEFT_TOP, next, menu::caption(), DIM);
-                pa.text(pos2(r.right() - 30.0, r.top() + 104.0), Align2::RIGHT_CENTER, format!("{} XP", p.xp), menu::semibold(15.0), DIM);
+                pa.galley(pos2(r.right() - 30.0 - ng.size().x, by - ng.size().y * 0.5), ng, TEXT);
                 // the figures.
                 widgets::figures(ui, &[
                     (profile::hours(tot.air_s), tr_en("hours")),

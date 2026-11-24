@@ -66,7 +66,6 @@ fn apt_pos(code: &str) -> Option<(f64, f64)> {
 pub fn job_title(j: &Job) -> String {
     match j.kind {
         k if k.round_trip() => format!("{}  ·  {}", tr_en(k.name()), j.via_name),
-        Kind::Rescue => format!("{}  ·  {} → {}", tr_en(j.kind.name()), j.from, j.to),
         k => format!("{} {} {}", tr_en(k.name()), tr_en("to"), apt_name(&j.to)),
     }
 }
@@ -193,7 +192,7 @@ impl Game {
                 let p = ui.painter();
                 pilot::level_ring(p, pos2(r.left() + 18.0, r.center().y), 15.0, lvl.frac(), lvl.n, 1.0);
                 p.text(pos2(r.left() + 42.0, r.center().y - 8.0), Align2::LEFT_CENTER, tr_en(pilot::rank(lvl.n)), menu::semibold(13.5), Color32::WHITE);
-                p.text(pos2(r.left() + 42.0, r.center().y + 9.0), Align2::LEFT_CENTER, format!("{} XP", lvl.into), menu::caption(), DIM);
+                p.text(pos2(r.left() + 42.0, r.center().y + 9.0), Align2::LEFT_CENTER, if lvl.span == 0 { format!("{} XP", lvl.into) } else { format!("{} / {} XP", lvl.into, lvl.span) }, menu::caption(), DIM);
                 let (m, _) = ui.allocate_exact_size(vec2(130.0, 40.0), Sense::hover());
                 let p = ui.painter();
                 p.rect_filled(m, menu::R_WIDGET, Color32::from_white_alpha(8));
@@ -729,14 +728,17 @@ impl Game {
         }).collect();
         let done = states.iter().filter(|s| s.1).count();
         let ready = !has && done == states.len();
+        // a licence still waiting on another shows only what it waits on.
+        let waits: Vec<&str> = states.iter().filter_map(|s| match s.0 { Req::Holds(h) if !s.1 => Some(tr_en(h.name())), _ => None }).collect();
+        let locked = !has && !waits.is_empty();
         let (word, col) = if has {
             (tr_en("EARNED"), ACCENT)
         } else if ready {
             (tr_en("READY"), OK)
-        } else if states.iter().any(|s| matches!(s.0, Req::Holds(_)) && !s.1) {
+        } else if locked {
             (tr_en("LOCKED"), FAINT)
         } else {
-            (tr_en("IN PROGRESS"), menu::LINK)
+            ("", menu::LINK)
         };
         card(ui, 0.0, |ui| {
             let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 50.0), Sense::hover());
@@ -748,9 +750,17 @@ impl Game {
             p.text(pos2(r.left() + 60.0, r.top() + 14.0), Align2::LEFT_CENTER, tr_en(l.name()), menu::semibold(18.0), Color32::WHITE);
             let og = menu::one_line(p, tr_en(l.opens()), menu::caption(), DIM, r.width() - 160.0);
             p.galley(pos2(r.left() + 60.0, r.top() + 28.0), og, DIM);
-            let g = p.layout_no_wrap(word.to_string(), menu::semibold(11.5), col);
-            chip(p, pos2(r.right() - g.size().x - 14.0, r.top() + 14.0), word, col);
-            if !has {
+            if !word.is_empty() {
+                let g = p.layout_no_wrap(word.to_string(), menu::semibold(11.5), col);
+                chip(p, pos2(r.right() - g.size().x - 14.0, r.top() + 14.0), word, col);
+            } else {
+                let g = p.layout_no_wrap(format!("{done} / {}", states.len()), menu::label(), DIM);
+                p.galley(pos2(r.right() - g.size().x - 14.0, r.top() + 14.0 - g.size().y * 0.5), g, DIM);
+            }
+            if locked {
+                ui.add_space(4.0);
+                ui.label(RichText::new(format!("{} {}", tr_en("Needs"), waits.join(&format!(" {} ", tr_en("and"))))).font(menu::label()).color(DIM));
+            } else if !has {
                 ui.add_space(6.0);
                 meter_row(ui, done as f32 / states.len().max(1) as f32, col, 4.0);
                 ui.add_space(8.0);
@@ -782,10 +792,13 @@ impl Game {
                         }
                     });
                 }
-                ui.add_space(8.0);
-                let label = if l.fee() > 0.0 { format!("{} ({})", tr_en("Pay and get licence"), money(l.fee())) } else { tr_en("Get licence").to_string() };
-                if widgets::action(ui, &label, true, ready, ui.available_width(), 40.0).clicked() {
-                    act = Some(Act::Licence(l));
+                // the button only once it can be had.
+                if ready {
+                    ui.add_space(8.0);
+                    let label = if l.fee() > 0.0 { format!("{} ({})", tr_en("Pay and get licence"), money(l.fee())) } else { tr_en("Get licence").to_string() };
+                    if widgets::action(ui, &label, true, true, ui.available_width(), 40.0).clicked() {
+                        act = Some(Act::Licence(l));
+                    }
                 }
             }
         });
@@ -1115,7 +1128,6 @@ impl Game {
         let top = if self.hud_on() { flightui::right_top(ctx) } else { 24.0 };
         let objs = career::objectives(f);
         let job = f.job.clone();
-        let hover = f.hover_t;
         egui::Area::new(egui::Id::unique("job_card")).anchor(Align2::RIGHT_TOP, [-14.0, top]).show(ctx, |ui| {
             flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(14, 12)), |ui| {
                 ui.set_width(300.0);
@@ -1135,9 +1147,6 @@ impl Game {
                     ui.add_space(4.0);
                 }
                 flightui::meter(ui, done_n as f32 / objs.len().max(1) as f32, ACCENT);
-                if job.kind == Kind::Rescue && hover > 0.0 {
-                    flightui::meter(ui, (hover / 10.0) as f32, ACCENT);
-                }
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if let Some(d) = left_nm {

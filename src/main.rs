@@ -2564,9 +2564,9 @@ impl Game {
             l.done.get_or_insert(self.real);
         }
     }
-    /// the loading screen: the aircraft, where the flight goes, one line of
-    /// facts, a tip, and a hairline of progress along the foot. nothing moves
-    /// but the progress and a slow fade.
+    /// the loading screen, all centred: the aircraft, where the flight goes,
+    /// one line of facts, then the progress and a tip at the foot. nothing
+    /// moves but the progress and a slow fade.
     fn loading_overlay(&mut self, ctx: &egui::Context) {
         use egui::{pos2, vec2, Align2, Color32, Rect};
         use menu::{ACCENT, DIM, TEXT};
@@ -2594,29 +2594,30 @@ impl Game {
         egui::Area::new(egui::Id::unique("loading")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
             ui.set_min_size(screen.size());
             let p = ui.painter();
-            p.rect_filled(screen, 0.0, fade(Color32::from_rgb(7, 9, 13)));
-            // the aircraft, large and still on the right, melting into the dark on its left.
-            let w = (screen.width() * 0.62).min(1240.0 * k);
+            let bg = Color32::from_rgb(7, 9, 13);
+            p.rect_filled(screen, 0.0, fade(bg));
+            let cx = screen.center().x;
+            // the aircraft, centred in the upper half on a pool of light.
+            let a0 = a * shown(0.0);
+            let w = (screen.width() * 0.5).min(900.0 * k);
             let h = w * 392.0 / 680.0;
-            let pic = Rect::from_center_size(pos2(screen.right() - w * 0.5 - margin * 0.25, screen.top() + screen.height() * 0.42), vec2(w, h));
-            egui::Image::new(&tex).tint(Color32::WHITE.gamma_multiply(a * shown(0.0) * 0.92)).paint_at(ui, pic);
-            mainmenu::hgradient(p, Rect::from_min_max(pos2(pic.left() - 2.0, screen.top()), pos2(pic.left() + w * 0.28, screen.bottom())), fade(Color32::from_rgb(7, 9, 13)), Color32::TRANSPARENT);
-            mainmenu::gradient(p, Rect::from_min_max(pos2(screen.left(), screen.top() + screen.height() * 0.55), screen.max), Color32::TRANSPARENT, fade(Color32::from_rgb(7, 9, 13)));
+            let pic = Rect::from_center_size(pos2(cx, screen.top() + screen.height() * 0.38), vec2(w, h));
+            menu::glow(p, pic.center() + vec2(0.0, h * 0.18), vec2(w * 0.55, h * 0.4), Color32::from_white_alpha((12.0 * a0) as u8));
+            egui::Image::new(&tex).tint(Color32::WHITE.gamma_multiply(a0)).paint_at(ui, pic);
 
-            // where the flight goes: big, plain, bottom left.
+            // under it, centred: the type, where the flight goes, and one line of facts.
             let a1 = a * shown(0.15);
-            let col_w = screen.width() * 0.55;
-            let base = screen.bottom() - margin - 70.0 * k;
             let title = match (&dep, &arr) {
                 (Some(d), Some(r)) if d != r => format!("{d}  →  {r}"),
                 (Some(d), _) => d.clone(),
                 _ => start.as_ref().map(|s| s.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| menu::latlon(lat, lon)),
             };
-            let tg = p.layout(title, menu::bold(68.0 * k), Color32::WHITE.gamma_multiply(a1), col_w);
-            let th = tg.size().y;
-            p.galley(pos2(screen.left() + margin, base - th), tg, Color32::WHITE);
-            p.text(pos2(screen.left() + margin + 2.0, base - th - 10.0 * k), Align2::LEFT_BOTTOM, spec.name, menu::medium(17.0 * k), ACCENT.gamma_multiply(a1));
-            // one line of facts under it.
+            let mut y = pic.bottom() + 18.0 * k;
+            mainmenu::spaced(p, pos2(cx, y), Align2::CENTER_TOP, &spec.name.to_uppercase(), menu::semibold(15.0 * k), ACCENT.gamma_multiply(a1), 2.0);
+            y += 30.0 * k;
+            let tg = p.layout(title, menu::bold(56.0 * k), Color32::WHITE.gamma_multiply(a1), screen.width() * 0.8);
+            p.galley(pos2(cx - tg.size().x * 0.5, y), tg.clone(), Color32::WHITE);
+            y += tg.size().y + 6.0 * k;
             let mut facts: Vec<String> = Vec::new();
             if let Some(r) = start.as_ref().and_then(|s| s.runway.clone()) {
                 facts.push(t!("load.runway", rwy = r));
@@ -2624,42 +2625,43 @@ impl Game {
             if !self.plan.is_empty() {
                 let d = self.plan.total(start.as_ref().map(|s| (s.lat, s.lon)));
                 facts.push(format!("{:.0} nm", d / 1852.0));
-                let fl = self.plan.cruise_ft;
-                facts.push(if fl >= 18_000.0 { format!("FL{:03.0}", fl / 100.0) } else { format!("{fl:.0} ft") });
             }
             facts.push(t!("load.local", time = menu::hhmm(local)));
-            facts.push(if self.wx.live { t!("game.real_weather").to_string() } else { self.wx.summary().to_lowercase() });
-            p.text(pos2(screen.left() + margin + 2.0, base + 12.0 * k), Align2::LEFT_TOP, facts.join("   ·   "), menu::medium(16.0 * k), TEXT.gamma_multiply(a1));
+            p.text(pos2(cx, y), Align2::CENTER_TOP, facts.join("   ·   "), menu::medium(17.0 * k), TEXT.gamma_multiply(a1));
 
+            // the foot, centred: the aircraft's shaders while they compile, else the progress, then a tip.
+            let bw = (screen.width() * 0.3).clamp(320.0, 520.0);
+            let foot = screen.bottom() - margin;
+            let a2 = a * shown(0.3);
+            if let Some(prep) = prep {
+                draw_prep(p, pos2(cx, foot - 124.0), bw, prep, self.real, a2, false);
+            } else {
+                let what = if l.done.is_some() {
+                    t!("game.ready").to_string()
+                } else if l.left > 0 {
+                    t!("game.loading_the_scenery_tiles_to_go", l.left)
+                } else {
+                    t!("game.loading_the_scenery_2").to_string()
+                };
+                let bar = Rect::from_center_size(pos2(cx, foot - 70.0), vec2(bw, 4.0));
+                p.text(pos2(bar.left(), bar.top() - 10.0), Align2::LEFT_BOTTOM, what, menu::label(), TEXT.gamma_multiply(a2));
+                p.text(pos2(bar.right(), bar.top() - 10.0), Align2::RIGHT_BOTTOM, format!("{:.0}%", l.frac * 100.0), menu::label(), TEXT.gamma_multiply(a2));
+                p.rect_filled(bar, 2.0, Color32::from_white_alpha((20.0 * a2) as u8));
+                let mut done = bar;
+                done.set_width(bar.width() * l.frac as f32);
+                p.rect_filled(done, 2.0, ACCENT.gamma_multiply(a2));
+            }
             // a tip, quiet, crossfading every eight seconds.
             let per = 8.0;
             let which = l.tip + (t / per) as usize;
             let ph = (t % per) / per;
             let tip_a = a * shown(0.5) * (ph * per / 0.6).min(1.0) * ((1.0 - ph) * per / 0.6).min(1.0);
-            let tip = p.layout(tr_en(LOADING_TIPS[which % LOADING_TIPS.len()]).to_string(), menu::body(), DIM.gamma_multiply(tip_a), col_w);
-            p.galley(pos2(screen.left() + margin + 2.0, screen.bottom() - margin * 0.5 - 4.0 - tip.size().y), tip, DIM);
-
-            // the aircraft's shaders, while they compile.
-            if let Some(prep) = prep {
-                draw_prep(p, pos2(screen.right() - margin - 220.0, screen.bottom() - margin - 70.0 * k), 440.0, prep, self.real, a, false);
-            }
-            // status at the right, the progress as a hairline along the very foot.
-            let what = if l.done.is_some() {
-                t!("game.ready").to_string()
-            } else if l.left > 0 {
-                t!("game.loading_the_scenery_tiles_to_go", l.left)
-            } else {
-                t!("game.loading_the_scenery_2").to_string()
-            };
-            let ry = screen.bottom() - margin * 0.5 - 4.0;
-            p.text(pos2(screen.right() - margin, ry), Align2::RIGHT_BOTTOM, format!("{what}   {:.0}%", l.frac * 100.0), menu::data(), fade(TEXT));
+            let mut job = egui::text::LayoutJob::simple(tr_en(LOADING_TIPS[which % LOADING_TIPS.len()]).to_string(), menu::label(), DIM.gamma_multiply(tip_a), (screen.width() * 0.5).max(bw));
+            job.halign = egui::Align::Center;
+            let tip = p.layout_job(job);
+            p.galley(pos2(cx, foot - 40.0), tip, DIM);
             let skip = if padui::active() { t!("game.a_skip") } else { t!("game.enter_space_or_click_skip") };
-            p.text(pos2(screen.right() - margin, ry - 22.0), Align2::RIGHT_BOTTOM, skip, menu::caption(), fade(Color32::from_gray(96)));
-            let bar = Rect::from_min_max(pos2(screen.left(), screen.bottom() - 3.0), screen.max);
-            p.rect_filled(bar, 0.0, fade(Color32::from_white_alpha(16)));
-            let mut done = bar;
-            done.set_width(bar.width() * l.frac as f32);
-            p.rect_filled(done, 0.0, fade(ACCENT));
+            p.text(pos2(cx, foot + 18.0), Align2::CENTER_CENTER, skip, menu::caption(), fade(Color32::from_gray(96)));
         });
         ctx.request_repaint();
         // A click skips it too.
@@ -9905,7 +9907,6 @@ fn our_roll_rate(spec: &'static aircraft::Spec) -> Option<f64> {
 fn fly_check(key: Option<&String>) -> i32 {
     hangar::load_installed();
     custom::load_all();
-    aircraft::register_variants();
     let Some(spec) = key.and_then(|k| aircraft::by_key(k)) else {
         eprintln!("--fly-check KEY: one of {}", aircraft::list().iter().map(|s| s.keys[0]).collect::<Vec<_>>().join(", "));
         return 1;
@@ -10058,7 +10059,6 @@ fn main() -> anyhow::Result<()> {
     // Downloaded JSBSim aircraft join the list before `--aircraft` is read.
     hangar::load_installed();
     custom::load_all();
-    aircraft::register_variants();
     let args = parse_args();
     if args.find_storms {
         let cache = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".")).join("fablegame");

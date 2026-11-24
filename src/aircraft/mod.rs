@@ -10,10 +10,8 @@
 // Aircraft geometry tables contain physical dimensions in metres (e.g. 1.57 m,
 // 3.14 m, -6.28 m) that trip clippy::approx_constant.
 #![allow(clippy::approx_constant)]
-pub mod ask21;
 pub mod b747;
 pub mod bonanza;
-pub mod r44;
 pub mod c172;
 pub mod concorde;
 pub mod dr400;
@@ -118,16 +116,6 @@ static EXTRA: parking_lot::RwLock<Vec<&'static Spec>> = parking_lot::RwLock::new
 /// Every type: the built-in ones, then the downloaded ones.
 pub fn list() -> Vec<&'static Spec> {
     BUILTIN.iter().copied().chain(EXTRA.read().iter().copied()).collect()
-}
-
-/// the built-in types made from another one: the floatplane, the glider and the helicopter.
-pub fn register_variants() {
-    if by_key("r44").is_some() {
-        return;
-    }
-    register(c172::floats::spec());
-    register(ask21::spec());
-    register(r44::spec());
 }
 
 /// Adds a type (leaked: types live for the whole run), or replaces the one

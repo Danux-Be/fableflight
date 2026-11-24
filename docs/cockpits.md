@@ -23,7 +23,5 @@ The front-panel and overhead legends, bezels and switches include representative
 | F/A-18C | Battery switch (right console electrical panel, forward is on), engine crank switch (left console APU panel, held to crank), emergency and parking brake T-handle (lower left panel, inboard of the gear handle) | APU, generators, fuel and avionics switches (decorative) |
 | F-4E, SR-71A, F-22A | Parking brake T-handle beside the gear handle | Battery and engine start switches (use `Insert`, `I` and `O`, or `F4` for an automatic start) |
 | Concorde | Parking brake lever on the pedestal's aft step between the seats | Engine start, fuel and electrical systems, which are the flight engineer's panel (use `F4`) |
-| Schleicher ASK 21 (glider) | Airbrake lever (blue, left wall), trim lever (green) | Tow release (yellow, decorative: there is no aerotow) |
-| Robinson R44 | Collective (left of the pilot's seat), key (on, held to start), battery switch | Clutch, mixture, carburettor heat, the avionics |
 
 Their positions follow the published cockpit layouts as closely as the existing panels allow; the F/A-18 console switches and every new handle still want checking from the seat in the game, and `cargo test` checks that each can be reached and seen from the pilot's eye.
