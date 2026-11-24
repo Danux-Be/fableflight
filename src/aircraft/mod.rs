@@ -10,6 +10,7 @@
 // Aircraft geometry tables contain physical dimensions in metres (e.g. 1.57 m,
 // 3.14 m, -6.28 m) that trip clippy::approx_constant.
 #![allow(clippy::approx_constant)]
+pub mod ask21;
 pub mod b747;
 pub mod c172;
 pub mod concorde;
@@ -85,7 +86,8 @@ pub fn cockpit_controls(spec: &Spec, pieces: &[crate::airframe::Piece]) -> Vec<(
             }));
         (*h, index)
     }).collect();
-    if BUILTIN.iter().any(|s| std::ptr::eq(*s, spec)) {
+    // (any model built from our own pieces: a downloaded model has none with a hotspot)
+    {
         controls.extend(pieces.iter().enumerate().filter_map(|(i, p)| {
             let mut h = p.hotspot?;
             h.at = (p.pivot + Vec3::from(h.at)).to_array();

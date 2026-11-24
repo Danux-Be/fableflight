@@ -8895,12 +8895,14 @@ impl Game {
                 if p.g_load.abs() > 5.0 {
                     warn.push(("OVER G", if p.dmg.fatigue > 1.2 { red } else { amber }));
                 }
-                if p.fuel <= 0.0 {
+                // (a glider has no engine and no fuel to warn of)
+                let powered = p.spec.fuel_kg > 0.0;
+                if powered && p.fuel <= 0.0 {
                     warn.push(("NO FUEL", red));
-                } else if p.fuel_frac() < 0.1 {
+                } else if powered && p.fuel_frac() < 0.1 {
                     warn.push(("LOW FUEL", amber));
                 }
-                if !p.running && !p.on_ground {
+                if powered && !p.running && !p.on_ground {
                     warn.push(("ENGINE OFF", red));
                 }
                 let el = &p.sys.elec;
@@ -9600,6 +9602,7 @@ fn fly_check(key: Option<&String>) -> i32 {
     hangar::load_installed();
     custom::load_all();
     aircraft::register(aircraft::c172::floats::spec());
+    aircraft::register(aircraft::ask21::spec());
     let Some(spec) = key.and_then(|k| aircraft::by_key(k)) else {
         eprintln!("--fly-check KEY: one of {}", aircraft::list().iter().map(|s| s.keys[0]).collect::<Vec<_>>().join(", "));
         return 1;
@@ -9753,6 +9756,7 @@ fn main() -> anyhow::Result<()> {
     hangar::load_installed();
     custom::load_all();
     aircraft::register(aircraft::c172::floats::spec());
+    aircraft::register(aircraft::ask21::spec());
     let args = parse_args();
     if args.find_storms {
         let cache = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".")).join("fablegame");
