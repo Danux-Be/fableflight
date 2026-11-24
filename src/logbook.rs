@@ -149,9 +149,9 @@ impl Game {
         let p = &self.profile;
         let lvl = pilot::level(p.xp);
         let lw = (w * 0.62).floor();
-        let rw = w - lw - 16.0;
+        let rw = w - lw - 40.0;
         ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing = vec2(16.0, 14.0);
+            ui.spacing_mut().item_spacing = vec2(40.0, 14.0);
             ui.allocate_ui_with_layout(vec2(lw, h), Layout::top_down(egui::Align::Min), |ui| {
                 // the pilot, the level and the way to the next.
                 let (r, _) = ui.allocate_exact_size(vec2(lw, 190.0), Sense::hover());

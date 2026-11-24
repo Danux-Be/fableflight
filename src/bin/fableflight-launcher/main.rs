@@ -51,7 +51,6 @@ fn main() -> eframe::Result {
     if let Some(path) = std::env::var_os("FABLE_LAUNCHER_SHOT") {
         let page = match std::env::var("FABLE_LAUNCHER_PAGE").as_deref() {
             Ok("graphics") => Page::Graphics,
-            Ok("test") => Page::Test,
             Ok("updates") => Page::Updates,
             Ok("settings") => Page::Settings,
             _ => Page::Home,
@@ -89,7 +88,6 @@ fn main() -> eframe::Result {
 enum Page {
     Home,
     Graphics,
-    Test,
     Updates,
     Settings,
 }
@@ -613,13 +611,13 @@ impl App {
         egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(egui::Margin { left: 32, right: 24, top: 24, bottom: 8 })).show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_max_width((ui.available_width() - 12.0).min(PAGE_W));
-                match self.page {
+                // the page on one glass sheet, its sections split by hairlines.
+                style::sheet(ui, |ui| match self.page {
                     Page::Home => self.home(ui),
                     Page::Graphics => self.graphics_page(ui),
-                    Page::Test => self.test_page(ui),
                     Page::Updates => self.updates_page(ui),
                     Page::Settings => self.settings_page(ui),
-                }
+                });
                 ui.add_space(16.0);
             });
         });
@@ -683,7 +681,6 @@ impl App {
         for (page, name, icon) in [
             (Page::Home, "Home", style::Icon::Home),
             (Page::Graphics, "Graphics", style::Icon::Graphics),
-            (Page::Test, "Graphics test", style::Icon::Test),
             (Page::Updates, "Updates", style::Icon::Updates),
             (Page::Settings, "Settings", style::Icon::Settings),
         ] {
@@ -694,7 +691,7 @@ impl App {
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
             let w = ui.available_width();
-            if style::button(ui, "Discord", Some(&self.tex.discord), Kind::Discord, vec2(w, 40.0)).on_hover_text(update::DISCORD_URL).clicked() {
+            if style::button(ui, "Discord", Some(&self.tex.discord), Kind::Plain, vec2(w, 40.0)).on_hover_text(update::DISCORD_URL).clicked() {
                 ctx.open_url(egui::OpenUrl::new_tab(update::DISCORD_URL));
             }
             if style::button(ui, "GitHub", Some(&self.tex.github), Kind::Plain, vec2(w, 40.0)).on_hover_text(update::REPO_URL).clicked() {
@@ -898,7 +895,6 @@ impl App {
         }
         // this pc, its graphics and the last test, as one list.
         let cur = self.gfx.matches();
-        let last = self.cfg.bench.last().cloned();
         style::card(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             let (card_name, card_detail) = match &self.gpu {
@@ -913,16 +909,6 @@ impl App {
             let mut b = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::right_to_left(egui::Align::Center)));
             if style::button(&mut b, "Change", None, Kind::Plain, vec2(0.0, 32.0)).clicked() {
                 self.page = Page::Graphics;
-            }
-            style::rule(ui);
-            let (value, detail) = match &last {
-                Some(r) => (format!("{:.0} fps  ·  {}", r.fps, Verdict::of(r).label()), format!("{} · 1% low {:.0} fps", r.preset, r.low1)),
-                None => ("Not run yet".to_string(), String::new()),
-            };
-            let r = style::list_row(ui, "Graphics test", &value, &detail, 120.0);
-            let mut b = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::right_to_left(egui::Align::Center)));
-            if style::button(&mut b, if last.is_some() { "Test again" } else { "Run test" }, None, Kind::Plain, vec2(0.0, 32.0)).clicked() {
-                self.page = Page::Test;
             }
         });
         ui.add_space(16.0);
@@ -1057,113 +1043,6 @@ impl App {
         }
     }
 
-    fn test_page(&mut self, ui: &mut egui::Ui) {
-        let now = ui.input(|i| i.time);
-        ui.add_space(14.0);
-        style::page_title(ui, "Graphics test");
-        let testing = matches!(self.task, Task::Testing { .. });
-        let idle = !self.busy() && self.game.exists();
-        style::card(ui, |ui| {
-            style::heading(ui, "Run a test");
-            ui.add_space(4.0);
-            style::note(ui, format!("Opens the game in a window over San Francisco and measures {BENCH_SECS} s of flight. Your settings stay until you use a result."));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(idle, |ui| {
-                    if style::button(ui, "Find the best preset", None, Kind::Plain, vec2(200.0, 40.0)).on_hover_text("Starts at the suggested preset and steps up or down: up to four runs of about 45 s each").clicked() {
-                        self.start_test(true);
-                    }
-                    let cur = self.gfx.matches().map_or("Custom".to_string(), |p| p.name().to_string());
-                    if style::button(ui, &format!("Test my settings ({cur})"), None, Kind::Plain, vec2(0.0, 40.0)).clicked() {
-                        self.start_test(false);
-                    }
-                });
-                if testing && style::button(ui, "Stop", None, Kind::Danger, vec2(90.0, 40.0)).clicked() {
-                    if let Task::Testing { run, .. } = &self.task {
-                        run.kill();
-                    }
-                    if let Some(p) = &mut self.plan {
-                        p.cancelled = true;
-                    }
-                }
-            });
-            if !self.game.exists() {
-                style::note(ui, "The game isn't installed yet.");
-            }
-        });
-        // this session's runs and the verdict
-        if let Some(plan) = &self.plan {
-            ui.add_space(16.0);
-            let best = plan.best;
-            let auto = plan.auto;
-            let runs: Vec<(Option<Preset>, Option<BenchResult>)> = plan.done.clone();
-            let mut use_preset = None;
-            style::card(ui, |ui| {
-                style::heading(ui, "Results");
-                ui.add_space(4.0);
-                for (p, r) in &runs {
-                    result_row(ui, p.map_or("Your settings", Preset::name), r.as_ref());
-                }
-                if testing {
-                    if let Task::Testing { preset, .. } = &self.task {
-                        ui.horizontal(|ui| {
-                            ui.add(egui::Spinner::new().size(14.0).color(ACCENT));
-                            ui.label(RichText::new(format!("{}: running…", preset.map_or("Your settings", Preset::name))).color(DIM));
-                        });
-                    }
-                }
-                if auto && !testing {
-                    ui.add_space(6.0);
-                    match best {
-                        Some(p) => {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(format!("Best for this PC: {}", p.name())).font(style::semibold(17.0)).color(Color32::WHITE));
-                                if self.gfx.matches() != Some(p) && style::button(ui, &format!("Use {}", p.name()), None, Kind::Primary, vec2(0.0, 30.0)).clicked() {
-                                    use_preset = Some(p);
-                                }
-                            });
-                            // a higher preset that flew, if not quite smoothly
-                            let rank = |q: Preset| Preset::ALL.iter().position(|x| *x == q).unwrap_or(0);
-                            let also = runs.iter().filter_map(|(q, r)| Some(((*q)?, r.as_ref()?))).filter(|(q, r)| rank(*q) > rank(p) && Verdict::of(r) == Verdict::Playable).max_by_key(|(q, _)| rank(*q));
-                            if let Some((q, r)) = also {
-                                ui.horizontal(|ui| {
-                                    style::note(ui, format!("{} also flies ({:.0} fps, dipping to {:.0}): the sharper picture if you don't mind the odd dip.", q.name(), r.fps, r.low1));
-                                    if self.gfx.matches() != Some(q) && ui.link(RichText::new(format!("Use {}", q.name())).size(13.0).color(style::LINK)).clicked() {
-                                        use_preset = Some(q);
-                                    }
-                                });
-                            }
-                        }
-                        None if runs.iter().all(|(_, r)| r.is_none()) => style::note(ui, "No result: the test didn't finish."),
-                        None => {}
-                    }
-                }
-            });
-            if let Some(p) = use_preset {
-                self.gfx.apply(p);
-                self.save_gfx(now, "Saved");
-            }
-        }
-        ui.add_space(16.0);
-        // (what stable and playable mean is on each verdict's hover)
-        let history = self.cfg.bench.clone();
-        if !history.is_empty() {
-            style::card(ui, |ui| {
-                style::heading(ui, "Earlier results");
-                ui.add_space(4.0);
-                for r in history.iter().rev().take(8) {
-                    result_row(ui, &r.preset, Some(r));
-                }
-            });
-        }
-        if let Some((_, true)) = &self.ended {
-            if !self.log.is_empty() {
-                ui.add_space(16.0);
-                self.log_card(ui);
-            }
-        }
-    }
-
     fn updates_page(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         ui.add_space(14.0);
@@ -1286,40 +1165,6 @@ impl App {
             }
         }
     }
-}
-
-fn verdict_color(v: Verdict) -> Color32 {
-    match v {
-        Verdict::Smooth => OK,
-        Verdict::Playable => WARN,
-        Verdict::Struggles => BAD,
-    }
-}
-
-fn result_row(ui: &mut egui::Ui, name: &str, r: Option<&BenchResult>) {
-    ui.horizontal(|ui| {
-        ui.add_sized([110.0, 22.0], egui::Label::new(RichText::new(name).font(style::medium(15.0)).color(Color32::WHITE)));
-        match r {
-            Some(r) => {
-                let v = Verdict::of(r);
-                // a bar of the average frame rate, to 120 fps
-                let (rect, _) = ui.allocate_exact_size(vec2(160.0, 10.0), egui::Sense::hover());
-                style::progress_bar(ui, rect, Some((r.fps / 120.0) as f32), false, verdict_color(v));
-                ui.label(RichText::new(format!("{:>5.0} fps", r.fps)).monospace().color(Color32::WHITE));
-                let hitches = match r.hitches {
-                    0 => "no hitches".to_string(),
-                    1 => "1 hitch".to_string(),
-                    n => format!("{n} hitches"),
-                };
-                ui.label(RichText::new(format!("1% low {:.0} · {hitches}", r.low1)).size(13.0).color(DIM)).on_hover_text(format!("Slowest frame {:.0} ms; a hitch is a frame over 100 ms (usually scenery loading)", r.worst_ms));
-                ui.label(RichText::new(v.label()).font(style::medium(14.0)).color(verdict_color(v))).on_hover_text(v.about());
-                ui.label(RichText::new(format!("{}×{} at {:.0}%", r.width, r.height, r.scale * 100.0)).size(12.0).color(FAINT));
-            }
-            None => {
-                ui.label(RichText::new("no result").color(FAINT));
-            }
-        }
-    });
 }
 
 /// The release notes, GitHub markdown drawn simply: headings, bullets, links

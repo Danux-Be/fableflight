@@ -78,22 +78,6 @@ impl Verdict {
             Verdict::Struggles
         }
     }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Verdict::Smooth => "Stable",
-            Verdict::Playable => "Playable",
-            Verdict::Struggles => "Unstable",
-        }
-    }
-
-    pub fn about(self) -> &'static str {
-        match self {
-            Verdict::Smooth => "Smooth flying: even the slowest frames stay above 50 fps.",
-            Verdict::Playable => "Flyable, with dips under 50 fps in busy scenery. Fine for most flights.",
-            Verdict::Struggles => "Frame rate drops below 30 fps. Pick a lower preset or a lower render resolution.",
-        }
-    }
 }
 
 /// The hours in the air in the game's logbook (`<config>/fablegame/profile.json`).

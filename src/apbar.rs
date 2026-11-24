@@ -143,10 +143,15 @@ fn target(ui: &mut egui::Ui, value: &str, unit: &str, w: f32, live: bool) -> Tur
     if resp.clicked() && over {
         out.push = true;
     }
-    // the value and its unit, centred together.
+    // the value and its unit, centred together; where the window is narrow the unit goes, then the figure shrinks.
     let col = if live { Color32::WHITE } else { TEXT };
-    let vg = p.layout_no_wrap(value.to_string(), menu::semibold(17.0), col);
+    let room = mid.width() - 6.0;
+    let mut vg = p.layout_no_wrap(value.to_string(), menu::semibold(17.0), col);
     let ug = p.layout_no_wrap(unit.to_string(), menu::caption(), DIM);
+    let unit = if vg.size().x + 3.0 + ug.size().x > room { "" } else { unit };
+    if vg.size().x > room {
+        vg = p.layout_no_wrap(value.to_string(), menu::semibold(14.0), col);
+    }
     let total = vg.size().x + if unit.is_empty() { 0.0 } else { 3.0 + ug.size().x };
     let x = mid.center().x - total * 0.5;
     let base = mid.center().y + vg.size().y * 0.5;

@@ -203,14 +203,14 @@ pub fn card(ui: &mut Ui, title: &str, mut body: impl FnMut(&mut Ui)) {
     }
     WHOLE.with(|w| w.set(whole));
     ROWS.with(|r| r.set(0));
+    // a section of the page under a hairline, as the other menus: no box of its own.
+    let top = ui.cursor().top();
+    ui.painter().hline(ui.available_rect_before_wrap().x_range(), top, Stroke::new(1.0, Color32::from_white_alpha(26)));
     egui::Frame::new()
-        .fill(menu::SURFACE)
-        .stroke(Stroke::new(1.0, menu::LINE))
-        .corner_radius(menu::R_PANEL)
-        .inner_margin(egui::Margin { left: 24, right: 24, top: 16, bottom: 12 })
+        .inner_margin(egui::Margin { left: 0, right: 0, top: 16, bottom: 12 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(menu::section_text(title));
+            ui.label(menu::section_text(title).color(DIM));
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.y = 6.0;
             body(ui);
@@ -330,7 +330,7 @@ impl Game {
             menu::screen_heading(&mut s, t!("settings.settings"));
             s.add_space(18.0);
             // one box that searches every section.
-            egui::Frame::new().fill(menu::SURFACE).stroke(Stroke::new(1.0, menu::LINE_HI)).corner_radius(menu::R_WIDGET).inner_margin(egui::Margin::symmetric(12, 8)).show(&mut s, |ui| {
+            egui::Frame::new().fill(menu::SURFACE).stroke(Stroke::new(1.0, menu::LINE_HI)).corner_radius(menu::R_WIDGET).inner_margin(egui::Margin { left: 17, right: 12, top: 12, bottom: 12 }).show(&mut s, |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.settings_find).hint_text(t!("settings.search")).frame(egui::Frame::NONE).desired_width(f32::INFINITY).font(menu::label()));
             });
             s.add_space(14.0);

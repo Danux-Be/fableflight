@@ -425,9 +425,9 @@ impl Game {
     fn career_home(&mut self, ui: &mut egui::Ui, w: f32, h: f32) -> Option<Act> {
         let mut act = None;
         let lw = (w * 0.6).floor();
-        let rw = w - lw - 16.0;
+        let rw = w - lw - 40.0;
         ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing = vec2(16.0, 14.0);
+            ui.spacing_mut().item_spacing = vec2(40.0, 14.0);
             ui.allocate_ui_with_layout(vec2(lw, h), Layout::top_down(egui::Align::Min), |ui| {
                 // the next step, large.
                 let (head, line, next) = self.next_step();

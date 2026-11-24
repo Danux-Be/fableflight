@@ -17,8 +17,6 @@ pub const OK: Color32 = Color32::from_rgb(112, 214, 138);
 pub const WARN: Color32 = Color32::from_rgb(255, 196, 92);
 pub const BAD: Color32 = Color32::from_rgb(255, 122, 92);
 pub const PANEL: Color32 = Color32::from_rgba_premultiplied(9, 12, 17, 214);
-pub const DISCORD: Color32 = Color32::from_rgb(88, 101, 242);
-pub const DISCORD_HI: Color32 = Color32::from_rgb(110, 122, 255);
 pub const R: u8 = 4;
 
 const BOLD: &str = "bold";
@@ -87,13 +85,12 @@ pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     a.lerp_to_gamma(b, t.clamp(0.0, 1.0))
 }
 
-/// A dark glass card.
+/// a section of the page's one glass sheet: a hairline over it, no box of its own.
 pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let top = ui.cursor().top();
+    ui.painter().hline(ui.available_rect_before_wrap().x_range(), top, Stroke::new(1.0, Color32::from_white_alpha(22)));
     egui::Frame::new()
-        .fill(PANEL)
-        .stroke(Stroke::new(1.0, LINE))
-        .corner_radius(R + 2)
-        .inner_margin(egui::Margin::symmetric(24, 16))
+        .inner_margin(egui::Margin { left: 0, right: 0, top: 16, bottom: 16 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui)
@@ -101,9 +98,25 @@ pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
         .inner
 }
 
-/// A card's heading in display capitals.
+/// the page's one glass sheet, every section on it.
+pub fn sheet<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    egui::Frame::new()
+        .fill(PANEL)
+        .stroke(Stroke::new(1.0, LINE))
+        .corner_radius(R + 2)
+        .inner_margin(egui::Margin { left: 24, right: 24, top: 8, bottom: 8 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            add(ui)
+        })
+        .inner
+}
+
+/// a section's heading in display capitals, dim, over its rows.
 pub fn heading(ui: &mut egui::Ui, s: &str) {
-    ui.label(RichText::new(s.to_uppercase()).font(bold(16.0)).color(Color32::WHITE).extra_letter_spacing(1.0));
+    ui.label(RichText::new(s.to_uppercase()).font(bold(15.0)).color(DIM).extra_letter_spacing(1.0));
+    ui.add_space(4.0);
 }
 
 /// a page's title, alone: no line under it saying what the page is for.
@@ -166,8 +179,6 @@ pub enum Kind {
     Primary,
     /// everything else
     Plain,
-    /// Discord's blurple
-    Discord,
     /// stops something: red outline
     Danger,
 }
@@ -184,7 +195,6 @@ pub fn button(ui: &mut egui::Ui, text: &str, icon: Option<&egui::TextureHandle>,
     let (fg, bg, bg_hi) = match kind {
         Kind::Primary => (ON_ACCENT, ACCENT, ACCENT_HI),
         Kind::Plain => (TEXT, RAISED, RAISED_HI),
-        Kind::Discord => (Color32::WHITE, DISCORD, DISCORD_HI),
         Kind::Danger => (BAD, Color32::from_rgba_premultiplied(40, 12, 8, 120), Color32::from_rgba_premultiplied(70, 20, 12, 160)),
     };
     let g = ui.painter().layout_no_wrap(text.to_string(), font, if enabled { fg } else { FAINT });
@@ -441,7 +451,6 @@ pub fn edge_resize(ctx: &egui::Context, maximized: bool) {
 pub enum Icon {
     Home,
     Graphics,
-    Test,
     Updates,
     Settings,
 }
@@ -461,15 +470,6 @@ pub fn icon(p: &egui::Painter, icon: Icon, c: egui::Pos2, s: f32, col: Color32) 
             p.rect_stroke(Rect::from_min_max(at(-9.0, -7.0), at(9.0, 5.0)), 2.0 * k, st, egui::StrokeKind::Middle);
             p.line_segment([at(0.0, 5.0), at(0.0, 8.0)], st);
             p.line_segment([at(-4.0, 8.0), at(4.0, 8.0)], st);
-        }
-        Icon::Test => {
-            let arc: Vec<egui::Pos2> = (0..=16).map(|i| {
-                let a = std::f32::consts::PI * (1.0 + i as f32 / 16.0);
-                at(8.5 * a.cos(), 4.0 + 8.5 * a.sin())
-            }).collect();
-            p.line(arc, st);
-            p.line_segment([at(0.0, 4.0), at(4.5, -2.5)], st);
-            p.circle_filled(at(0.0, 4.0), 1.8 * k, col);
         }
         Icon::Updates => {
             p.line_segment([at(0.0, -8.0), at(0.0, 3.0)], st);

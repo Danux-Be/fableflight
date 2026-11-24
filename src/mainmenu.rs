@@ -101,7 +101,7 @@ impl Game {
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t!("menu.aircraft")));
             let mut pa = p.clone();
             pa.set_opacity(rise(1));
-            aircraft_tile(&pa, air, &r, k, spec.name, &still);
+            aircraft_tile(&pa, air, &r, k, &still);
             if r.clicked() {
                 press = Some(Tile::Aircraft);
             }
@@ -166,12 +166,7 @@ impl Game {
                 }
                 let r = over.interact(right, egui::Id::unique("pick_career"), Sense::click());
                 r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr_en("Career")));
-                let sub = if self.career.started {
-                    format!("{}  ·  {}", crate::career::money_short(self.career.money), tr_en(self.career.title()))
-                } else {
-                    tr_en("Start as a student pilot").to_string()
-                };
-                photo_card(&pf, right, &r, k, &career_pic, tr_en("Career"), &sub);
+                photo_card(&pf, right, &r, k, &career_pic, tr_en("Career"), "");
                 if r.clicked() {
                     press = Some(Tile::Career);
                 }
@@ -389,7 +384,7 @@ fn caption(p: &Painter, r: Rect, k: f32, lit: f32, title: &str, sub: &str) {
 }
 
 /// the aircraft tile: your aircraft, easing forward on hover.
-fn aircraft_tile(p: &Painter, r: Rect, resp: &egui::Response, k: f32, name: &str, still: &egui::TextureHandle) {
+fn aircraft_tile(p: &Painter, r: Rect, resp: &egui::Response, k: f32, still: &egui::TextureHandle) {
     let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
     tile_frame(p, r, lit, true);
     // a pool of light under it.
@@ -400,7 +395,7 @@ fn aircraft_tile(p: &Painter, r: Rect, resp: &egui::Response, k: f32, name: &str
     let w = r.width() * 0.98;
     let pic = Rect::from_center_size(c + vec2(5.0 * lit, -4.0 * lit) * k, vec2(w, w * 392.0 / 680.0));
     clip.image(still.id(), pic, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-    caption(p, r, k, lit, t!("menu.aircraft"), name);
+    caption(p, r, k, lit, t!("menu.aircraft"), "");
 }
 
 /// the settings tile: a cog that turns on hover.
