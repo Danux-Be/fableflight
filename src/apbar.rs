@@ -166,7 +166,12 @@ struct Asked {
     lat: Option<Lat>,
     vert: Option<Vert>,
     turns: Vec<(Dial, Turn)>,
+    /// time acceleration: steps up or down the rates, or back to 1x.
+    warp: Turn,
 }
+
+/// the time acceleration rates on the panel.
+const RATES: [u8; 5] = [1, 2, 4, 8, 16];
 
 impl Game {
     /// a value window turned: fine and coarse steps, or a push to the aircraft's own value.
@@ -303,6 +308,14 @@ impl Game {
                 rest[i] = target(ui, &v, u, col, live || d == Dial::Spd && self.ap.at);
             });
         }
+        // time acceleration, lit while the sim runs faster; only while the autopilot flies.
+        rule(ui);
+        let fast = self.sim_rate() > 1.0;
+        column(ui, &mut |ui| {
+            let lamp = if fast { Lamp::On } else { Lamp::Off };
+            mode_key(ui, tr_en("Rate"), lamp, col).on_hover_text(tr_en("Time runs faster while the autopilot flies."));
+            ask.warp = target(ui, &format!("{}×", self.warp), "", col, self.ap.on);
+        });
         for (d, t) in [(Dial::Hdg, hdg_t), (Dial::Alt, rest[0]), (Dial::Vs, rest[1]), (Dial::Spd, rest[2])] {
             if t.any() {
                 ask.turns.push((d, t));
@@ -313,6 +326,12 @@ impl Game {
 
     /// does what the panel asked for.
     fn ap_apply(&mut self, ask: Asked) {
+        // the rate steps through 1, 2, 4, 8 and 16; a click on it goes back to 1x. it waits for the autopilot.
+        if ask.warp.any() && self.ap.on && !self.plane.on_ground {
+            let k = RATES.iter().position(|r| *r == self.warp).unwrap_or(0) as i32;
+            let n = if ask.warp.push { 0 } else { (k + ask.warp.fine + ask.warp.coarse * 2).clamp(0, RATES.len() as i32 - 1) };
+            self.warp = RATES[n as usize];
+        }
         for (d, t) in ask.turns {
             self.ap_turn(d, t);
         }
@@ -374,8 +393,8 @@ impl Game {
     /// the same panel on the autopilot page, as wide as the card.
     pub(crate) fn ap_page_panel(&mut self, ui: &mut egui::Ui) {
         self.ap_seed();
-        // the master, the courses (one and a half) and four columns share the width.
-        let col = ((ui.available_width() - 56.0 - GAP * 5.0) / 5.5).floor();
+        // the master, the courses (one and a half) and five columns share the width.
+        let col = ((ui.available_width() - 56.0 - GAP * 6.0) / 6.5).floor();
         let ask = ui.horizontal_top(|ui| self.ap_columns(ui, col)).inner;
         self.ap_apply(ask);
     }

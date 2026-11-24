@@ -5,14 +5,21 @@
 use crate::menu::{self, ACCENT, DIM, FAINT, TEXT};
 use egui::{pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 
-/// the dark backdrop of a full screen page.
+/// the dark backdrop of a full screen page: the scenery behind, darker to the foot, no colour of its own.
 pub fn backdrop(ctx: &egui::Context, id: &str) {
     let screen = ctx.content_rect();
     egui::Area::new(egui::Id::unique(("page_bg", id))).order(egui::Order::Background).fixed_pos(screen.min).show(ctx, |ui| {
         let p = ui.painter();
-        p.rect_filled(screen, 0.0, Color32::from_rgba_premultiplied(5, 7, 11, 228));
-        // a faint glow of the accent from the top left, for depth.
-        menu::glow(p, screen.left_top() + vec2(screen.width() * 0.15, -40.0), vec2(screen.width() * 0.6, 340.0), Color32::from_rgba_premultiplied(40, 32, 6, 30));
+        p.rect_filled(screen, 0.0, Color32::from_rgba_premultiplied(5, 7, 11, 222));
+        let mut m = egui::Mesh::default();
+        let (top, foot) = (Color32::TRANSPARENT, Color32::from_black_alpha(90));
+        m.colored_vertex(screen.left_top(), top);
+        m.colored_vertex(screen.right_top(), top);
+        m.colored_vertex(screen.right_bottom(), foot);
+        m.colored_vertex(screen.left_bottom(), foot);
+        m.add_triangle(0, 1, 2);
+        m.add_triangle(0, 2, 3);
+        p.add(m);
     });
 }
 
@@ -48,15 +55,16 @@ pub fn page_head(ui: &mut egui::Ui, title: &str, tabs: &[&str], current: usize, 
     (back, hit)
 }
 
-/// a round-cornered back arrow with the word.
+/// back: a chevron and the word, a box only under the pointer.
 pub fn back_button(ui: &mut egui::Ui) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(96.0, 36.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(88.0, 36.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, crate::tr_en("Back")));
     let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
     let p = ui.painter();
-    p.rect_filled(r, menu::R_WIDGET, menu::mix(menu::RAISED, menu::RAISED_HI, lit));
-    p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, menu::LINE_HI), egui::StrokeKind::Inside);
-    let col = menu::mix(TEXT, Color32::WHITE, lit);
+    if lit > 0.0 {
+        p.rect_filled(r, menu::R_WIDGET, Color32::from_white_alpha((12.0 * lit) as u8));
+    }
+    let col = menu::mix(DIM, Color32::WHITE, lit);
     menu::chevron(p, pos2(r.left() + 18.0, r.center().y), 9.0, 2.0, col);
     p.text(pos2(r.left() + 32.0, r.center().y), Align2::LEFT_CENTER, crate::tr_en("Back"), menu::medium(15.0), col);
     resp
@@ -97,11 +105,15 @@ pub fn tab_strip(ui: &mut egui::Ui, tabs: &[&str], current: usize) -> Option<usi
     hit
 }
 
-/// a card: the panel look, `h` high (0: as tall as it grows), filling the width.
+/// a section of a page, `h` high (0: as tall as it grows), filling the width.
+/// no box round it: a hairline over it and the page's own dark under it, as a
+/// game's menus group by type and rules, not a card for everything.
 pub fn card<R>(ui: &mut egui::Ui, h: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    menu::panel()
-        .inner_margin(egui::Margin::symmetric(24, 16))
-        .shadow(egui::Shadow::NONE)
+    let top = ui.cursor().top();
+    let x = ui.available_rect_before_wrap().x_range();
+    ui.painter().hline(x, top, Stroke::new(1.0, Color32::from_white_alpha(26)));
+    egui::Frame::new()
+        .inner_margin(egui::Margin { left: 0, right: 0, top: 16, bottom: 16 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             if h > 0.0 {
@@ -112,10 +124,10 @@ pub fn card<R>(ui: &mut egui::Ui, h: f32, add: impl FnOnce(&mut egui::Ui) -> R) 
         .inner
 }
 
-/// a section's small caps title inside a card.
+/// a section's title: the small capitals, dim, over its rows.
 pub fn title(ui: &mut egui::Ui, s: &str) {
-    ui.label(menu::section_text(s));
-    ui.add_space(8.0);
+    ui.label(menu::section_text(s).color(DIM));
+    ui.add_space(12.0);
 }
 
 /// a bar filled to `frac` in `col`.
@@ -135,10 +147,10 @@ pub fn meter_row(ui: &mut egui::Ui, frac: f32, col: Color32, h: f32) {
 
 /// a small rounded tag, painted at `at` (left centre): returns its rect.
 pub fn chip(p: &egui::Painter, at: egui::Pos2, text: &str, col: Color32) -> Rect {
+    // nearly square, as every control: an outline in the colour, no pill.
     let g = p.layout_no_wrap(text.to_string(), menu::semibold(11.5), col);
-    let r = Rect::from_min_size(pos2(at.x, at.y - 10.0), vec2(g.size().x + 14.0, 20.0));
-    p.rect_filled(r, 10.0, col.gamma_multiply(0.16));
-    p.rect_stroke(r, 10.0, Stroke::new(1.0, col.gamma_multiply(0.5)), egui::StrokeKind::Inside);
+    let r = Rect::from_min_size(pos2(at.x, at.y - 10.0), vec2(g.size().x + 12.0, 20.0));
+    p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, col.gamma_multiply(0.6)), egui::StrokeKind::Inside);
     p.galley(r.center() - g.size() * 0.5, g, col);
     r
 }
@@ -158,17 +170,17 @@ pub fn figure(p: &egui::Painter, at: egui::Pos2, value: &str, label: &str, size:
     p.text(pos2(at.x + 1.0, at.y + h - 2.0), Align2::LEFT_TOP, label, menu::caption(), DIM);
 }
 
-/// a row of figures in a strip card, the first with an accent edge.
+/// a row of figures across the page between two hairlines, no box.
 pub fn figures(ui: &mut egui::Ui, items: &[(String, &str)]) {
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 86.0), Sense::hover());
     let p = ui.painter();
-    p.rect_filled(r, menu::R_PANEL, menu::PANEL);
-    p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, menu::LINE_HI), egui::StrokeKind::Inside);
-    let step = (r.width() - 36.0) / items.len().max(1) as f32;
+    p.hline(r.x_range(), r.top(), Stroke::new(1.0, Color32::from_white_alpha(26)));
+    p.hline(r.x_range(), r.bottom(), Stroke::new(1.0, Color32::from_white_alpha(14)));
+    let step = r.width() / items.len().max(1) as f32;
     for (k, (v, l)) in items.iter().enumerate() {
-        let left = r.left() + 26.0 + step * k as f32;
+        let left = r.left() + step * k as f32 + if k > 0 { 20.0 } else { 0.0 };
         if k > 0 {
-            p.vline(left - 16.0, (r.top() + 20.0)..=(r.bottom() - 20.0), Stroke::new(1.0, Color32::from_white_alpha(12)));
+            p.vline(left - 20.0, (r.top() + 22.0)..=(r.bottom() - 22.0), Stroke::new(1.0, Color32::from_white_alpha(14)));
         }
         let g = menu::one_line(p, v, menu::bold(28.0), Color32::WHITE, step - 24.0);
         let h = g.size().y;

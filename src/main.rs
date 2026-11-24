@@ -397,6 +397,8 @@ struct Args {
     ship: bool,
     /// game time stands still for this many wall-clock seconds at the start (tiles stream in)
     hold: f64,
+    /// --warp N: time acceleration under the autopilot from the start (tests).
+    warp: Option<u8>,
     size: (u32, u32),
     /// forced window or full screen.
     windowed: Option<bool>,
@@ -556,6 +558,7 @@ fn parse_args_from(v: &[String]) -> Result<Args, String> {
         engines: None,
         ship: false,
         hold: 0.0,
+        warp: None,
         size: (1600, 900),
         windowed: None,
         imagery: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}".into(),
@@ -844,6 +847,7 @@ fn parse_args_from(v: &[String]) -> Result<Args, String> {
                 used = 1;
             }
             "--hold" => a.hold = req_num(flag, i)?,
+            "--warp" => a.warp = Some(req_num(flag, i)?.clamp(1.0, 16.0) as u8),
             "--damage" => a.damage = Some(req(flag, i)?.to_string()),
             "--flight-menu" => a.flight_menu = Some(req_num(flag, i)?),
             "--pause-menu" => {
@@ -1405,6 +1409,8 @@ struct Game {
     /// the autopilot strip on screen (apbar.rs), the altitude last set on its knob and when,
     /// and the ils tuned for the plan's approach.
     ap_bar_on: bool,
+    /// time acceleration picked on the autopilot panel (1, 2, 4, 8, 16); it only runs while the autopilot flies.
+    warp: u8,
     ap_alt_seen: (f64, f64),
     ils_auto: Option<String>,
     /// simbrief username as saved in the settings.
@@ -2000,7 +2006,7 @@ impl Game {
             minimap: minimap::Minimap::new(&prefs),
             cam_yaw: cy.to_radians(), cam_pitch: cp, cam_dist: cd, cam_mode: args.start_view.unwrap_or(prefs.cam_mode), view_before_tail: 0, cam_pos, cam_dir: -plane.forward(), cam_look: plane.pos, orbit: 0.0, cam_rise: 0.0, cam_clear_t: 0.0, cam_ang: None, cam_hold: 0.0,
             utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, shown_at: 0, dyn_k: 1.0, dyn_ms: 0.0, dyn_seen: 0, dyn_skip: 0, dyn_t: 0.0, gfx_eff: gfx, dynq: dynamic::Dynamic::default(), storms_seen: false, casc_keep: [([[0.0; 4]; 4], DVec3::ZERO); 2], casc_ok: 0, casc_res: 0, dyn_cli: args.dynamic.is_some(), prev_plane: Mat4::IDENTITY, plane_box, lamps,
-            frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, planner: Default::default(), ap_bar_on: false, ap_alt_seen: (0.0, 0.0), ils_auto: None, prefs_simbrief: prefs.simbrief.clone(), profile: profile::Profile::load(), toasts: Vec::new(), pilot_tab: 0, activity_tab: 0, arcade: args.arcade || prefs.arcade, goto_open: false, goto_text: String::new(), goto_rx: None,
+            frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, planner: Default::default(), ap_bar_on: false, warp: 1, ap_alt_seen: (0.0, 0.0), ils_auto: None, prefs_simbrief: prefs.simbrief.clone(), profile: profile::Profile::load(), toasts: Vec::new(), pilot_tab: 0, activity_tab: 0, arcade: args.arcade || prefs.arcade, goto_open: false, goto_text: String::new(), goto_rx: None,
             status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, pad_y: false, pad_y_combo: false, pad_held: Vec::new(), pad_note: (String::new(), 0.0), pad_aim: false, pad_live: None, ap: autopilot::Autopilot::default(), ap_off_t: -100.0, ap_script: args.ap_script.clone(), cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
             record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, snow: args.snow.unwrap_or(prefs.snow), info_open: args.weather_panel, radial: Default::default(), info_page: if args.weather_panel { menu::Page::Weather } else { menu::Page::Flight }, pause_open: false, pause_page: menu::Page::Game, flight: None, logbook: flightlog::Logbook::load(), challenge: None, challenge_records: challenge::Records::load(), pending_challenge: args.challenge.as_deref().and_then(challenge::by_id), pending_mission: args.mission.as_deref().and_then(missions::by_id), logbook_saves: !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench"), pause_at: args.pause_menu, radial_at: args.flight_menu, settings_sec: args.settings.unwrap_or(settings_ui::Section::General), settings_find: String::new(), look_sens: prefs.look_sens, invert_look_cockpit: prefs.invert_look_cockpit, invert_look_outside_x: prefs.invert_look_outside_x, invert_look_outside_y: prefs.invert_look_outside_y, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
@@ -2065,6 +2071,9 @@ impl Game {
             throttle_axis: None,
         };
         g.migrate_logbook();
+        if let Some(w) = args.warp {
+            g.warp = w;
+        }
         if let Some(t) = args.menu_tab.as_deref().map(str::to_lowercase) {
             let t = t.as_str();
             g.menu.fly_pick = t == "fly";
@@ -3962,6 +3971,23 @@ impl Game {
             self.ap_disconnect(None);
             return;
         }
+        // faster than real time it flies in the physics steps instead (ap_drive).
+        if self.sim_rate() > 1.0 {
+            return;
+        }
+        self.ap_drive(dt, c);
+    }
+
+    /// how many times real time the sim runs: the panel's rate while the autopilot flies, else 1.
+    pub(crate) fn sim_rate(&self) -> f64 {
+        if self.ap.on && !self.plane.on_ground && !self.crashed { self.warp.max(1) as f64 } else { 1.0 }
+    }
+
+    /// one step of the autopilot's flying: its controls over the pilot's.
+    fn ap_drive(&mut self, dt: f64, c: &mut Controls) {
+        if !self.ap.on {
+            return;
+        }
         let s = autopilot::State::of(&self.plane);
         self.ap_auto_level(&s);
         let r = {
@@ -4170,6 +4196,8 @@ impl Game {
     fn ap_disconnect(&mut self, why: Option<autopilot::Off>) {
         use autopilot::Off;
         self.ap.disengage();
+        // time comes back to real time with the pilot's hands.
+        self.warp = 1;
         self.ap_off_t = self.real;
         log::info!("autopilot off: {why:?}");
         self.status = match why {
@@ -5208,7 +5236,7 @@ impl Game {
         self.menu.hour = c.hour;
         self.set_pause_menu(false);
         self.info_open = false;
-        self.challenge = Some(challenge::Active { idx: i, briefed: false, result: None, kept });
+        self.challenge = Some(challenge::Active { idx: i, briefed: false, result: None, kept, career: false });
         self.start_airport(idx, Some(c.runway.to_string()), true, false);
     }
 
@@ -5228,6 +5256,12 @@ impl Game {
         if r.fail.is_none() {
             let first = self.challenge_records.top(c.id).is_none();
             r.best = self.challenge_records.add(c.id, challenge::Record { score: r.score, date: flightlog::now_unix(), aircraft: self.spec.name.into() });
+            // flown from the career, it counts there too.
+            if a.career {
+                let top = self.career.challenges.entry(c.id.to_string()).or_insert(0);
+                *top = (*top).max(r.score);
+                self.career.save();
+            }
             if self.logbook_saves {
                 self.challenge_records.save();
             }
@@ -6353,7 +6387,9 @@ impl Game {
         }
         let loading = self.loading.as_ref().is_some_and(|l| l.done.is_none());
         let scale = if self.paused || in_menu || self.pause_open || self.real < self.hold || loading { 0.0 } else { 1.0 };
-        let dt = dt_real * scale;
+        // time acceleration under the autopilot: the whole sim moves on faster, the physics in the same steps.
+        let rate = self.sim_rate();
+        let dt = dt_real * scale * rate;
         self.time += dt;
         if !in_menu && dt > 0.0 && self.replay.is_none() {
             self.mission_step(dt);
@@ -6441,11 +6477,26 @@ impl Game {
                 t
             };
             let h = 1.0 / 180.0;
-            const MAX_SUBSTEPS: usize = 45;
-            self.acc = (self.acc + dt).min(h * MAX_SUBSTEPS as f64);
-            while self.acc >= h && steps < MAX_SUBSTEPS {
+            // (more steps a frame when time runs faster, never a longer step)
+            let max_substeps = 45 * rate as usize;
+            self.acc = (self.acc + dt).min(h * max_substeps as f64);
+            // faster than real time the autopilot flies as it does at 1x: once every 60th of a second of
+            // sim time, its controls held between, so it is as steady at 16x as at 1x.
+            const AP_DT: f64 = 1.0 / 60.0;
+            let (mut cs, mut ap_due) = (c, 0.0f64);
+            while self.acc >= h && steps < max_substeps {
                 self.acc -= h;
-                let imp = self.plane.step(h, &c, &self.world);
+                let imp = if rate > 1.0 {
+                    ap_due -= h;
+                    if ap_due <= 0.0 {
+                        cs = c;
+                        self.ap_drive(AP_DT, &mut cs);
+                        ap_due += AP_DT;
+                    }
+                    self.plane.step(h, &cs, &self.world)
+                } else {
+                    self.plane.step(h, &c, &self.world)
+                };
                 if self.flight.is_some() {
                     let s = self.log_sample();
                     let events = self.flight.as_mut().map(|f| f.step(s, h)).unwrap_or_default();
@@ -7737,7 +7788,7 @@ impl Game {
                 menu::Screen::Settings => self.settings_sec as u64,
                 _ => 0,
             };
-            menu::transition(ctx, 1 + ((self.menu.screen as u64) << 8 | tab));
+            menu::transition(ctx, 1 + ((self.menu.screen as u64) << 8 | tab), &[egui::Order::Middle, egui::Order::Foreground]);
             // The main menu, the aircraft and the settings screens each take
             // the whole window; the rest of this draws the globe's.
             match self.menu.screen {
@@ -8981,7 +9032,7 @@ impl Game {
             };
             if self.pause_open {
                 let sec = if self.pause_page == menu::Page::Settings { self.settings_sec as u64 } else { 0 };
-                menu::transition(ctx, 1 + ((self.pause_page as u64) << 8 | sec));
+                menu::transition(ctx, 1 + ((self.pause_page as u64) << 8 | sec), &[egui::Order::Foreground]);
                 self.pause_menu(ctx, &mut act, local);
                 self.credits(ctx, Credits::Full);
                 padui::focus_ring(ctx, menu::ACCENT);

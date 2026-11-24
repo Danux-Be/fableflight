@@ -301,7 +301,7 @@ impl Game {
                 });
                 // more below: the cut edge fades into the panel instead of slicing a row in half.
                 let view = out.inner_rect;
-                if out.content_size.y - out.state.offset().y > view.height() + 1.0 {
+                if out.content_size.y - out.state.clamped_offset().y > view.height() + 1.0 {
                     let band = Rect::from_min_max(pos2(view.left(), view.bottom() - 28.0), view.max);
                     let mut m = egui::Mesh::default();
                     let (clear, solid) = (Color32::TRANSPARENT, menu::PANEL);

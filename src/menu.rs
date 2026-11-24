@@ -1314,21 +1314,38 @@ pub fn key_cap(ui: &mut egui::Ui, keys: &str) -> egui::Response {
 
 /// a short fade in when what is shown changes (a screen, a tab, a page):
 /// the new one comes up out of the dark. `key` 0 changes to without a fade.
-pub fn transition(ctx: &egui::Context, key: u64) {
+/// `orders`: the layers that rise in (the menus' own, never the hud's).
+pub fn transition(ctx: &egui::Context, key: u64, orders: &[egui::Order]) {
     let id = egui::Id::unique("screen_veil");
     let now = ctx.input(|i| i.time);
     let (was, t0) = ctx.data(|d| d.get_temp::<(u64, f64)>(id)).unwrap_or((key, f64::NEG_INFINITY));
     let t0 = if was != key && key != 0 { now } else { t0 };
     ctx.data_mut(|d| d.insert_temp(id, (key, t0)));
-    let k = ((now - t0) / 0.26).clamp(0.0, 1.0) as f32;
-    if k >= 1.0 {
-        return;
+    let k = ((now - t0) / 0.34).clamp(0.0, 1.0) as f32;
+    // the new screen rises the last few pixels into place as it comes up, eased out (quick, then settling).
+    let ease = 1.0 - (1.0 - k).powi(4);
+    let layers: Vec<egui::LayerId> = ctx.memory(|m| m.layer_ids().filter(|l| orders.contains(&l.order)).collect());
+    let moving = egui::Id::unique("screen_rise");
+    if k < 1.0 {
+        let t = egui::emath::TSTransform::from_translation(egui::vec2(0.0, 18.0 * (1.0 - ease)));
+        for l in &layers {
+            ctx.set_transform_layer(*l, t);
+        }
+        ctx.data_mut(|d| d.insert_temp(moving, true));
+        // a light veil over the start, gone in the first third.
+        let a = 0.6 * (1.0 - (k * 3.0).min(1.0)).powi(2);
+        if a > 0.0 {
+            let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("veil")));
+            p.rect_filled(ctx.content_rect(), 0.0, Color32::from_rgba_unmultiplied(BG.r(), BG.g(), BG.b(), (255.0 * a) as u8));
+        }
+        ctx.request_repaint();
+    } else if ctx.data(|d| d.get_temp::<bool>(moving)).unwrap_or(false) {
+        // settled: every layer back where it is drawn.
+        for l in &layers {
+            ctx.set_transform_layer(*l, egui::emath::TSTransform::IDENTITY);
+        }
+        ctx.data_mut(|d| d.insert_temp(moving, false));
     }
-    // eased out: quick at first, settling.
-    let a = 0.85 * (1.0 - k).powi(3);
-    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("veil")));
-    p.rect_filled(ctx.content_rect(), 0.0, Color32::from_rgba_unmultiplied(BG.r(), BG.g(), BG.b(), (255.0 * a) as u8));
-    ctx.request_repaint();
 }
 
 /// the letters on a key cap: the body face, whose q has a clear tail.

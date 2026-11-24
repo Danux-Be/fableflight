@@ -22,12 +22,14 @@ fn card(ui: &mut egui::Ui, w: f32, n: usize, title: &str, about: &str, foot: &st
     let (r, resp) = ui.allocate_exact_size(vec2(w, 118.0), Sense::click());
     let lit = menu::ease(ui.ctx(), resp.id, resp.hovered());
     let p = ui.painter();
-    p.rect_filled(r, menu::R_PANEL, menu::mix(menu::PANEL, menu::RAISED, lit));
-    p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, menu::mix(menu::LINE_HI, col.gamma_multiply(0.6), lit)), egui::StrokeKind::Inside);
-    // the number in a square, coloured by what it is.
-    let nr = Rect::from_min_size(r.min + vec2(16.0, 16.0), vec2(34.0, 34.0));
-    p.rect_filled(nr, menu::R_WIDGET, col.gamma_multiply(0.16));
-    p.text(nr.center(), Align2::CENTER_CENTER, n.to_string(), menu::bold(17.0), col);
+    // a row of the list, a hairline over it; lit under the pointer.
+    p.hline(r.x_range(), r.top(), Stroke::new(1.0, Color32::from_white_alpha(22)));
+    if lit > 0.0 {
+        p.rect_filled(r, menu::R_PANEL, Color32::from_white_alpha((8.0 * lit) as u8));
+    }
+    // the number as the list's index: quiet, in the display face, its kind's colour under the pointer.
+    let nr = Rect::from_min_size(r.min + vec2(8.0, 12.0), vec2(40.0, 34.0));
+    p.text(nr.left_center(), Align2::LEFT_CENTER, format!("{n:02}"), menu::bold(24.0), menu::mix(FAINT, col, lit));
     let tx = r.left() + 64.0;
     let tw = r.width() - 64.0 - 130.0;
     let tg = menu::one_line(p, title, menu::semibold(17.0), Color32::WHITE, tw);
@@ -127,7 +129,7 @@ impl Game {
         let mut back = false;
         let mut pick = None;
         let tab = self.activity_tab.min(3);
-        egui::Area::new(egui::Id::unique("activities")).fixed_pos(pos2(x0, 26.0)).show(ctx, |ui| {
+        egui::Area::new(egui::Id::unique("activities")).fixed_pos(pos2(x0, 26.0)).constrain(false).show(ctx, |ui| {
             ui.set_width(w);
             let names: Vec<&str> = TABS.iter().map(|t| tr_en(t)).collect();
             let done = self.profile.best.len() + self.challenge_records.best.len();

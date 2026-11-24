@@ -115,7 +115,7 @@ impl Game {
         let (x0, w) = widgets::columns(screen, 1340.0);
         let mut back = false;
         let tab = self.pilot_tab.min(2);
-        egui::Area::new(egui::Id::unique("pilot")).fixed_pos(pos2(x0, 26.0)).show(ctx, |ui| {
+        egui::Area::new(egui::Id::unique("pilot")).fixed_pos(pos2(x0, 26.0)).constrain(false).show(ctx, |ui| {
             ui.set_width(w);
             let names: Vec<&str> = TABS.iter().map(|t| tr_en(t)).collect();
             let (b, hit) = widgets::page_head(ui, tr_en("Pilot"), &names, tab, |ui| {
@@ -130,7 +130,10 @@ impl Game {
             }
             let h = (screen.bottom() - ui.cursor().top() - 24.0).max(320.0);
             ui.allocate_ui_with_layout(vec2(w, h), Layout::top_down(egui::Align::Min), |ui| match tab {
-                0 => self.pilot_overview(ui, w, h),
+                // (scrolls in its own room like the other tabs, so the head never moves)
+                0 => {
+                    egui::ScrollArea::vertical().id_salt("pilot_overview").max_height(h).auto_shrink([false, false]).show(ui, |ui| self.pilot_overview(ui, w - 12.0, h - 8.0));
+                }
                 1 => self.pilot_logbook(ui, w, h),
                 _ => self.pilot_badges(ui, w, h),
             });
@@ -155,7 +158,6 @@ impl Game {
                 let pa = ui.painter();
                 pa.rect_filled(r, menu::R_PANEL, menu::PANEL);
                 pa.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, menu::LINE_HI), egui::StrokeKind::Inside);
-                menu::glow(pa, r.left_top() + vec2(110.0, 95.0), vec2(220.0, 160.0), Color32::from_rgba_premultiplied(50, 40, 6, 36));
                 let name = if p.name.trim().is_empty() { tr_en("Pilot").to_string() } else { p.name.clone() };
                 widgets::avatar(pa, pos2(r.left() + 100.0, r.center().y), 62.0, &name, lvl.frac());
                 let tx = r.left() + 200.0;
@@ -301,8 +303,12 @@ impl Game {
                         let got = p.badges.get(b.id);
                         let (r, _) = ui.allocate_exact_size(vec2(cw, 84.0), Sense::hover());
                         let pa = ui.painter();
-                        pa.rect_filled(r, menu::R_PANEL, if got.is_some() { Color32::from_rgb(22, 20, 10) } else { menu::PANEL });
-                        pa.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, if got.is_some() { ACCENT.gamma_multiply(0.4) } else { menu::LINE_HI }), egui::StrokeKind::Inside);
+                        // an earned one framed, the rest flat on the page.
+                        if got.is_some() {
+                            pa.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, ACCENT.gamma_multiply(0.45)), egui::StrokeKind::Inside);
+                        } else {
+                            pa.hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0, Color32::from_white_alpha(14)));
+                        }
                         pilot::medal(pa, pos2(r.left() + 40.0, r.center().y), 21.0, got.is_some(), 1.0);
                         let tw = r.width() - 90.0;
                         let ng = menu::one_line(pa, tr_en(b.name), menu::semibold(16.0), if got.is_some() { Color32::WHITE } else { TEXT }, tw);

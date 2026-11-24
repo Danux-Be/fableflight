@@ -116,6 +116,8 @@ pub struct Active {
     pub result: Option<Result>,
     /// the player's live weather and real clock, put back after the challenge
     pub kept: (bool, bool),
+    /// flown from the career: a pass counts towards its licences.
+    pub career: bool,
 }
 
 pub fn by_id(id: &str) -> Option<usize> {

@@ -21,6 +21,8 @@ enum Act {
     Refresh,
     Filter(Option<Kind>),
     Mission(&'static str),
+    /// a landing challenge a licence asks for, flown for the career.
+    Challenge(&'static str),
     Licence(Lic),
     Buy(&'static str, f64),
     Sell(String, f64),
@@ -175,7 +177,7 @@ impl Game {
         let mut act: Option<Act> = None;
         let tab = self.career.view.tab;
         let lvl = pilot::level(self.profile.xp);
-        egui::Area::new(egui::Id::unique("career")).fixed_pos(pos2(x0, 26.0)).show(ctx, |ui| {
+        egui::Area::new(egui::Id::unique("career")).fixed_pos(pos2(x0, 26.0)).constrain(false).show(ctx, |ui| {
             ui.set_width(w);
             let names: Vec<&str> = TABS.iter().map(|t| tab_name(*t)).collect();
             let cur = TABS.iter().position(|t| *t == tab).unwrap_or(0);
@@ -263,8 +265,20 @@ impl Game {
             }
             Act::Filter(k) => c.view.filter = k,
             Act::Mission(id) => {
+                // flown from here, it counts for the career.
                 if let Some(m) = crate::missions::by_id(id) {
                     self.start_mission(m);
+                    if let Some(r) = self.mission.as_mut() {
+                        r.career = true;
+                    }
+                }
+            }
+            Act::Challenge(id) => {
+                if let Some(i) = crate::challenge::by_id(id) {
+                    self.start_challenge(i);
+                    if let Some(a) = self.challenge.as_mut() {
+                        a.career = true;
+                    }
                 }
             }
             Act::Licence(l) => {
@@ -421,7 +435,6 @@ impl Game {
                 let p = ui.painter();
                 p.rect_filled(r, menu::R_PANEL, Color32::from_rgb(20, 18, 8));
                 p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, ACCENT.gamma_multiply(0.45)), egui::StrokeKind::Inside);
-                menu::glow(p, r.right_top() + vec2(-80.0, 30.0), vec2(260.0, 160.0), Color32::from_rgba_premultiplied(60, 48, 6, 40));
                 let hg = menu::one_line(p, &head, menu::bold(32.0), Color32::WHITE, r.width() - 260.0);
                 let hh = hg.size().y;
                 p.galley(pos2(r.left() + 24.0, r.center().y - hh + 2.0), hg, Color32::WHITE);
@@ -767,14 +780,15 @@ impl Game {
                         ui.label(RichText::new(text).font(menu::label()).color(if *ok { DIM } else { TEXT }));
                         if !ok {
                             let fly = match req {
-                                Req::Lesson(id) | Req::Exam(id) => Some(*id),
+                                Req::Lesson(id) | Req::Exam(id) => Some((*id, Act::Mission(id))),
+                                Req::Challenge(id, _) => Some((*id, Act::Challenge(id))),
                                 _ => None,
                             };
-                            if let Some(id) = fly {
+                            if let Some((id, go)) = fly {
                                 menu::at_right(ui, ("lic_fly", id), |ui| {
                                     let word = if id.starts_with("e_") { tr_en("Checkride") } else { tr_en("Fly") };
                                     if widgets::action(ui, word, false, true, 104.0, 28.0).clicked() {
-                                        act = Some(Act::Mission(id));
+                                        act = Some(go);
                                     }
                                 });
                             }

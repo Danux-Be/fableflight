@@ -2,7 +2,7 @@
 //! fly asks free flight or career. Quit sits small in the bottom left corner. Behind it the renderer draws
 //! space alone (the menu camera looks away from the planet, see `frame`).
 use crate::menu::{self, Screen, ACCENT, DIM, FAINT, TEXT};
-use crate::padui::{self, Hint};
+use crate::padui;
 use crate::{aircraft, hangar_ui, settings_ui, t, tr_en, Game};
 use egui::{pos2, vec2, Align2, Color32, FontId, Painter, Pos2, Rect, Sense, Stroke};
 
@@ -160,7 +160,7 @@ impl Game {
                 self.pad_home_focus(&r);
                 let mut pf = fg.clone();
                 pf.set_opacity(a);
-                photo_card(&pf, left, &r, k, &free_pic, tr_en("Free flight"), tr_en("Any aircraft, anywhere on Earth."));
+                photo_card(&pf, left, &r, k, &free_pic, tr_en("Free flight"), "");
                 if r.clicked() {
                     press = Some(Tile::Free);
                 }
@@ -314,9 +314,11 @@ fn photo_card(p: &Painter, r: Rect, resp: &egui::Response, k: f32, pic: &egui::T
 /// a choice card's word and the line under it, bottom left.
 fn card_words(p: &Painter, r: Rect, k: f32, lit: f32, title: &str, sub: &str) {
     let x = r.left() + 28.0 * k.max(0.7);
-    let y = r.bottom() - 58.0 * k.max(0.7);
+    let y = r.bottom() - if sub.is_empty() { 30.0 } else { 58.0 } * k.max(0.7);
     spaced(p, pos2(x - 2.0, y), Align2::LEFT_BOTTOM, &title.to_uppercase(), menu::bold(44.0 * k.max(0.7)), menu::mix(Color32::WHITE, ACCENT, lit), 2.5 * k);
-    p.text(pos2(x, y + 10.0), Align2::LEFT_TOP, sub, menu::medium(16.0), menu::mix(TEXT, Color32::WHITE, lit));
+    if !sub.is_empty() {
+        p.text(pos2(x, y + 10.0), Align2::LEFT_TOP, sub, menu::medium(16.0), menu::mix(TEXT, Color32::WHITE, lit));
+    }
 }
 
 /// a picture filling `r`, cropped to its aspect, pushed in by `zoom` (below 1) toward `focus`.
@@ -362,8 +364,7 @@ pub(crate) fn wordmark(p: &Painter, at: Pos2, right: f32, k: f32) {
     let r = Align2::LEFT_BOTTOM.anchor_size(at, g.size());
     let w = g.size().x;
     p.galley(r.min, g, Color32::WHITE);
-    // a short accent bar over the f, and a hairline from the end of the word to the row's edge.
-    p.rect_filled(Rect::from_min_size(pos2(r.left() + 2.0, r.top() - 6.0), vec2(34.0 * k.max(0.7), 3.0)), 1, ACCENT);
+    // a hairline from the end of the word to the row's edge.
     let y = r.center().y + 2.0;
     if right - (r.left() + w + 24.0) > 40.0 {
         p.hline(r.left() + w + 20.0..=right, y, Stroke::new(1.0, Color32::from_white_alpha(46)));
@@ -375,14 +376,16 @@ fn tile_frame(p: &Painter, r: Rect, lit: f32, fill: bool) {
     if fill {
         p.rect_filled(r, menu::R_PANEL, menu::mix(Color32::from_rgba_premultiplied(12, 16, 22, 226), Color32::from_rgba_premultiplied(22, 28, 37, 236), lit));
     }
-    p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0 + lit, menu::mix(Color32::from_white_alpha(26), ACCENT, lit)), egui::StrokeKind::Inside);
+    p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0 + 0.5 * lit, menu::mix(Color32::from_white_alpha(26), ACCENT, lit)), egui::StrokeKind::Inside);
 }
 
-/// a side tile's name and the line under it.
+/// a side tile's name and, when there is something to say, the line under it.
 fn caption(p: &Painter, r: Rect, k: f32, lit: f32, title: &str, sub: &str) {
-    let y = r.bottom() - 74.0 * k.max(0.7);
+    let y = r.bottom() - if sub.is_empty() { 40.0 } else { 74.0 } * k.max(0.7);
     spaced(p, pos2(r.left() + 24.0 * k, y), Align2::LEFT_BOTTOM, &title.to_uppercase(), menu::bold(30.0 * k.max(0.7)), menu::mix(TEXT, Color32::WHITE, lit), 2.5 * k);
-    p.text(pos2(r.left() + 25.0 * k, y + 8.0), Align2::LEFT_TOP, sub, menu::label(), menu::mix(DIM, TEXT, lit));
+    if !sub.is_empty() {
+        p.text(pos2(r.left() + 25.0 * k, y + 8.0), Align2::LEFT_TOP, sub, menu::label(), menu::mix(DIM, TEXT, lit));
+    }
 }
 
 /// the aircraft tile: your aircraft, easing forward on hover.
@@ -405,9 +408,8 @@ fn settings_tile(p: &Painter, r: Rect, resp: &egui::Response, k: f32) {
     let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
     tile_frame(p, r, lit, true);
     let c = pos2(r.center().x, r.top() + r.height() * 0.38);
-    p.circle_stroke(c, 72.0 * k, Stroke::new(1.0, Color32::from_white_alpha((14.0 + 16.0 * lit) as u8)));
-    gear_icon_turned(p, c, 92.0 * k, menu::mix(Color32::from_rgb(200, 207, 218), Color32::WHITE, lit), lit * std::f32::consts::TAU / 16.0);
-    caption(p, r, k, lit, t!("menu.settings"), t!("menu.graphics_sound_controls"));
+    gear_icon_turned(p, c, 80.0 * k, menu::mix(Color32::from_rgb(150, 160, 174), Color32::WHITE, lit), lit * std::f32::consts::TAU / 16.0);
+    caption(p, r, k, lit, t!("menu.settings"), "");
 }
 
 /// FLY: the globe picture filling it (easing in a little when hovered),
@@ -426,25 +428,7 @@ fn fly_tile(p: &Painter, r: Rect, resp: &egui::Response, k: f32, globe: &egui::T
     tile_frame(p, r, lit, false);
     let x = r.left() + 32.0 * k;
     let base = r.bottom() - 36.0 * k;
-    spaced(p, pos2(x - 3.0, base - 30.0 * k), Align2::LEFT_BOTTOM, t!("menu.fly_2"), menu::bold(112.0 * k.max(0.6)), menu::mix(Color32::WHITE, ACCENT, lit), 5.0 * k);
-    p.text(pos2(x, base - 8.0 * k), Align2::LEFT_CENTER, tr_en("Free flight or career"), menu::medium(16.5), Color32::from_rgb(220, 226, 234));
-    // its key or button, bottom right, on a key cap
-    let hc = Color32::from_white_alpha(190);
-    match Hint::of("Enter", "A") {
-        Hint::Text(h) => {
-            let g = p.layout_no_wrap(h.to_string(), FontId::monospace(11.5), hc);
-            let cap = Rect::from_min_size(pos2(r.right() - 28.0 * k - g.size().x - 14.0, base - 8.0 * k - 11.0), vec2(g.size().x + 14.0, 22.0));
-            p.rect_filled(cap, menu::R_WIDGET, Color32::from_white_alpha(18));
-            p.rect_stroke(cap, menu::R_WIDGET, Stroke::new(1.0, Color32::from_white_alpha(46)), egui::StrokeKind::Inside);
-            p.galley(cap.center() - g.size() * 0.5, g, hc);
-        }
-        Hint::Pad(spec) => {
-            let h = 22.0;
-            let w = padui::spec_width(p, spec, h);
-            padui::paint_spec(p, r.right() - 26.0 * k - w, base - 8.0 * k, spec, h, hc);
-        }
-        Hint::None => {}
-    }
+    spaced(p, pos2(x - 3.0, base), Align2::LEFT_BOTTOM, t!("menu.fly_2"), menu::bold(112.0 * k.max(0.6)), menu::mix(Color32::WHITE, ACCENT, lit), 5.0 * k);
 }
 
 /// Text with extra space between the letters.

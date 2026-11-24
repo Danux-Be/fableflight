@@ -351,6 +351,9 @@ impl Game {
                     for m in armed {
                         ui.label(RichText::new(m).font(num_s()).color(SOFT));
                     }
+                    if self.sim_rate() > 1.0 {
+                        ui.label(RichText::new(format!("{}×", self.warp)).font(num_s()).color(Color32::WHITE));
+                    }
                 } else if (off_for * 2.5).fract() < 0.6 {
                     ui.label(RichText::new("AP OFF").font(menu::semibold(14.0)).color(AMBER));
                 } else {

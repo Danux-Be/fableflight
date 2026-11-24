@@ -271,11 +271,13 @@ pub struct Run {
     settle: f64,
     /// the pilot's live weather and real time switches before the mission set its own weather.
     wx_was: Option<(bool, bool)>,
+    /// flown from the career: passing it counts towards its licences.
+    pub career: bool,
 }
 
 impl Run {
     pub fn new(m: &'static Mission, now: f64) -> Self {
-        Self { m, step: 0, since: now, held: 0.0, rating: None, done: false, failed: None, up_for: 0.0, ground: true, vs_air: 0.0, settle: 3.0, wx_was: None }
+        Self { m, step: 0, since: now, held: 0.0, rating: None, done: false, failed: None, up_for: 0.0, ground: true, vs_air: 0.0, settle: 3.0, wx_was: None, career: false }
     }
 
 }
@@ -462,6 +464,10 @@ impl Game {
                         } else {
                             let best = self.profile.best.entry(m.id.to_string()).or_insert(0);
                             *best = (*best).max(s);
+                            if run.career {
+                                self.career.trained.insert(m.id.to_string());
+                                self.career.save();
+                            }
                             self.mission = Some(run);
                             self.keep_profile();
                             self.award(&format!("{}: {}", tr_en("Passed"), tr_en(m.title)), if first { 500 } else { 50 });
@@ -471,6 +477,10 @@ impl Game {
                         let s = run.rating.map_or(100, |r| r.score.max(60));
                         let best = self.profile.best.entry(m.id.to_string()).or_insert(0);
                         *best = (*best).max(s);
+                        if run.career {
+                            self.career.trained.insert(m.id.to_string());
+                            self.career.save();
+                        }
                         self.mission = Some(run);
                         self.keep_profile();
                         let xp = match (m.cat, first) {

@@ -198,16 +198,12 @@ fn in_disc(r: egui::Rect, outline: &Outline, margin: f32) -> bool {
     [r.left_top(), r.right_top(), r.left_bottom(), r.right_bottom()].iter().all(|p| outline.inside(*p))
 }
 
-/// Spots labels must leave free: the aircraft, the north mark and the scale bar.
-fn reserved(rect: egui::Rect, angle: f64) -> Vec<egui::Rect> {
-    let (center, radius) = (rect.center(), rect.width() * 0.5);
-    let north = center + rotate(Vec2::new(0.0, -(radius - 18.0)), angle);
+/// spots labels must leave free: the aircraft, the next waypoint's chip and the full-size map button.
+fn reserved(rect: egui::Rect, _angle: f64) -> Vec<egui::Rect> {
+    let center = rect.center();
     vec![
         egui::Rect::from_center_size(center, Vec2::splat(38.0)),
-        egui::Rect::from_center_size(north, Vec2::splat(28.0)),
-        egui::Rect::from_center_size(Pos2::new(center.x, rect.bottom() - 22.0), Vec2::new(84.0, 32.0)),
-        // the resize grip and the full-size map button.
-        egui::Rect::from_center_size(rect.right_top() + Vec2::new(-12.0, 12.0), Vec2::splat(24.0)),
+        egui::Rect::from_center_size(Pos2::new(center.x, rect.bottom() - 22.0), Vec2::new(200.0, 32.0)),
         egui::Rect::from_center_size(rect.left_top() + Vec2::new(16.0, 16.0), Vec2::splat(30.0)),
     ]
 }
@@ -706,13 +702,6 @@ impl Minimap {
         for tri in [[0, 1, 2], [0, 2, 3]] {
             painter.add(egui::Shape::convex_polygon(tri.iter().map(|&k| points[k]).collect(), Color32::WHITE, Stroke::NONE));
         }
-        // the scale bar on a chip.
-        let meters = 2.0 * std::f64::consts::PI * geo::R * view.lat.cos() / (view.n * 256.0) * 60.0;
-        let chip = egui::Rect::from_center_size(Pos2::new(rect.center().x, rect.bottom() - 22.0), Vec2::new(78.0, 26.0));
-        painter.rect_filled(chip, crate::flightui::R_IN, Color32::from_black_alpha(150));
-        painter.text(chip.center() - Vec2::new(0.0, 3.0), egui::Align2::CENTER_CENTER, distance_label(meters, crate::i18n::lang()), crate::menu::medium(12.5), Color32::WHITE);
-        let a = Pos2::new(rect.center().x - 30.0, chip.bottom() - 6.0);
-        painter.line_segment([a, a + Vec2::new(60.0, 0.0)], Stroke::new(1.5, Color32::WHITE));
         clip_to_disc(ctx, painter.layer_id(), first_shape, &outline);
         // the next waypoint on a chip.
         if let Some((plan, gs)) = route {
@@ -727,7 +716,7 @@ impl Minimap {
                     _ => format!("{}  {:.1} nm  ·  {:03.0}°{ete}{cons}", wp.ident, s.dist / 1852.0, s.bearing),
                 };
                 let galley = painter.layout_no_wrap(text, crate::menu::medium(12.5), Color32::WHITE);
-                let chip = egui::Rect::from_center_size(Pos2::new(rect.center().x, rect.bottom() - 52.0), galley.size() + Vec2::new(26.0, 8.0));
+                let chip = egui::Rect::from_center_size(Pos2::new(rect.center().x, rect.bottom() - 22.0), galley.size() + Vec2::new(26.0, 8.0));
                 painter.rect_filled(chip, crate::flightui::R_IN, Color32::from_black_alpha(170));
                 painter.circle_filled(Pos2::new(chip.left() + 9.0, chip.center().y), 3.5, ROUTE);
                 painter.galley(Pos2::new(chip.left() + 18.0, chip.center().y - galley.size().y * 0.5), galley, Color32::WHITE);

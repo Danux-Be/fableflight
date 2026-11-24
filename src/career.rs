@@ -500,13 +500,19 @@ pub struct Career {
     /// the stars of the jobs flown, newest last.
     #[serde(default)]
     pub stars: Vec<u8>,
+    /// lessons and checkrides flown from the career (activities flown outside it do not count).
+    #[serde(default)]
+    pub trained: std::collections::BTreeSet<String>,
+    /// landing challenge scores flown from the career, the best of each.
+    #[serde(default)]
+    pub challenges: BTreeMap<String, u32>,
     #[serde(skip)]
     pub view: View,
 }
 
 impl Default for Career {
     fn default() -> Self {
-        Self { started: false, name: String::new(), base: "KHAF".into(), money: 15_000.0, rep: 0.0, hours: 0.0, jobs_done: 0, lics: Vec::new(), owned: Vec::new(), board: Vec::new(), board_for: String::new(), refresh: 0, active: None, ledger: Vec::new(), next_id: 1, rep_by: BTreeMap::new(), wear: BTreeMap::new(), hires: Vec::new(), accrued: 0, stars: Vec::new(), view: View::default() }
+        Self { started: false, name: String::new(), base: "KHAF".into(), money: 15_000.0, rep: 0.0, hours: 0.0, jobs_done: 0, lics: Vec::new(), owned: Vec::new(), board: Vec::new(), board_for: String::new(), refresh: 0, active: None, ledger: Vec::new(), next_id: 1, rep_by: BTreeMap::new(), wear: BTreeMap::new(), hires: Vec::new(), accrued: 0, stars: Vec::new(), trained: Default::default(), challenges: BTreeMap::new(), view: View::default() }
     }
 }
 
@@ -1192,16 +1198,16 @@ impl Game {
 
     /// whether a requirement is met, and how far along it is in words.
     pub(crate) fn req_state(&self, r: Req) -> (bool, String) {
-        let best = &self.profile.best;
-        let hours = crate::profile::totals(&self.logbook.flights).air_s / 3600.0;
+        // only what was flown in the career counts: activities and free flight do not open licences.
+        let hours = self.career.hours;
         let lvl = crate::pilot::level(self.profile.xp).n;
         let title = |id: &str| crate::missions::by_id(id).map_or(id.to_string(), |m| tr_en(m.title).to_string());
         match r {
             // (the button beside it says lesson, checkride or mission)
-            Req::Lesson(id) | Req::Exam(id) => (best.contains_key(id), title(id)),
+            Req::Lesson(id) | Req::Exam(id) => (self.career.trained.contains(id), title(id)),
             Req::Challenge(id, min) => {
                 let c = crate::challenge::by_id(id).map(|i| &crate::challenge::ALL[i]);
-                let top = self.challenge_records.top(id).unwrap_or(0);
+                let top = self.career.challenges.get(id).copied().unwrap_or(0);
                 (top >= min, format!("{} {} ({} {min})", tr_en("Landing challenge:"), c.map_or(id, |c| c.name()), tr_en("score")))
             }
             Req::Holds(l) => (self.career.has(l), tr_en(l.name()).to_string()),
