@@ -2102,19 +2102,21 @@ fn surface(in: VOut) -> Shaded {
       albedo = vec3f(0.01);
       rough = 0.05;
       let did = u32(in.mat.w + 0.5);
-      if (did >= 60u) {
+      // (a shader specialised to one kind keeps only its own cockpit's screens: the
+      // range is picked per pixel, so without the kind test every deck stays reachable.)
+      if (did >= 60u && (KIND == 99u || KIND == 9u)) {
         // The G650's PlaneView displays, SMCs, MCDUs and readouts (deck650.wgsl).
         emit = display650(did, in.uv, duv) * G.sun_dir.w * mix(0.07, 0.01, night);
         albedo = vec3f(0.010, 0.011, 0.013);
         rough = 0.1;
         ssr = 0.3;
-      } else if (did >= 40u) {
+      } else if (did >= 40u && (KIND == 99u || KIND == 2u || KIND == 3u || KIND == 4u || KIND == 7u)) {
         // The Hornet's DDIs, AMPCD, UFC windows and IFEI (pit18.wgsl).
         emit = display18(did, in.uv, duv) * G.sun_dir.w * mix(0.06, 0.009, night);
         albedo = vec3f(0.010, 0.012, 0.012);
         rough = 0.1;
         ssr = 0.3;
-      } else if (did >= 20u) {
+      } else if (did >= 20u && (KIND == 99u || KIND == 1u)) {
         // The 747's CRTs: bright enough by day, turned down at night.
         emit = display747(did, in.uv, duv) * G.sun_dir.w * mix(0.07, 0.01, night);
         albedo = vec3f(0.012, 0.014, 0.016);

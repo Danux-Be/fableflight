@@ -797,6 +797,9 @@ pub struct MeshGpu {
     bind: Option<std::sync::Arc<wgpu::BindGroup>>,
     /// indices before the instrument faces and displays, which come last.
     n_main: u32,
+    /// the mesh's box at rest (the glass pass copies only the screen it covers).
+    lo: glam::Vec3,
+    hi: glam::Vec3,
 }
 
 /// the aircraft shader specialised for one kind, without the instrument faces.
@@ -1165,6 +1168,10 @@ pub struct Renderer {
     pub stats: [f64; 4],
     /// --headless: draw every frame in full but never show it
     pub headless: bool,
+    /// the compositor is not showing the window (another workspace, minimised).
+    pub occluded: bool,
+    /// a scripted run (--shot, --record): keeps drawing while hidden, vsync off.
+    pub scripted: bool,
     /// a GPU that shares the CPU's memory and power (Apple silicon, laptop
     /// chips): the defaults trade a little for speed there
     pub integrated: bool,
@@ -3017,7 +3024,7 @@ impl Renderer {
             globals_ub, bg0, bg0_pre, bg0_shadow, lut_sky, shadow, shadow_res: SHADOW_RES, bg0_src, scale: 1.0, ao: true, cloud_step: 1.0, l_tile, l_build, l_comp_cls, l_comp_main, l_comp_edge, l_comp_globe, l_hiz, ap_l, ap_t, cloud_refl, bg_atmlut, bg_comp_sky, p_hiz_build, p_ap_build, p_sky_build, p_cloud_refl, p_cloud_refl_plain, l_cloud, l_cloud_storm, l_cloud_rain, l_cloud_apply, l_cloud_temporal, l_post, l_pdraw, l_glass,
             tile_ub, l_photo, photo_ub, p_photo, p_photo_mask, p_photo_shadow, p_photo_shadow_fast, l_skin, p_skin, skin_slots, p_water_top, p_lamp_top, photo_mask, photo_mask_dirty: true, light_cover, light_cover_view, glow_tex, gclouds_tex, snow_tex, snow_track_tex, build_ub, obj_ub, bg_obj, l_obj, paint_ub, font_ub, tile_ibuf, tile_nidx: ix.len() as u32,
             p_sky, p_terrain, p_terrain_far, p_terrain_water, p_terrain_tess, p_terrain_cells, p_terrain_photo, p_terrain_tess_photo, p_terrain_cells_photo, tess_ibuf, tess_idx, tess_buf, tess_cap, cell_ibuf, p_build, p_build_whole, p_build_shadow, obj_gen: None, obj_gen_rx: Some(obj_gen_rx), wait_objs: false, obj_wait: None, obj_src, pl_obj, obj_fast: None, obj_fast_rx: None, p_comp_cls, p_comp_sky, p_comp_opaque, p_comp_glass, p_comp_water, p_comp_edge, p_composite, p_composite_edge, p_cloud, p_cloud_plain, p_cloud_classify, p_cloud_plain_cls, p_cloud_storm_cls, p_cloud_rain, p_cloud_apply, p_cloud_temporal, p_particles, p_taa, p_psim, p_down, p_up, p_final, p_final_taa, p_blit,
-            psim_ub, pbuf, bg_psim, phead: 0, p_vol, bg_vol_a, bg_vol_b, vol_acc, fluid, fluid_t, ocean, shore, p_shore_cover, smoke_until: 0.0, parts_until: 0.0, now: 0.0, black, targets, cloud_flip: 0, cloud_hist_ok: false, clouds: true, cloud_shadows: true, vendor: info.vendor, cshadow, lut_bake, lut_haze: 1.0, taa_flip: 0, taa_hist_ok: false, up, gpu: info.clone(), meshes: Vec::new(), egui, instance, window, gpu_error, device_lost, surface, config, queue, device, stats: [0.0; 4], headless: false, integrated, low_vram, fg: None, fg_plan, fg_err: None, out_of_memory: Default::default(),
+            psim_ub, pbuf, bg_psim, phead: 0, p_vol, bg_vol_a, bg_vol_b, vol_acc, fluid, fluid_t, ocean, shore, p_shore_cover, smoke_until: 0.0, parts_until: 0.0, now: 0.0, black, targets, cloud_flip: 0, cloud_hist_ok: false, clouds: true, cloud_shadows: true, vendor: info.vendor, cshadow, lut_bake, lut_haze: 1.0, taa_flip: 0, taa_hist_ok: false, up, gpu: info.clone(), meshes: Vec::new(), egui, instance, window, gpu_error, device_lost, surface, config, queue, device, stats: [0.0; 4], headless: false, occluded: false, scripted: false, integrated, low_vram, fg: None, fg_plan, fg_err: None, out_of_memory: Default::default(),
         })
     }
 
@@ -3610,6 +3617,57 @@ impl Renderer {
     pub fn aircraft_prep(&self) -> Option<AircraftPrep> {
         self.obj_wait.map(|w| w.1)
     }
+    /// Which glass objects are on screen, and the pixels the copy of the scene
+    /// behind them needs (x0, y0, x1, y1). The whole frame when a window wraps
+    /// round the camera (the cockpit) or rain on it bends far views into its drops.
+    fn glass_cover(&self, f: &Frame, n: usize, w: u32, h: u32) -> (Vec<bool>, [u32; 4]) {
+        let vp = glam::Mat4::from_cols_array_2d(&f.g.view_proj);
+        let mut on = vec![false; n];
+        let (mut lo, mut hi) = (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN));
+        let mut whole = f.g.start[1] > 0.0 || f.g.start[2] > 0.002;
+        for (i, o) in f.objs.iter().take(n).enumerate() {
+            let Some(m) = self.meshes.get(o.mesh).filter(|m| o.glass && m.n_idx > 0) else { continue };
+            let mvp = vp * o.model;
+            let (mut a, mut b, mut behind) = (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN), false);
+            for k in 0..8 {
+                let c = glam::Vec3::new(if k & 1 == 0 { m.lo.x } else { m.hi.x }, if k & 2 == 0 { m.lo.y } else { m.hi.y }, if k & 4 == 0 { m.lo.z } else { m.hi.z });
+                let q = mvp * c.extend(1.0);
+                if q.w <= 1e-3 {
+                    behind = true;
+                    break;
+                }
+                let p = glam::Vec2::new(q.x, q.y) / q.w;
+                a = a.min(p);
+                b = b.max(p);
+            }
+            if behind {
+                on[i] = true;
+                whole = true;
+                continue;
+            }
+            if b.x < -1.0 || a.x > 1.0 || b.y < -1.0 || a.y > 1.0 {
+                continue;
+            }
+            on[i] = true;
+            lo = lo.min(a);
+            hi = hi.max(b);
+        }
+        if whole || lo.x > hi.x {
+            return (on, [0, 0, w, h]);
+        }
+        // room for what the glass bends in from beside it.
+        let pad = 0.04 * w.max(h) as f32 + 8.0;
+        let px = |x: f32, top: u32| (x.clamp(0.0, top as f32)) as u32;
+        let x0 = px((lo.x * 0.5 + 0.5) * w as f32 - pad, w);
+        let x1 = px((hi.x * 0.5 + 0.5) * w as f32 + pad + 1.0, w);
+        let y0 = px((0.5 - hi.y * 0.5) * h as f32 - pad, h);
+        let y1 = px((0.5 - lo.y * 0.5) * h as f32 + pad + 1.0, h);
+        if x1 <= x0 || y1 <= y0 {
+            return (vec![false; n], [0, 0, w, h]);
+        }
+        (on, [x0, y0, x1, y1])
+    }
+
     fn mesh_gpu(&self, verts: &[PartVertex], idx: &[u32], bind: Option<std::sync::Arc<wgpu::BindGroup>>) -> MeshGpu {
         // an empty piece, a hinge others hang from, still gets a buffer.
         let pad = [PartVertex::zeroed()];
@@ -3617,7 +3675,15 @@ impl Renderer {
         let (idx, n_main) = split_instruments(verts, idx);
         let vbuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("part verts"), contents: bytemuck::cast_slice(verts), usage: wgpu::BufferUsages::VERTEX });
         let ibuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("part idx"), contents: bytemuck::cast_slice(if idx.is_empty() { &[0u32][..] } else { &idx }), usage: wgpu::BufferUsages::INDEX });
-        MeshGpu { vbuf, ibuf, n_idx: idx.len() as u32, n_main, bind }
+        let (mut lo, mut hi) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
+        for v in verts.iter().map(|v| glam::Vec3::from(v.pos)).filter(|p| p.is_finite()) {
+            lo = lo.min(v);
+            hi = hi.max(v);
+        }
+        if lo.x > hi.x {
+            (lo, hi) = (glam::Vec3::ZERO, glam::Vec3::ZERO);
+        }
+        MeshGpu { vbuf, ibuf, n_idx: idx.len() as u32, n_main, bind, lo, hi }
     }
 
     /// Append particles to the ring buffer (oldest are overwritten).
@@ -3673,6 +3739,16 @@ impl Renderer {
         }
         if self.fg.as_ref().is_some_and(|fg| fg.stale || fg.size() != (self.config.width, self.config.height)) {
             self.configure_out();
+        }
+        // a hidden window gets no frame callbacks, so a vsynced present would wait forever (wayland).
+        if self.occluded && !self.headless && !self.scripted {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            if let Some((_, delta, _)) = &mut f.egui {
+                for id in delta.free.drain() {
+                    self.egui.free_texture(&id);
+                }
+            }
+            return;
         }
         let fg_on = self.fg.is_some();
         let t_acq = std::time::Instant::now();
@@ -4932,18 +5008,24 @@ impl Renderer {
             }
         }
         mark(&mut enc, "rain+lightning");
-        if let (true, Some(generic)) = (f.objs.iter().take(n_objs).any(|o| o.glass), self.obj_gen.as_ref().and_then(|g| g.rest.as_ref())) {
+        // the windows on screen, and the part of the frame they cover.
+        let (w, h) = (t.hdr_tex.width(), t.hdr_tex.height());
+        let (glass_on, glass_box) = self.glass_cover(&f, n_objs, w, h);
+        if let (true, Some(generic)) = (glass_on.iter().any(|&on| on), self.obj_gen.as_ref().and_then(|g| g.rest.as_ref())) {
             // The windows bend what is seen through them, so they read the
             // scene from a copy. The depth stays read-only: it is sampled too.
-            let (w, h) = (t.hdr_tex.width(), t.hdr_tex.height());
-            enc.copy_texture_to_texture(t.hdr_tex.as_image_copy(), t.scene_tex.as_image_copy(), wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 });
+            let [x0, y0, x1, y1] = glass_box;
+            fn at(tex: &wgpu::Texture, x: u32, y: u32) -> wgpu::TexelCopyTextureInfo<'_> {
+                wgpu::TexelCopyTextureInfo { texture: tex, mip_level: 0, origin: wgpu::Origin3d { x, y, z: 0 }, aspect: wgpu::TextureAspect::All }
+            }
+            enc.copy_texture_to_texture(at(&t.hdr_tex, x0, y0), at(&t.scene_tex, x0, y0), wgpu::Extent3d { width: x1 - x0, height: y1 - y0, depth_or_array_layers: 1 });
             let ds = wgpu::RenderPassDepthStencilAttachment { view: &t.depth, depth_ops: None, stencil_ops: None };
             let mut rp = enc.begin_render_pass(&pass_desc(&[Some(color_att(&t.hdr, false))], Some(ds)));
             rp.set_bind_group(0, &self.bg0, &[]);
             rp.set_bind_group(2, &t.bg_glass, &[]);
             rp.set_pipeline(&generic.glass);
             for (i, o) in f.objs.iter().take(n_objs).enumerate() {
-                if !o.glass {
+                if !o.glass || !glass_on[i] {
                     continue;
                 }
                 let m = &self.meshes[o.mesh];

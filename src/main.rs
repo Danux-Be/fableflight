@@ -1646,7 +1646,9 @@ impl Game {
         if let Some(on) = args.contrails {
             gfx.contrails = on;
         }
-        gfx.vsync &= args.vsync;
+        // scripted runs present without vsync: a hidden window would otherwise block on present.
+        let scripted = args.headless || std::env::args().any(|a| a == "--shot" || a == "--record");
+        gfx.vsync &= args.vsync && !scripted;
         if args.bench.is_some() {
             // the graphics test measures the GPU, not a frame limit
             gfx.fps_cap = 0;
@@ -1661,6 +1663,9 @@ impl Game {
         if r.integrated && first {
             let p = graphics::integrated_preset(r.vendor);
             gfx.apply(p);
+            // the preset lowers the resolution, so pick the upscaler suited to the gpu too (not the plain stretch).
+            let size = window.inner_size();
+            gfx.upscaler = graphics::recommend(r.vendor, &r.gpu.name, r.gpu.device_type, (size.width, size.height), false).upscaler;
             if let Some(l) = args.storm_quality {
                 gfx.storms = l;
             }
@@ -1684,6 +1689,7 @@ impl Game {
         }
         let mut r = r;
         r.headless = args.headless;
+        r.scripted = scripted;
         // Scripted pictures show the aircraft from the first frame they take.
         r.wait_objs = !args.shots.is_empty() || args.record.is_some();
         // Cached scans load offline too; missing ones keep the procedural layer.
@@ -9022,7 +9028,12 @@ impl ApplicationHandler for App {
                 self.game = None;
                 std::process::exit(0);
             }
-            WindowEvent::Resized(s) => g.r.resize(s.width, s.height),
+            WindowEvent::Resized(s) => {
+                // minimised: nothing to draw into.
+                g.r.occluded = s.width == 0 || s.height == 0;
+                g.r.resize(s.width, s.height);
+            }
+            WindowEvent::Occluded(hidden) => g.r.occluded = hidden,
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::Focused(false) => {
                 g.release_mouse_capture();
