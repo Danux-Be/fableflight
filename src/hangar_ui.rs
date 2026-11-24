@@ -270,6 +270,8 @@ impl crate::Game {
                 Tab::Download => {
                     c.label(RichText::new(t!("hangar.download_more_aircraft")).font(menu::page_title()).color(Color32::WHITE));
                     c.add_space(6.0);
+                    self.import_box(&mut c);
+                    c.add_space(6.0);
                     if let Some(k) = self.downloads(&mut c) {
                         select = Some(k);
                     }
@@ -289,6 +291,26 @@ impl crate::Game {
             self.pad_home = true;
         } else if back {
             self.aircraft_back();
+        }
+    }
+
+    /// FlightGear aircraft already on this computer: a folder path to import from.
+    fn import_box(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(tr_en("Import from a folder")).font(menu::label()).color(TEXT));
+            let w = (ui.available_width() - 120.0).max(160.0);
+            ui.add(egui::TextEdit::singleline(&mut self.import_path).desired_width(w).hint_text(tr_en("an aircraft folder, or FlightGear's Aircraft folder")).font(menu::caption()).margin(egui::vec2(8.0, 6.0)));
+            if menu::choice(ui, tr_en("Import"), false, 96.0).clicked() && !self.import_path.trim().is_empty() {
+                let (ok, bad) = crate::hangar::import_local(std::path::Path::new(self.import_path.trim()));
+                self.import_note = match (ok.is_empty(), bad.is_empty()) {
+                    (false, true) => format!("{} {}", tr_en("Added:"), ok.join(", ")),
+                    (false, false) => format!("{} {}  ·  {} {}", tr_en("Added:"), ok.join(", "), tr_en("Not added:"), bad.join("; ")),
+                    _ => format!("{} {}", tr_en("Not added:"), bad.join("; ")),
+                };
+            }
+        });
+        if !self.import_note.is_empty() {
+            ui.add(egui::Label::new(RichText::new(&self.import_note).font(menu::caption()).color(DIM)).wrap());
         }
     }
 
