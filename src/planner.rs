@@ -273,8 +273,9 @@ impl Game {
                     self.planner_summary(ui);
                     ui.add_space(16.0);
                 }
+                // what sits outside the scrolling part: the title, the tabs, the summary, the foot and the margins.
                 let foot = if self.plan.is_empty() { 60.0 } else { 120.0 };
-                let used = if self.plan.is_empty() { 110.0 } else { 190.0 };
+                let used = if self.plan.is_empty() { 140.0 } else { 250.0 };
                 let mut area = egui::ScrollArea::vertical().max_height((h - foot - used).max(140.0)).auto_shrink([false, true]);
                 if std::mem::take(&mut self.planner.top) {
                     area = area.vertical_scroll_offset(0.0);

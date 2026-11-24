@@ -8047,7 +8047,8 @@ impl Game {
                 p.text(r.left_center() + egui::vec2(30.0, 0.0), Align2::LEFT_CENTER, t!("game.menu"), menu::label(), menu::mix(TEXT, Color32::WHITE, lit));
                 match Hint::of("Esc", "B") {
                     Hint::Text(h) => {
-                        p.text(r.right_center() - egui::vec2(12.0, 0.0), Align2::RIGHT_CENTER, h, FontId::monospace(11.0), DIM);
+                        let w = menu::cap_width(p, h);
+                        menu::paint_cap(p, egui::Rect::from_min_size(egui::pos2(r.right() - 8.0 - w, r.center().y - 11.0), egui::vec2(w, 22.0)), h, 0.8);
                     }
                     Hint::Pad(spec) => {
                         let x = r.right() - 10.0 - padui::spec_width(p, spec, 18.0);
