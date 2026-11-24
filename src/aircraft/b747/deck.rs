@@ -139,6 +139,13 @@ pub const STRINGS: &[&str] = &[
     "FIRE EXT SHOT 2", "LDG GEAR IND", "LDG GEAR CTRL 2", "OUTBD BRAKE", "CTRL", "APU CTRL 2", "APU PWR 2", "R GCU PWR", "ATC 2", "NAV RCVR 2",
     "VHF COMM 2", "L SSPC CH 2", "R SSPC CH 2", "BATT BUS CONT", "TRU CTRL 2", "COPILOT ACP", "OBSERVER ACP", "FLT INSTRUMENTS", "FLT CTRL/LDG",
     "ENG SYS/FUEL", "COM/NAV",
+    // The C-130H's flight deck (c130/deck.rs) and its dials (plane.wgsl `gauge`, ids 40 and up).
+    "50", "100", "AILERON TRIM", "BOOST PUMP", "CONDITION", "CROSSFEED", "DUMP", "ELEV TAB", "ENGAGE", "EXIT", "EXTEND",
+    "FIRE EMERGENCY", "FLASH OVHT", "GTC", "LANDING LIGHTS", "LIGHT", "LOCK RELEASE", "MOTOR", "NACELLE OVHT", "NOSE DOWN",
+    "NOSE UP", "PERCENT", "POWER", "SET ALTITUDE", "SYNCHROPHASE", "TD VALVE", "TAKEOFF", "FLIGHT IDLE", "GROUND IDLE",
+    "MAX REVERSE", "GROUND STOP", "FEATHER", "KNOTS", "TORQUE", "IN LB X 1000", "TIT", "FUEL FLOW", "PPH X 1000", "PSI",
+    "GEARBOX OIL", "OIL QTY", "GALS", "COOLER FLAP", "RADIO ALT", "FT X 100", "UTILITY", "BOOSTER", "AUXILIARY", "BRAKES",
+    "RUDDER BOOST", "PSI X 1000", "RUDDER TAB", "LBS X 1000", "RAMP/DOOR", "OPEN", "CLOSE",
 ];
 
 /// Index of a string in `STRINGS` (panics if it is missing: a typo in the layout).
@@ -2287,7 +2294,7 @@ mod tests {
         let src = format!("{}\n{}\n{}\n{}\n{}\n{}", include_str!("../../shaders/common.wgsl"), include_str!("../../shaders/plane.wgsl"), strings_wgsl(), include_str!("../../shaders/deck747.wgsl"), include_str!("../../shaders/pit18.wgsl"), include_str!("../../shaders/deck650.wgsl"));
         // the generic shader, and each kind's specialised one (render.rs `specialise`).
         let mut all = vec![("plane (generic)".to_string(), src.clone())];
-        all.extend((0..10).map(|k| (format!("plane #{k}"), crate::render::specialise(&src, k))));
+        all.extend((0..11).map(|k| (format!("plane #{k}"), crate::render::specialise(&src, k))));
         assert!(all[1].1.contains("const KIND: u32 = 0u;") && all[1].1.contains("const INSTR: u32 = 0u;"), "specialise found nothing to rewrite");
         for (label, src) in &all {
             let m = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{label}:\n{}", e.emit_to_string(src)));

@@ -11,6 +11,7 @@
 // 3.14 m, -6.28 m) that trip clippy::approx_constant.
 #![allow(clippy::approx_constant)]
 pub mod b747;
+pub mod c130;
 pub mod c172;
 pub mod concorde;
 pub mod dr400;
@@ -105,7 +106,7 @@ pub fn animated_hotspots(controls: &[(Hotspot, Option<usize>)], pose: &[glam::Ma
 }
 
 /// The types built into the game, in the order the menu lists them.
-pub static BUILTIN: [&Spec; 10] = [&c172::SPEC, &dr400::SPEC, &b747::SPEC, &fa18::SPEC, &f4::SPEC, &f22::SPEC, &starship::SPEC, &concorde::SPEC, &sr71::SPEC, &g650::SPEC];
+pub static BUILTIN: [&Spec; 11] = [&c172::SPEC, &dr400::SPEC, &b747::SPEC, &c130::SPEC, &fa18::SPEC, &f4::SPEC, &f22::SPEC, &starship::SPEC, &concorde::SPEC, &sr71::SPEC, &g650::SPEC];
 
 /// Types added while the game runs: JSBSim aircraft the player downloaded
 /// (see hangar.rs), each flying with a stand-in from `BUILTIN` as its body.
@@ -425,6 +426,9 @@ pub enum Sound {
     Turbojet,
     /// a cluster of rocket engines (audio.rs `Rocket`)
     Rocket,
+    /// four turboprops: the propellers' drone at their blade-passing
+    /// frequency and the turbines' whine (audio.rs `Turboprop`)
+    Turboprop,
 }
 
 /// A heat-seeking missile on a hardpoint: the model piece that is the loaded
@@ -465,6 +469,7 @@ pub fn liveries(spec: &Spec) -> &'static [Livery] {
     else if std::ptr::eq(spec, &dr400::SPEC) { dr400::LIVERIES }
     else if std::ptr::eq(spec, &b747::SPEC) { b747::LIVERIES }
     else if std::ptr::eq(spec, &g650::SPEC) { g650::LIVERIES }
+    else if std::ptr::eq(spec, &c130::SPEC) { c130::paint::LIVERIES }
     else { &[] }
 }
 
@@ -686,6 +691,14 @@ impl Spec {
     /// them modelled; other types get an empty list.)
     pub fn missiles(&self) -> &'static [MissileStation] {
         if self.keys.contains(&"fa18") { &fa18::MISSILES } else { &[] }
+    }
+
+    /// A turboprop flown as `Engine::Fan` (the C-130's T56s): each engine's
+    /// rated shaft power (hp), for what the hangar and the panels say about
+    /// it; None for every other type.
+    pub fn turboprop_shp(&self) -> Option<f64> {
+        // T56-A-15: 4,591 shp (c130/flight.rs).
+        if self.keys.contains(&"c130") { Some(4591.0) } else { None }
     }
 
     /// Gear that never retracts (no fold rate): always down, the gear key does nothing.

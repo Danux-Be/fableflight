@@ -56,7 +56,7 @@ cargo build --release --locked
 
 ## Features
 
-- **Aircraft:** Cessna 172RG, Robin DR400, Boeing 747, Gulfstream G650, F/A-18, F-4, F-22, Concorde, SR-71, Starship, and downloadable [FlightGear aircraft](https://wiki.flightgear.org/FGAddon).
+- **Aircraft:** Cessna 172RG, Robin DR400, Boeing 747, Lockheed C-130H Hercules, Gulfstream G650, F/A-18, F-4, F-22, Concorde, SR-71, Starship, and downloadable [FlightGear aircraft](https://wiki.flightgear.org/FGAddon).
 - **Flight systems:** fuel, mass and balance, electrical failures, clickable cockpits, radio navigation, and autopilot.
 - **World:** real METAR weather, seasonal & live snow cover, satellite/road minimap, live ADS-B traffic, and multiplayer.
 - **Controls:** remappable keyboard, joystick, throttle, pedals, and gamepad. Configure them in **Settings → Controls**.
