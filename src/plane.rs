@@ -149,6 +149,8 @@ pub struct Plane {
     pub pitot_heat: bool,
     pub anti_ice: bool,
     pub carb_heat: bool,
+    /// a pushback tug at the nose wheel: the speed it pushes back at (m/s), none when not hooked up
+    pub tow: Option<f64>,
     /// A two-engine jet's L and R fuel control switches ([0]) and battery
     /// switches ([1]) work the one shared `ignition` / `sys.elec.master`:
     /// the shared state is on while either switch of its pair is. True: that
@@ -336,6 +338,7 @@ impl Plane {
             pitot_heat: false,
             anti_ice: false,
             carb_heat: false,
+            tow: None,
             pair_off: [[false; 2]; 2],
             fuel_selector: FuelSelector::Center,
             engine_hours: 1834.6,
@@ -1947,6 +1950,11 @@ impl Plane {
         let cranking = !self.running && (c.starter || self.auto_start > 0.0 || self.starter_on);
         self.sys.update(dt, charging, cranking, true);
 
+        // a pushback tug holds the speed it is set to, backwards (body +z is aft).
+        if let Some(v) = self.tow {
+            let vg = self.rot.inverse() * self.vel;
+            force_b += DVec3::Z * (mass * 1.5 * (v - vg.z)).clamp(-0.25 * mass * 9.81, 0.25 * mass * 9.81);
+        }
         // Ground contact.
         let mut force_w = self.rot * force_b - upw * (mass * 9.81);
         let mut torque_b = DVec3::ZERO;

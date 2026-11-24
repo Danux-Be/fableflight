@@ -240,6 +240,8 @@ const LOD_FINE: f32 = 700.0;
 pub struct World {
     /// flat ground everywhere tiles have not loaded, at this height (for tests)
     pub flat: Option<f64>,
+    /// a gate whose fixed jet bridge gives way to the player's own (ground.rs)
+    pub hide_bridge: Option<DVec3>,
     loader: Loader,
     tiles: HashMap<TileId, Slot>,
     builds: HashMap<TileId, BSlot>,
@@ -319,7 +321,7 @@ impl Frustum {
 impl World {
     pub fn new(loader: Loader, max_zoom: u8) -> Self {
         let photo = Some(Box::new(crate::tiles3d::Photo::new(loader.src.google.clone(), Some(loader.src.clone()))));
-        Self { photo, flat: None, loader, tiles: HashMap::default(), builds: HashMap::default(), frame: 0, in_flight: 0, max_zoom, lod_k: 0.62, reach_k: 1.0, city_k: 1.0, tile_cap: 700, mem_cap: None, build_retry: HashMap::default(), mem_k: 1.0, mem_t: 0, build_budget: u64::MAX, build_k: 1.0, build_t: 0, spare_builds: 12, max_build_jobs: 12, tree_far: 3200.0, tree_imp_k: 1.0, cars: (1.0, 2200.0, 1100.0), buildings_on: true, draw: Vec::new(), draw_shore: Vec::new(), draw_b: Vec::new(), wanted: Vec::new(), in_view: Vec::new(), frustum: None, craters: Vec::new(), tree_dims: Vec::new(), tick: 0, stats: (0, 0, 0), last_update: None, uploads: VecDeque::new(), fields: HashMap::default(), ocean: crate::ocean::Ocean::new() }
+        Self { photo, flat: None, hide_bridge: None, loader, tiles: HashMap::default(), builds: HashMap::default(), frame: 0, in_flight: 0, max_zoom, lod_k: 0.62, reach_k: 1.0, city_k: 1.0, tile_cap: 700, mem_cap: None, build_retry: HashMap::default(), mem_k: 1.0, mem_t: 0, build_budget: u64::MAX, build_k: 1.0, build_t: 0, spare_builds: 12, max_build_jobs: 12, tree_far: 3200.0, tree_imp_k: 1.0, cars: (1.0, 2200.0, 1100.0), buildings_on: true, draw: Vec::new(), draw_shore: Vec::new(), draw_b: Vec::new(), wanted: Vec::new(), in_view: Vec::new(), frustum: None, craters: Vec::new(), tree_dims: Vec::new(), tick: 0, stats: (0, 0, 0), last_update: None, uploads: VecDeque::new(), fields: HashMap::default(), ocean: crate::ocean::Ocean::new() }
     }
 
     /// Tiles wanted but not yet asked for (at most 28 are on their way at once).
@@ -1480,6 +1482,10 @@ impl World {
             }
             let base = g.center - cam;
             for p in &f.props {
+                // the player's own jet bridge stands in for the fixed one at its stand (ground.rs).
+                if self.hide_bridge.is_some_and(|h| matches!(p.mesh, crate::airmodels::M_BRIDGE | crate::airmodels::M_BRIDGE_HEAD) && (g.center + p.pos.as_dvec3() - h).length() < 80.0) {
+                    continue;
+                }
                 let o = base + p.pos.as_dvec3();
                 if o.length() > 6000.0 || !fr.map(|f| f.sphere(o, 40.0)).unwrap_or(true) {
                     continue;

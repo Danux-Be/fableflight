@@ -50,6 +50,7 @@ mod gamemode;
 mod gauges;
 mod gmaps;
 mod graphics;
+mod ground;
 mod graphics_core;
 mod progress;
 mod tiles3d;
@@ -1582,6 +1583,10 @@ struct Game {
     save_name: String,
     /// the tutorial, challenge or mission being flown (missions.rs)
     mission: Option<missions::Run>,
+    /// pushback, jet bridge, fuel and boarding (ground.rs)
+    ground: ground::Ground,
+    /// the next airport start is at a stand, not on the runway
+    stand_start: bool,
 }
 
 /// The launcher's graphics test (`--bench SECONDS`): after a settling time
@@ -1897,7 +1902,7 @@ impl Game {
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
-            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None,
+            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false,
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
             live: live::Live::new(prefs.live_traffic),
@@ -2035,6 +2040,7 @@ impl Game {
         self.menu.start = match l.start.as_str() {
             "approach" => menu::Start::Approach,
             "overhead" => menu::Start::Overhead,
+            "stand" => menu::Start::Stand,
             _ => menu::Start::Runway,
         };
         self.menu.look_at(l.lat, l.lon, 30_000.0);
@@ -2372,6 +2378,7 @@ impl Game {
         self.log_close(false);
         self.rec.clear();
         self.replay = None;
+        self.ground = Default::default();
         self.cancel_cockpit_input();
         self.ap.disengage();
         self.hold_spot = None;
@@ -2607,6 +2614,23 @@ impl Game {
             self.status = t!("game.no_runway_layout_on_the", a.code(), a.name);
             return;
         };
+        // parked at a stand that takes the aircraft, its nose at the stop line.
+        if std::mem::take(&mut self.stand_start) && !approach {
+            let need = match self.spec.mass { m if m < 3_000.0 => 0, m if m < 50_000.0 => 1, m if m < 100_000.0 => 3, _ => 4 };
+            let mut fits: Vec<&airports::Stand> = g.stands.iter().filter(|s| s.size >= need).collect();
+            fits.sort_by_key(|s| s.size);
+            let pick = fits.iter().take(8).nth((self.real * 7.0) as usize % fits.len().clamp(1, 8)).copied();
+            if let Some(st) = pick {
+                let nose = -self.spec.hard[0].z as f32;
+                let at = st.pos - st.dir * nose;
+                let (lat, lon) = g.lla(at);
+                let heading = (st.dir.x as f64).atan2(st.dir.y as f64);
+                self.respawn_ground(lat, lon, g.h(at) as f64, heading, 0.0);
+                self.plane.parking_brake = true;
+                self.status = format!("{} {}  ·  {}", a.code(), a.name, tr_en("parked at a stand"));
+                return;
+            }
+        }
         let want = runway.as_deref().map(airports::norm_ident);
         let pick = want.as_ref().and_then(|w| g.runways.iter().enumerate().find_map(|(ri, r)| (0..2).find(|e| airports::norm_ident(&r.ident[*e]) == *w).map(|e| (ri, e))));
         let (ri, e) = pick.or_else(|| g.active(self.wx.wind_from as f32, (self.wx.wind * 1.94384) as f32)).unwrap_or((0, 0));
@@ -3208,6 +3232,11 @@ impl Game {
         self.gamepad(dt, &mut c);
         self.joystick(&mut c);
         self.autopilot(dt, &mut c);
+        // the tug steers the nose wheel while it pushes.
+        if let Some(p) = self.ground.push.filter(|p| !p.stopped) {
+            c.yaw = p.steer;
+            c.brake = false;
+        }
         c.brake |= self.plane.parking_brake;
         if let Some(t) = self.crash_at {
             if self.real > t && !self.crashed {
@@ -5218,6 +5247,7 @@ impl Game {
                 menu::Start::Runway => "runway",
                 menu::Start::Approach => "approach",
                 menu::Start::Overhead => "overhead",
+                menu::Start::Stand => "stand",
             }
             .into(),
             runway: self.menu.runway.clone(),
@@ -5229,6 +5259,7 @@ impl Game {
         self.atc.reset();
         self.checks.reset(checklist::lists(aircraft::nth(self.menu.aircraft)));
         if let Some(i) = self.menu.airport.filter(|_| self.menu.start != menu::Start::Overhead) {
+            self.stand_start = self.menu.start == menu::Start::Stand;
             self.start_airport(i, self.menu.runway.clone(), self.menu.start == menu::Start::Approach, false);
             return;
         }
@@ -6081,6 +6112,9 @@ impl Game {
         self.time += dt;
         if !in_menu && dt > 0.0 && self.replay.is_none() {
             self.mission_step(dt);
+            if !self.crashed {
+                self.ground_step(dt);
+            }
         }
         if !in_menu && !self.crashed && dt > 0.0 && self.replay.is_none() {
             self.rec.push(self.time, &self.plane);
@@ -7227,7 +7261,9 @@ impl Game {
             self.destr.instances(cam, &mut insts, &mut fall);
             self.destr.skin_frame(cam);
             self.destr.upload_skins(&self.r);
+            self.world.hide_bridge = self.ground.gate.filter(|_| self.ground.bridge > 0.0);
             self.world.airport_instances(cam, self.wx.wind_from as f32, (self.wx.wind * 1.94384) as f32, self.time, &mut insts, &mut air_lights);
+            self.ground_instances(cam, &mut insts);
             let world = &self.world;
             let before = insts.len();
             self.birds.instances(cam, 2.0 * (fov as f64 * 0.5).tan() / h as f64, &|rel, r| world.in_view(rel, r), &mut insts);
@@ -7792,11 +7828,11 @@ impl Game {
                                 match self.menu.airport {
                                     Some(i) => {
                                         let a = &db.apts[i as usize];
-                                        let items = [(t!("game.runway"), self.menu.start == menu::Start::Runway), (t!("game.final"), self.menu.start == menu::Start::Approach), (t!("game.overhead"), self.menu.start == menu::Start::Overhead)];
-                                        if let Some(k) = menu::choice_grid(ui, 3, &items) {
-                                            self.menu.start = [menu::Start::Runway, menu::Start::Approach, menu::Start::Overhead][k];
+                                        let items = [(tr_en("Stand"), self.menu.start == menu::Start::Stand), (t!("game.runway"), self.menu.start == menu::Start::Runway), (t!("game.final"), self.menu.start == menu::Start::Approach), (t!("game.overhead"), self.menu.start == menu::Start::Overhead)];
+                                        if let Some(k) = menu::choice_grid(ui, 4, &items) {
+                                            self.menu.start = [menu::Start::Stand, menu::Start::Runway, menu::Start::Approach, menu::Start::Overhead][k];
                                         }
-                                        if self.menu.start != menu::Start::Overhead && !a.rwys.is_empty() {
+                                        if !matches!(self.menu.start, menu::Start::Overhead | menu::Start::Stand) && !a.rwys.is_empty() {
                                             let into_wind = t!("game.into_the_wind");
                                             menu::form_row(ui, t!("game.runway"), "", |ui| {
                                                 egui::ComboBox::from_id_salt("start_runway").width(150.0).selected_text(RichText::new(self.menu.runway.clone().unwrap_or_else(|| into_wind.to_string())).font(menu::label())).show_ui(ui, |ui| {
@@ -7837,6 +7873,7 @@ impl Game {
                             let how = if ground {
                                 let first = if self.menu.start == menu::Start::Runway { t!("game.runway") } else { t!("game.final") };
                                 match &self.menu.runway {
+                                    _ if self.menu.start == menu::Start::Stand => tr_en("Parked at a stand").to_string(),
                                     Some(rw) => format!("{first} {rw}"),
                                     None => t!("game.into_the_wind_2", first),
                                 }
@@ -7873,7 +7910,7 @@ impl Game {
                             ui.set_width(ui.available_width());
                             let ground = self.menu.airport.is_some() && self.menu.start != menu::Start::Overhead;
                             let flight = if ground {
-                                (if self.menu.start == menu::Start::Runway { t!("game.on_the_runway") } else { t!("game.final_approach") }).to_string()
+                                (match self.menu.start { menu::Start::Runway => t!("game.on_the_runway"), menu::Start::Stand => tr_en("Parked at a stand"), _ => t!("game.final_approach") }).to_string()
                             } else {
                                 format!("{:.0} ft · {:03.0}°", (self.menu.start_agl * 3.28084 / 50.0).round() * 50.0, self.heading.to_degrees().rem_euclid(360.0))
                             };
@@ -7881,6 +7918,8 @@ impl Game {
                             menu::section(ui, "flight", t!("game.flight"), &flight, false, |ui| {
                                 menu::hint(ui, if !ground {
                                     t!("game.starting_in_the_air")
+                                } else if self.menu.start == menu::Start::Stand {
+                                    tr_en("Starting parked at a stand. The Ground page (Tab) has the pushback, the jet bridge and fuel.")
                                 } else if self.menu.start == menu::Start::Runway {
                                     t!("game.starting_on_the_runway_ready")
                                 } else {
@@ -8298,6 +8337,7 @@ impl Game {
                         Page::Weather => self.wx.card(ui, &mut self.utc, &mut self.doy, lon),
                         Page::Checklist => self.checklist_page(ui),
                         Page::Atc => self.atc_page(ui),
+                        Page::Ground => self.ground_page(ui),
                         _ => self.flight_page(ui),
                     }
                     padui::follow_focus(ui);
