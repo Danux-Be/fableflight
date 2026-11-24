@@ -518,7 +518,7 @@ fn controls(b: &mut Builder, f: &Face) {
     let mut at = Vec::new();
     for mut p in h.pieces {
         // (Its gear handle is on a panel that is not here.)
-        if p.name == "gear handle" {
+        if p.name == "gear handle" || p.name == "parking brake handle" {
             at.push(None);
             continue;
         }
