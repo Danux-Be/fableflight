@@ -1,4 +1,6 @@
 mod airframe;
+mod atc;
+mod checklist;
 mod airfield;
 mod airmodels;
 mod airports;
@@ -1564,6 +1566,9 @@ struct Game {
     throttle_axis: Option<f64>,
     /// --bench: the frame times being gathered for the launcher's graphics test
     bench: Option<Bench>,
+    /// the checklists' ticks (checklist.rs), and the controllers (atc.rs)
+    checks: checklist::Checklists,
+    atc: atc::Atc,
 }
 
 /// The launcher's graphics test (`--bench SECONDS`): after a settling time
@@ -1879,7 +1884,7 @@ impl Game {
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
-            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new),
+            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(),
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
             live: live::Live::new(prefs.live_traffic),
@@ -5188,6 +5193,8 @@ impl Game {
         self.keep_settings(true);
         self.plan.begin((lat, lon));
         self.contrails.clear();
+        self.atc.reset();
+        self.checks.reset(checklist::lists(aircraft::nth(self.menu.aircraft)));
         if let Some(i) = self.menu.airport.filter(|_| self.menu.start != menu::Start::Overhead) {
             self.start_airport(i, self.menu.runway.clone(), self.menu.start == menu::Start::Approach, false);
             return;
@@ -6041,6 +6048,7 @@ impl Game {
         self.time += dt;
         if !in_menu && !self.crashed && dt > 0.0 {
             self.log_step(dt);
+            self.atc_step(dt);
         }
         let mut glass_rain = 0.0f32;
         if !in_menu {
@@ -8231,6 +8239,8 @@ impl Game {
                         Page::Radio => self.radio_page(ui),
                         Page::Autopilot => self.autopilot_page(ui),
                         Page::Weather => self.wx.card(ui, &mut self.utc, &mut self.doy, lon),
+                        Page::Checklist => self.checklist_page(ui),
+                        Page::Atc => self.atc_page(ui),
                         _ => self.flight_page(ui),
                     }
                     padui::follow_focus(ui);
@@ -8607,6 +8617,7 @@ impl Game {
                 }
             }
             self.hotspot_overlay(ctx);
+            self.atc_subtitles(ctx);
             // a ring on each aircraft in range, tags on the nearest that do not overlap.
             if let (true, Some((vp, cam))) = (self.hud_on() && self.live.enabled(), self.live_view) {
                 let screen = ctx.content_rect();

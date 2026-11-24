@@ -31,6 +31,9 @@ pub struct Entry {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Profile {
     pub name: String,
+    /// the callsign atc knows the pilot by (empty: one made up for the aircraft).
+    #[serde(default)]
+    pub callsign: String,
     /// unix seconds the profile began.
     pub since: u64,
     pub log: Vec<Entry>,

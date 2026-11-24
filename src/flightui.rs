@@ -175,6 +175,8 @@ pub fn page_icon(p: Page) -> Icon {
         Page::Radio => Icon::Radio,
         Page::Autopilot => Icon::Autopilot,
         Page::Weather => Icon::Weather,
+        Page::Checklist => Icon::Checklist,
+        Page::Atc => Icon::Atc,
         _ => Icon::Flight,
     }
 }
@@ -1008,7 +1010,7 @@ pub struct Radial {
 }
 
 /// how many items the flight menu has.
-pub const RADIAL_N: usize = 7;
+pub const RADIAL_N: usize = 9;
 
 /// ring radii: the hub, the ring's inside and outside.
 const HUB_R: f32 = 58.0;
@@ -1077,6 +1079,8 @@ impl Game {
             (Icon::Autopilot, t!("flight.autopilot"), Bar::Autopilot, self.ap_bar_on),
             (Icon::Weather, t!("flight.weather"), Bar::Page(Page::Weather), page(Page::Weather)),
             (Icon::Map, t!("flight.map"), Bar::Map, self.minimap.visible),
+            (Icon::Checklist, crate::tr_en("Checklist"), Bar::Page(Page::Checklist), page(Page::Checklist)),
+            (Icon::Atc, crate::tr_en("ATC"), Bar::Page(Page::Atc), page(Page::Atc)),
             (Icon::Camera, match self.cam_mode { 1 => "Cockpit", crate::settings::TAIL_VIEW => t!("flight.fixed_rear"), _ => t!("flight.chase") }, Bar::Camera, false),
         ]
     }

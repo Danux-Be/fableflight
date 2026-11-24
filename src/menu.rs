@@ -827,10 +827,14 @@ pub enum Page {
     /// the keyboard and gamepad reference
     Controls,
     Failures,
+    /// the aircraft's checklists (checklist.rs)
+    Checklist,
+    /// the com radio and the controllers (atc.rs)
+    Atc,
 }
 
 impl Page {
-    pub const INFO: [Page; 5] = [Page::Flight, Page::Places, Page::Radio, Page::Autopilot, Page::Weather];
+    pub const INFO: [Page; 7] = [Page::Flight, Page::Places, Page::Radio, Page::Autopilot, Page::Weather, Page::Checklist, Page::Atc];
     pub const PAUSE: [Page; 4] = [Page::Game, Page::Settings, Page::Controls, Page::Failures];
 
     pub fn name(self) -> &'static str {
@@ -844,6 +848,8 @@ impl Page {
             Page::Settings => "Settings",
             Page::Controls => "Controls",
             Page::Failures => "Failures",
+            Page::Checklist => "Checklist",
+            Page::Atc => "ATC",
         }
     }
 
@@ -1058,6 +1064,8 @@ pub enum Icon {
     Weather,
     Map,
     Camera,
+    Checklist,
+    Atc,
 }
 
 /// draws an icon `s` across, centred on `c`.
@@ -1138,6 +1146,31 @@ pub fn icon(p: &egui::Painter, which: Icon, c: egui::Pos2, s: f32, col: Color32)
             p.rect_stroke(r, 2.0, st, egui::StrokeKind::Middle);
             p.line_segment([pos2(c.x - u * 0.35, r.top() - u * 0.2), pos2(c.x + u * 0.35, r.top() - u * 0.2)], st);
             p.circle_stroke(r.center(), u * 0.36, st);
+        }
+        // a clipboard with ticked lines.
+        Icon::Checklist => {
+            let r = egui::Rect::from_center_size(c + vec2(0.0, u * 0.08), vec2(s * 0.72, s * 0.9));
+            p.rect_stroke(r, 2.0, st, egui::StrokeKind::Middle);
+            p.rect_filled(egui::Rect::from_center_size(pos2(c.x, r.top()), vec2(u * 0.5, u * 0.22)), 1.0, col);
+            for k in 0..3 {
+                let y = r.top() + r.height() * (0.3 + 0.24 * k as f32);
+                let x = r.left() + u * 0.18;
+                p.line(vec![pos2(x, y), pos2(x + u * 0.1, y + u * 0.1), pos2(x + u * 0.26, y - u * 0.1)], st);
+                p.line_segment([pos2(x + u * 0.42, y), pos2(r.right() - u * 0.16, y)], st);
+            }
+        }
+        // a headset.
+        Icon::Atc => {
+            let pi = std::f32::consts::PI;
+            p.add(egui::Shape::line(arc(c + vec2(0.0, u * 0.1), u * 0.72, pi * 1.05, pi * 1.95), st));
+            for sx in [-1.0, 1.0] {
+                let e = egui::Rect::from_center_size(c + vec2(sx * u * 0.72, u * 0.28), vec2(u * 0.34, u * 0.62));
+                p.rect_stroke(e, 3.0, st, egui::StrokeKind::Middle);
+            }
+            let m = arc(c + vec2(u * 0.15, u * 0.35), u * 0.55, 0.1, pi * 0.55);
+            let end = *m.last().unwrap_or(&c);
+            p.add(egui::Shape::line(m, st));
+            p.circle_filled(end, u * 0.12, col);
         }
     }
 }
