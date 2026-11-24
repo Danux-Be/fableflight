@@ -25,7 +25,8 @@ const APEX_Z: f32 = -0.26;
 /// The footwell's front wall, just aft of the firewall.
 const TOE_Z: f32 = FIREWALL_Z + 0.05;
 
-const PANEL_COL: Mat = mt(mat::PLASTIC, 0.030, 0.031, 0.034);
+/// The Robin's panel and console: a medium grey, the instruments black in it.
+const PANEL_COL: Mat = mt(mat::PLASTIC, 0.105, 0.11, 0.12);
 const TRIM: Mat = mt(mat::PLASTIC, 0.30, 0.295, 0.28);
 /// Dark leatherette: seat bolsters, armrests, the sill pads.
 const VINYL: Mat = mt(mat::PLASTIC, 0.038, 0.039, 0.043);

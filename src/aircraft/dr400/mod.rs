@@ -18,6 +18,28 @@
 //! and oil door. The two round cooling inlets in the nose bowl are cut out
 //! of the skin there too (`inlet_dr400`), onto ducts built here.
 //!
+//! The shape was checked in Blender against these, overlaid in orthographic
+//! side, top and front views:
+//! - a three-view line drawing, "Dreiseitenansicht Robin DR 400.svg" by
+//!   Frank Murmann, CC BY 3.0,
+//!   <https://commons.wikimedia.org/wiki/File:Dreiseitenansicht_Robin_DR_400.svg>.
+//!   Its views are not drawn to one scale: the side view was scaled to the
+//!   6.96 m length (187.5 px/m at 2400 px wide), the top and front views to
+//!   the 8.72 m span (about 174 px/m). Read from it: the centre section out
+//!   to 2.63 m, tip chord about 0.93 m, the root glove 0.42 m ahead of the
+//!   leading edge, flap chord about 0.25 m, the canopy line from 0.60 m over
+//!   the windscreen frame to 0.15 m at the fin fillet, the belly from 0.74 m
+//!   under the cabin to 0.45 m under the rudder (heights from the hub).
+//! - side photographs of F-GNNE, "Robin DR400 F-GNNE at Blois in 2015" by
+//!   Mike Illien, CC BY 2.0, <https://commons.wikimedia.org/wiki/File:Robin_DR400_F-GNNE_at_Blois_in_2015.jpg>
+//!   (taken a little from ahead, so lengths there were not measured; it
+//!   settled the glazing ending behind the rear seats, the deep tail cone and
+//!   the gear's height), and a head-on photograph,
+//!   <https://commons.wikimedia.org/wiki/File:Robin_DR400-140B_Dauphin_-_front_view.jpg>,
+//!   showing the flat centre section running well past the main wheels.
+//! Where the drawing and the 2.23 m height disagree (it puts the fin 0.1 m
+//! higher), the height was kept.
+//!
 //! Body frame as everywhere: +X right, +Y up, -Z forward; the geometry is
 //! laid out in a design frame `DZ` ahead of it (see `DZ`).
 pub mod cabin;
