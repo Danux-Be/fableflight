@@ -34,6 +34,9 @@ pub struct Profile {
     /// the callsign atc knows the pilot by (empty: one made up for the aircraft).
     #[serde(default)]
     pub callsign: String,
+    /// the best scores of the missions and landing challenges (missions.rs), by id.
+    #[serde(default)]
+    pub best: std::collections::HashMap<String, u32>,
     /// unix seconds the profile began.
     pub since: u64,
     pub log: Vec<Entry>,
