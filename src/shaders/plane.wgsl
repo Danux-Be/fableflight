@@ -2210,7 +2210,8 @@ fn surface(in: VOut) -> Shaded {
   let spec = l.sun * ggx(max(dot(N, H), 0.0), a) * vis(ndv, ndl, a) * Fs * ndl * sh * spec_k;
   // Inside the cabin, light bounces around off every surface: a fill that the
   // occlusion term alone would miss.
-  var inside = step(abs(L.x), 0.58) * step(-1.42, L.z) * step(L.z, 1.5) * step(L.y, 0.62) * select(0.0, 1.0, id != M_LIVERY && pt != P_FUSE && pt != P_COWL);
+  // (a box round the cessna's cabin; the glider and the helicopter, kinds 10 and 11, are not shaped like it)
+  var inside = step(abs(L.x), 0.58) * step(-1.42, L.z) * step(L.z, 1.5) * step(L.y, 0.62) * select(0.0, 1.0, id != M_LIVERY && pt != P_FUSE && pt != P_COWL && kind() < 10u);
   if (kind() == 1u) { inside = step(abs(L.x), 2.2) * step(-29.0, L.z) * step(L.z, -22.4) * step(1.9, L.y) * select(0.0, 1.0, id != M_LIVERY && pt != P_FUSE); }
   // The Hornet's cockpit tub, under its canopy.
   if (kind() == 2u) { inside = step(abs(L.x), 0.56) * step(-6.2, L.z) * step(L.z, -3.1) * step(0.0, L.y) * select(0.0, 1.0, pt != P_HORNET); }
