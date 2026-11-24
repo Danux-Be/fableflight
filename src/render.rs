@@ -24,6 +24,9 @@ pub(crate) fn msaa() -> u32 {
     MSAA_N.load(std::sync::atomic::Ordering::Relaxed)
 }
 const MAX_INST: usize = 16384;
+/// scenery instances drawn in a frame, and materials in all the packs together
+const MAX_SCENERY: usize = 8192;
+const SC_MATS: usize = 128;
 const MAX_FALL: usize = 4096;
 /// trees and undergrowth close enough to the camera for their leaf cards
 pub const MAX_NEAR: usize = 20000;
@@ -238,6 +241,10 @@ pub struct Globals {
     /// rgb = 1 / max(albedo mean, 0.02), w = cavity mean; det_hmean = height mean (4 per vec4)
     pub det_mean: [[f32; 4]; 16],
     pub det_hmean: [[f32; 4]; 4],
+    /// apron floodlights lighting the ground and what stands on it (common.wgsl
+    /// `flood_light`), eight, two each: camera-relative lamp + intensity (0 =
+    /// none, and none after it); beam direction + cosine of its half-angle
+    pub flood: [[f32; 4]; 16],
 }
 
 /// Raindrops drawn around the camera in rain (as many as the rain is heavy show).
@@ -591,6 +598,8 @@ pub struct FieldGpu {
 pub struct TileGpu {
     vbuf: wgpu::Buffer,
     bind: wgpu::BindGroup,
+    /// gpu bytes, for the streaming budget (world.rs `keep_budget`)
+    pub bytes: usize,
     radius: f32,
     wet: bool,
     all_water: bool,
@@ -649,6 +658,8 @@ pub struct BuildGpu {
     bind: wgpu::BindGroup,
     road: Option<(wgpu::Buffer, wgpu::Buffer, u32)>,
     pub trees: Option<wgpu::Buffer>,
+    /// gpu bytes, for the streaming budget (world.rs `keep_budget`)
+    pub bytes: usize,
 }
 impl BuildGpu {
     /// The cells (bit per cell) with geometry inside a shadow cascade's box,
@@ -721,6 +732,10 @@ impl BuildGpu {
 /// The bytes each of `BuildGpu::targets` is filled with.
 pub fn building_payload(b: &crate::buildings::BuildingData) -> [&[u8]; 5] {
     [bytemuck::cast_slice(&b.verts), bytemuck::cast_slice(&b.indices), bytemuck::cast_slice(&b.road_verts), bytemuck::cast_slice(&b.road_idx), bytemuck::cast_slice(&b.trees)]
+}
+/// gpu bytes of a building tile, for the streaming budget.
+pub fn building_bytes(b: &crate::buildings::BuildingData) -> usize {
+    building_payload(b).iter().map(|p| p.len()).sum::<usize>() + b.atlas.iter().map(|m| m.len()).sum::<usize>()
 }
 /// Bytes of a terrain tile's upload, for the per-frame upload budget.
 pub fn tile_bytes(t: &crate::sources::TileData) -> usize {
@@ -799,6 +814,8 @@ pub struct ObjFast {
     kind: u32,
     cut: wgpu::RenderPipeline,
     solid: wgpu::RenderPipeline,
+    /// depth only, for the whole pieces before `solid` shades them
+    pre: wgpu::RenderPipeline,
 }
 
 /// triangles of instrument faces (9) and displays (14) moved to the end, and where they start.
@@ -971,23 +988,49 @@ fn obj_generic_rest(d: &wgpu::Device, l0: &wgpu::BindGroupLayout, l_obj: &wgpu::
     ObjRest { shadow, shadow_solid, glass: p_glass }
 }
 
-/// the g-buffer pipeline for aircraft parts, mode 0 or 5 of `geom`.
-fn obj_pipeline(d: &wgpu::Device, layout: &wgpu::PipelineLayout, m: &wgpu::ShaderModule, cut: bool) -> wgpu::RenderPipeline {
+/// The specialised aircraft pipelines (`ObjFast`): cut pieces, whole pieces,
+/// and a depth prepass of the whole pieces, so the heavy shader runs once per
+/// visible pixel rather than for every layer of the cockpit (11.4 -> 3.2 ms of
+/// cockpit shading on an RTX 2050). The prepass and the shading share a module
+/// and an `@invariant` position (plane.wgsl), so their depths match exactly.
+#[derive(Clone, Copy, PartialEq)]
+enum ObjPass {
+    Cut,
+    Solid,
+    Pre,
+}
+fn obj_pipeline(d: &wgpu::Device, layout: &wgpu::PipelineLayout, m: &wgpu::ShaderModule, pass: ObjPass) -> wgpu::RenderPipeline {
     const A_PART: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x2, 4 => Float32x4];
     let opts = wgpu::PipelineCompilationOptions::default();
+    let w = if pass == ObjPass::Pre { wgpu::ColorWrites::empty() } else { wgpu::ColorWrites::ALL };
     let targets = [
-        Some(wgpu::ColorTargetState { format: HDR, blend: None, write_mask: wgpu::ColorWrites::ALL }),
-        Some(wgpu::ColorTargetState { format: HDR, blend: None, write_mask: wgpu::ColorWrites::ALL }),
-        Some(wgpu::ColorTargetState { format: AMB, blend: None, write_mask: wgpu::ColorWrites::ALL }),
+        Some(wgpu::ColorTargetState { format: HDR, blend: None, write_mask: w }),
+        Some(wgpu::ColorTargetState { format: HDR, blend: None, write_mask: w }),
+        Some(wgpu::ColorTargetState { format: AMB, blend: None, write_mask: w }),
     ];
+    // whole pieces are shaded on their own prepass depth
+    let compare = if pass == ObjPass::Solid { wgpu::CompareFunction::GreaterEqual } else { wgpu::CompareFunction::Greater };
     d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("obj fast"),
+        label: Some(match pass {
+            ObjPass::Cut => "obj fast cut",
+            ObjPass::Solid => "obj fast solid",
+            ObjPass::Pre => "obj fast depth prepass",
+        }),
         layout: Some(layout),
         vertex: wgpu::VertexState { module: m, entry_point: Some("vs"), compilation_options: opts.clone(), buffers: &[Some(wgpu::VertexBufferLayout { array_stride: 64, step_mode: wgpu::VertexStepMode::Vertex, attributes: &A_PART })] },
         primitive: Default::default(),
-        depth_stencil: Some(wgpu::DepthStencilState { format: DEPTH, depth_write_enabled: Some(true), depth_compare: Some(wgpu::CompareFunction::Greater), stencil: Default::default(), bias: Default::default() }),
+        depth_stencil: Some(wgpu::DepthStencilState { format: DEPTH, depth_write_enabled: Some(true), depth_compare: Some(compare), stencil: Default::default(), bias: Default::default() }),
         multisample: wgpu::MultisampleState { count: msaa(), mask: !0, alpha_to_coverage_enabled: false },
-        fragment: Some(wgpu::FragmentState { module: m, entry_point: Some(if cut { "fs" } else { "fs_solid" }), compilation_options: opts, targets: &targets }),
+        fragment: Some(wgpu::FragmentState {
+            module: m,
+            entry_point: Some(match pass {
+                ObjPass::Cut => "fs",
+                ObjPass::Solid => "fs_solid",
+                ObjPass::Pre => "fs_pre",
+            }),
+            compilation_options: opts,
+            targets: &targets,
+        }),
         multiview_mask: None,
         cache: None,
     })
@@ -1048,12 +1091,17 @@ pub struct Frame<'a> {
     pub objs: Vec<DrawObj>,
     /// (mesh, instance) for cars, rubble, rocks
     pub insts: Vec<(u32, Inst)>,
+    /// (mesh, instance) of the hand-made airport scenery (scenery.rs)
+    pub scenery: Vec<(u32, Inst)>,
     /// (tree mesh, instance) for trees that have been knocked loose, camera-relative
     pub fall: Vec<(u32, TreeInst)>,
     /// trees (for their leaf cards) and undergrowth near the camera, relative to their tiles
     pub near: Vec<TreeInst>,
     /// shadow cascades, the aircraft's shadow, the 3D tiles' coverage mask
     pub casc_vp: [[[f32; 4]; 4]; CASCADES + 4],
+    /// bit per cascade kept from an earlier frame and not drawn (main.rs
+    /// `casc_keep`: the outer two take turns)
+    pub casc_skip: u8,
     /// the shore field's part this frame (shore.rs), and for drawing its
     /// mask: the new square's centre (camera-relative) and the terrain tiles
     /// near it that are out of view (their uniforms follow the view tiles')
@@ -1155,6 +1203,8 @@ pub struct Renderer {
     /// a GPU that shares the CPU's memory and power (Apple silicon, laptop
     /// chips): the defaults trade a little for speed there
     pub integrated: bool,
+    /// the GPU's own memory in bytes if known (Vulkan), sizes the streaming budget
+    pub vram: Option<u64>,
     /// the GPU's PCI vendor id (0x8086 Intel, 0x1002 AMD, 0x10de NVIDIA)
     pub vendor: u32,
     /// the volumetric clouds drawn (graphics settings; off skips their march)
@@ -1221,6 +1271,14 @@ pub struct Renderer {
     fall_buf: wgpu::Buffer,
     tree_lib: Option<MeshLib>,
     inst_lib: Option<MeshLib>,
+    /// hand-made airport scenery (scenery.rs): pipelines, its materials and
+    /// textures (group 1), its meshes and this frame's instances
+    p_scenery: wgpu::RenderPipeline,
+    p_scenery_shadow: wgpu::RenderPipeline,
+    l_scenery: wgpu::BindGroupLayout,
+    scenery_buf: wgpu::Buffer,
+    scenery_lib: Option<MeshLib>,
+    bg_scenery: Option<wgpu::BindGroup>,
     l_tile: wgpu::BindGroupLayout,
     l_build: wgpu::BindGroupLayout,
     l_comp_cls: wgpu::BindGroupLayout,
@@ -1264,6 +1322,11 @@ pub struct Renderer {
     photo_mask: wgpu::TextureView,
     /// the mask holds something that has to be cleared when no tiles are drawn
     photo_mask_dirty: bool,
+    /// the mask is allocated at full size: it starts at 1x1 (128 MB saved)
+    /// until the first 3D tile is drawn (`grow_photo_mask`)
+    photo_mask_big: bool,
+    /// the sun shadow map's array view, to make `bg0` again
+    shadow_all: wgpu::TextureView,
     /// how far each building tile around the camera has faded in (`Frame::cover`)
     light_cover: wgpu::Texture,
     light_cover_view: wgpu::TextureView,
@@ -1464,10 +1527,25 @@ struct Bg0Src {
     gclouds: wgpu::TextureView,
     snow: wgpu::TextureView,
     snow_track: wgpu::TextureView,
+    /// stand-ins for the shadow passes' variant (`make_shadow_pass`)
+    black: wgpu::TextureView,
+    dummy_depth: wgpu::TextureView,
+    dummy_vol: wgpu::TextureView,
+    no_cs: wgpu::TextureView,
 }
 
 impl Bg0Src {
     fn make(&self, d: &wgpu::Device, shadow: &wgpu::TextureView) -> wgpu::BindGroup {
+        self.make_with(d, &self.sky, shadow, &self.vol, &self.cs)
+    }
+
+    /// The variant the shadow passes use (`bg0_shadow`): it reads the photo
+    /// mask, so it is made again when the mask is (`grow_photo_mask`).
+    fn make_shadow_pass(&self, d: &wgpu::Device) -> wgpu::BindGroup {
+        self.make_with(d, &self.black, &self.dummy_depth, &self.dummy_vol, &self.no_cs)
+    }
+
+    fn make_with(&self, d: &wgpu::Device, sky: &wgpu::TextureView, shadow: &wgpu::TextureView, vol: &wgpu::TextureView, cs: &wgpu::TextureView) -> wgpu::BindGroup {
         fn samp(b: u32, s: &wgpu::Sampler) -> wgpu::BindGroupEntry<'_> {
             wgpu::BindGroupEntry { binding: b, resource: wgpu::BindingResource::Sampler(s) }
         }
@@ -1478,7 +1556,7 @@ impl Bg0Src {
                 buf_res(0, &self.ub, 0),
                 tex_res(1, &self.trans),
                 tex_res(2, &self.ms),
-                tex_res(3, &self.sky),
+                tex_res(3, sky),
                 tex_res(4, &self.noise),
                 tex_res(5, &self.wave),
                 samp(6, &self.s_clamp),
@@ -1486,12 +1564,12 @@ impl Bg0Src {
                 tex_res(8, shadow),
                 samp(9, &self.s_shadow),
                 samp(10, &self.s_aniso),
-                tex_res(11, &self.vol),
+                tex_res(11, vol),
                 tex_res(12, &self.det_alb),
                 tex_res(13, &self.det_nrm),
                 samp(14, &self.s_detail),
                 tex_res(15, &self.mask),
-                tex_res(16, &self.cs),
+                tex_res(16, cs),
                 tex_res(17, &self.ocean),
                 tex_res(18, &self.shore),
                 tex_res(19, &self.glow),
@@ -1596,6 +1674,45 @@ const PAINT_UB: u64 = 112;
 fn paint_box(paint: Option<&crate::aircraft::Paint>) -> [f32; 8] {
     let Some(p) = paint else { return [0.0; 8] };
     [p.span as f32, p.length as f32, (p.centre[0] + p.length * 0.5) as f32, (p.span * 0.5 - p.centre[1]) as f32, p.views as f32, p.relief, p.sheen, 0.0]
+}
+
+/// A texture array from square RGBA8 pictures, with its mip chain (each
+/// texel of a level the mean of the four under it).
+fn layer_texture(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, size: u32, layers: &[Vec<u8>], format: wgpu::TextureFormat) -> wgpu::TextureView {
+    let mips = 32 - size.leading_zeros();
+    let t = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: layers.len() as u32 },
+        mip_level_count: mips,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (layer, px) in layers.iter().enumerate() {
+        let (mut cur, mut w) = (px.clone(), size);
+        for level in 0..mips {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &t, mip_level: level, origin: wgpu::Origin3d { x: 0, y: 0, z: layer as u32 }, aspect: wgpu::TextureAspect::All },
+                &cur,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(w) },
+                wgpu::Extent3d { width: w, height: w, depth_or_array_layers: 1 },
+            );
+            let nw = (w / 2).max(1);
+            let mut next = vec![0u8; (nw * nw * 4) as usize];
+            for y in 0..nw {
+                for x in 0..nw {
+                    for c in 0..4 {
+                        let s = |dx: u32, dy: u32| cur[(((y * 2 + dy).min(w - 1) * w + (x * 2 + dx).min(w - 1)) * 4 + c) as usize] as u32;
+                        next[((y * nw + x) * 4 + c) as usize] = ((s(0, 0) + s(1, 0) + s(0, 1) + s(1, 1) + 2) / 4) as u8;
+                    }
+                }
+            }
+            (cur, w) = (next, nw);
+        }
+    }
+    t.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() })
 }
 
 /// An aircraft's paint (`aircraft::Paint`, e.g. the Hornet's
@@ -1921,6 +2038,11 @@ impl Renderer {
         log::info!("GPU: {} ({:?})", info.name, info.device_type);
         crate::progress::step("gpu");
         let integrated = info.device_type == wgpu::DeviceType::IntegratedGpu;
+        let vram = vram_bytes(&adapter);
+        match vram {
+            Some(b) => log::info!("GPU memory: {} MB", b >> 20),
+            None => log::info!("GPU memory: unknown"),
+        }
         let samples = samples.unwrap_or(if !integrated { 4 } else if info.vendor == 0x8086 { 1 } else { 2 });
         // Intel integrated GPUs hang (i915 "GPU HANG ... context reset", then a lost
         // device) within a minute of the start screen at 4x; 2x runs clean (seen on
@@ -2197,7 +2319,8 @@ impl Renderer {
             ],
         });
         // Coverage of the photorealistic 3D tiles, seen from above (tiles3d.rs).
-        let photo_mask = view(&make_tex(d, "photo mask", PHOTO_MASK, PHOTO_MASK, 1, 1, PHOTO_MASK_FMT, rt));
+        // 1x1 until the first 3D tile shows up (`grow_photo_mask`): 128 MB at full size.
+        let photo_mask = view(&make_tex(d, "photo mask", 1, 1, 1, 1, PHOTO_MASK_FMT, rt));
         let light_cover = make_tex(d, "light cover", COVER_N as u32, COVER_N as u32, 1, 1, wgpu::TextureFormat::R8Unorm, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
         let light_cover_view = view(&light_cover);
         let glow_tex = make_tex(d, "city glow", crate::skyglow::N as u32, crate::skyglow::N as u32, 1, 1, wgpu::TextureFormat::Rgba16Float, wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST);
@@ -2247,10 +2370,11 @@ impl Renderer {
             layout: l0.clone(), ub: globals_ub.clone(), trans: lut_trans.clone(), ms: lut_ms.clone(), sky: lut_sky.clone(), noise: noise.clone(), wave: wave.clone(),
             s_clamp: s_clamp.clone(), s_repeat: s_repeat.clone(), s_shadow: s_shadow.clone(), s_aniso: s_aniso.clone(), vol: vol_light.clone(), det_alb: det_alb.clone(), det_nrm: det_nrm.clone(),
             s_detail: s_detail.clone(), mask: photo_mask.clone(), cs: cs_mix.clone(), ocean: ocean.view.clone(), shore: shore.view.clone(), glow: glow_view.clone(), gclouds: gclouds_view.clone(), snow: snow_view.clone(), snow_track: snow_track_view.clone(),
+            black: black.clone(), dummy_depth: dummy_depth.clone(), dummy_vol: dummy_vol.clone(), no_cs: no_cs.clone(),
         };
         // Variant for passes that render into the LUTs / shadow map / smoke volume / photo mask / cloud shadow themselves.
         let bg0_pre = make_bg0(&black, &lut_trans, &lut_ms, &dummy_depth, &dummy_vol, &no_mask, &no_cs);
-        let bg0_shadow = make_bg0(&black, &lut_trans, &lut_ms, &dummy_depth, &dummy_vol, &photo_mask, &no_cs);
+        let bg0_shadow = bg0_src.make_shadow_pass(d);
         let bg0_boot = make_bg0(&black, &black, &black, &dummy_depth, &dummy_vol, &no_mask, &no_cs);
         let bg0_ms = make_bg0(&black, &lut_trans, &black, &dummy_depth, &dummy_vol, &no_mask, &no_cs);
 
@@ -2302,6 +2426,7 @@ impl Renderer {
         });
         let l_obj = layout("obj", &[ub_entry(0, true, std::mem::size_of::<ObjU>() as u64), tex_entry(1, wgpu::TextureViewDimension::D2Array, false), ub_entry(2, false, PAINT_UB), ub_entry(3, false, font_ub.size())]);
         let l_glass = layout("glass", &[tex_entry(1, d2, false), tex_entry(2, d2, true)]);
+        let l_scenery = layout("scenery", &[ub_entry(0, false, SC_MATS as u64 * 64), tex_entry(1, wgpu::TextureViewDimension::D2Array, false), tex_entry(2, wgpu::TextureViewDimension::D2Array, false)]);
         let ms_entry = |binding, depth| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -2489,7 +2614,7 @@ impl Renderer {
         let (
             (p_cshadow_in, p_cshadow_out, p_cshadow_in_plain, p_cshadow_out_plain, p_cshadow_mix, (p_ap_build, p_sky_build, p_cloud_refl, p_cloud_refl_plain), (p_comp_cls, p_comp_sky, p_comp_opaque, p_comp_glass, p_comp_water, p_comp_edge, p_composite, p_composite_edge), p_cloud, p_cloud_plain, p_cloud_classify, p_cloud_plain_cls, p_cloud_storm_cls, p_cloud_rain, p_cloud_temporal, p_cloud_apply),
             (p_terrain, p_terrain_far, p_terrain_water, p_terrain_tess, p_terrain_cells, p_terrain_photo, p_terrain_tess_photo, p_terrain_cells_photo, p_build, p_build_whole, p_build_shadow, p_photo, p_skin, p_photo_shadow, p_photo_shadow_fast, p_photo_mask, p_water_top, p_shore_cover),
-            (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_veil, p_contrails, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow),
+            (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_veil, p_contrails, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow, p_scenery, p_scenery_shadow),
             (p_trans, p_ms, p_sky, p_gtao, p_ao_blur, p_taa, p_down, p_up, p_final, p_final_taa, p_blit, p_particles, p_psim, p_vol, p_dres),
         ) = std::thread::scope(|s| {
 
@@ -2743,8 +2868,14 @@ impl Renderer {
                 let p_card = geom("leaf cards", Some(&l_tileu), &m_tree, &[vb(72, false, &A_TREEV), vb(36, true, &A_TREE)], 3);
                 let p_inst = geom("inst", None, &m_inst, &[vb(40, false, &A_MESH), vb(80, true, &A_INST)], 0);
                 let p_inst_shadow = geom("inst shadow", None, &m_inst, &[vb(40, false, &A_MESH), vb(80, true, &A_INST)], 1);
+                // Scenery vertex: position, normal and tangent (signed bytes), uv (m), material.
+                const A_SCENERY: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Snorm8x4, 2 => Snorm8x4, 8 => Float32x2, 9 => Uint32];
+                let m_scenery = module("scenery", include_str!("shaders/scenery.wgsl"));
+                let p_scenery = geom("scenery", Some(&l_scenery), &m_scenery, &[vb(32, false, &A_SCENERY), vb(80, true, &A_INST)], 0);
+                // (mode 4: the shadow with its fragment stage, for the fence's cut-out wires)
+                let p_scenery_shadow = geom("scenery shadow", Some(&l_scenery), &m_scenery, &[vb(32, false, &A_SCENERY), vb(80, true, &A_INST)], 4);
                 crate::progress::step("shaders-part");
-                (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_veil, p_contrails, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow)
+                (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_veil, p_contrails, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow, p_scenery, p_scenery_shadow)
             });
 
             let p_trans = full("trans", &pl0, &m_lut, "fs_trans", HDR, None);
@@ -2865,6 +2996,7 @@ impl Renderer {
         let dynbuf = |label: &str, size: u64| d.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let (inst_buf, fall_buf) = (dynbuf("instances", MAX_INST as u64 * 80), dynbuf("loose trees", MAX_FALL as u64 * 36));
         let near_buf = dynbuf("near trees", MAX_NEAR as u64 * 36);
+        let scenery_buf = dynbuf("scenery instances", MAX_SCENERY as u64 * 80);
         let dyn_lights = dynbuf("aircraft lights", MAX_DYN_LIGHTS as u64 * 40);
         let bolt_buf = dynbuf("lightning", crate::storm::MAX_SEGS as u64 * 32);
         let contrail_nodes = d.create_buffer(&wgpu::BufferDescriptor {
@@ -2949,12 +3081,13 @@ impl Renderer {
         Ok(Self {
             ground_mats,
             casc_ub, bg_casc, bg_tileu, l_dres, l_ao, p_gtao, p_ao_blur, p_dres, p_road, p_field, p_lights, dyn_lights, p_rain, p_veil, p_bolt, bolt_buf, p_contrails, bg_contrails, contrail_nodes, contrail_segs, p_tree, p_tree_near, imp, p_tree_shadow, p_tree_shadow_fixed, p_card, near_buf, p_inst, p_inst_shadow, inst_buf, fall_buf, tree_lib: None, inst_lib: None,
+            p_scenery, p_scenery_shadow, l_scenery, scenery_buf, scenery_lib: None, bg_scenery: None,
             gpu_timer: crate::gputime::GpuTimer::new(&device, &queue),
             frame_clock: crate::gputime::FrameClock::new(&device, &queue),
             globals_ub, bg0, bg0_pre, bg0_shadow, lut_sky, shadow, shadow_res: SHADOW_RES, bg0_src, scale: 1.0, ao: true, cloud_step: 1.0, l_tile, l_build, l_comp_cls, l_comp_main, l_comp_edge, l_comp_globe, l_hiz, ap_l, ap_t, cloud_refl, bg_atmlut, bg_comp_sky, p_hiz_build, p_ap_build, p_sky_build, p_cloud_refl, p_cloud_refl_plain, l_cloud, l_cloud_storm, l_cloud_rain, l_cloud_apply, l_cloud_temporal, l_post, l_pdraw, l_glass,
-            tile_ub, l_photo, photo_ub, p_photo, p_photo_mask, p_photo_shadow, p_photo_shadow_fast, l_skin, p_skin, skin_slots, p_water_top, p_lamp_top, photo_mask, photo_mask_dirty: true, light_cover, light_cover_view, glow_tex, gclouds_tex, snow_tex, snow_track_tex, build_ub, obj_ub, bg_obj, l_obj, paint_ub, font_ub, tile_ibuf, tile_nidx: ix.len() as u32,
+            tile_ub, l_photo, photo_ub, p_photo, p_photo_mask, p_photo_shadow, p_photo_shadow_fast, l_skin, p_skin, skin_slots, p_water_top, p_lamp_top, photo_mask, photo_mask_dirty: true, photo_mask_big: false, shadow_all: shadow_all.clone(), light_cover, light_cover_view, glow_tex, gclouds_tex, snow_tex, snow_track_tex, build_ub, obj_ub, bg_obj, l_obj, paint_ub, font_ub, tile_ibuf, tile_nidx: ix.len() as u32,
             p_sky, p_terrain, p_terrain_far, p_terrain_water, p_terrain_tess, p_terrain_cells, p_terrain_photo, p_terrain_tess_photo, p_terrain_cells_photo, tess_ibuf, tess_idx, tess_buf, tess_cap, cell_ibuf, p_build, p_build_whole, p_build_shadow, obj_gen: None, obj_gen_rx: Some(obj_gen_rx), wait_objs: false, obj_wait: None, obj_src, pl_obj, obj_fast: None, obj_fast_rx: None, p_comp_cls, p_comp_sky, p_comp_opaque, p_comp_glass, p_comp_water, p_comp_edge, p_composite, p_composite_edge, p_cloud, p_cloud_plain, p_cloud_classify, p_cloud_plain_cls, p_cloud_storm_cls, p_cloud_rain, p_cloud_apply, p_cloud_temporal, p_particles, p_taa, p_psim, p_down, p_up, p_final, p_final_taa, p_blit,
-            psim_ub, pbuf, bg_psim, phead: 0, p_vol, bg_vol_a, bg_vol_b, vol_acc, fluid, fluid_t, ocean, shore, p_shore_cover, smoke_until: 0.0, parts_until: 0.0, now: 0.0, black, targets, cloud_flip: 0, cloud_hist_ok: false, clouds: true, cloud_shadows: true, vendor: info.vendor, cshadow, lut_bake, lut_haze: 1.0, taa_flip: 0, taa_hist_ok: false, up, gpu: info.clone(), meshes: Vec::new(), egui, instance, window, gpu_error, device_lost, surface, config, queue, device, stats: [0.0; 4], headless: false, integrated,
+            psim_ub, pbuf, bg_psim, phead: 0, p_vol, bg_vol_a, bg_vol_b, vol_acc, fluid, fluid_t, ocean, shore, p_shore_cover, smoke_until: 0.0, parts_until: 0.0, now: 0.0, black, targets, cloud_flip: 0, cloud_hist_ok: false, clouds: true, cloud_shadows: true, vendor: info.vendor, cshadow, lut_bake, lut_haze: 1.0, taa_flip: 0, taa_hist_ok: false, up, gpu: info.clone(), meshes: Vec::new(), egui, instance, window, gpu_error, device_lost, surface, config, queue, device, stats: [0.0; 4], headless: false, integrated, vram,
         })
     }
 
@@ -3145,15 +3278,38 @@ impl Renderer {
         }
     }
 
+    /// rough gpu bytes the renderer holds outside world streaming, at this render scale.
+    pub fn fixed_bytes(&self, scale: f32) -> u64 {
+        let (w, h) = ((self.config.width as f32 * scale) as u64, (self.config.height as f32 * scale) as u64);
+        let px = w * h;
+        // msaa targets, full size targets, half size cloud and bloom
+        let targets = px * (msaa() as u64 * (8 + 8 + 1 + 4) + 7 * 8 + 4 + 4) + px / 4 * (4 * 8 + 2 * 4 + 16 + 2) + px / 4 * 8 * 4 / 3;
+        let shadow = (CASCADES as u64 + 1) * self.shadow_res as u64 * self.shadow_res as u64 * 4;
+        // the rest measured on an rtx 2050, the tree impostors alone are 426 mb
+        targets + shadow + (950 << 20)
+    }
+
     /// A new sun shadow map of this side (texels).
     pub fn set_shadow_res(&mut self, res: u32) {
         let res = res.clamp(256, self.device.limits().max_texture_dimension_2d);
         if res != self.shadow_res {
             let (all, layers) = make_shadow(&self.device, res);
             self.bg0 = self.bg0_src.make(&self.device, &all);
+            self.shadow_all = all;
             self.shadow = layers;
             self.shadow_res = res;
         }
+    }
+
+    /// Allocates the photo mask at full size and makes the bind groups that read it again.
+    fn grow_photo_mask(&mut self) {
+        let rt = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
+        self.photo_mask = view(&make_tex(&self.device, "photo mask", PHOTO_MASK, PHOTO_MASK, 1, 1, PHOTO_MASK_FMT, rt));
+        self.bg0_src.mask = self.photo_mask.clone();
+        self.bg0 = self.bg0_src.make(&self.device, &self.shadow_all);
+        self.bg0_shadow = self.bg0_src.make_shadow_pass(&self.device);
+        self.photo_mask_big = true;
+        self.photo_mask_dirty = true;
     }
 
     pub fn set_vsync(&mut self, on: bool) {
@@ -3191,7 +3347,7 @@ impl Renderer {
             if p[0] > 0 { wet = true; }
             if p[0] <= 127 { all_water = false; }
         }
-        TileGpu { vbuf, bind, radius: t.radius as f32, wet, all_water }
+        TileGpu { vbuf, bind, bytes: tile_bytes(t), radius: t.radius as f32, wet, all_water }
     }
 
     /// Create a building tile's GPU objects. The geometry buffers start out
@@ -3244,7 +3400,7 @@ impl Renderer {
         let bind = d.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &self.l_build, entries: &[buf_res(0, &self.build_ub, 64), tex_res(1, &atlas)] });
         let road = (!b.road_idx.is_empty()).then(|| (buf(bytemuck::cast_slice(&b.road_verts), wgpu::BufferUsages::VERTEX), buf(bytemuck::cast_slice(&b.road_idx), wgpu::BufferUsages::INDEX), b.road_idx.len() as u32));
         let trees = (!b.trees.is_empty()).then(|| buf(bytemuck::cast_slice(&b.trees), wgpu::BufferUsages::VERTEX));
-        BuildGpu { vbuf, ibuf, n_main: b.n_main, n_det: b.n_det, n_far: b.n_far, cell_end: b.cell_end.clone(), cell_bound: b.cell_bound.clone(), bind, road, trees }
+        BuildGpu { bytes: building_bytes(b), vbuf, ibuf, n_main: b.n_main, n_det: b.n_det, n_far: b.n_far, cell_end: b.cell_end.clone(), cell_bound: b.cell_bound.clone(), bind, road, trees }
     }
 
     pub fn upload_field(&self, m: &crate::airfield::FieldMesh) -> FieldGpu {
@@ -3293,6 +3449,50 @@ impl Renderer {
     /// Models for instanced solids (cars, rubble, rocks).
     pub fn set_inst_meshes(&mut self, meshes: &[(Vec<MeshVertex>, Vec<u32>)]) {
         self.inst_lib = Some(self.mesh_lib(meshes));
+    }
+
+    /// The hand-made airport scenery (scenery.rs): every pack's meshes in one
+    /// library (in pack order, as `Pack::mesh_base` counts them), their
+    /// materials and texture layers.
+    pub fn set_scenery(&mut self, packs: &[crate::scenery::Pack]) {
+        let mut meshes = Vec::new();
+        let mut mats: Vec<crate::scenery::SceneryMat> = Vec::new();
+        let size = packs.iter().map(|p| p.tex_size).max().unwrap_or(1).max(1);
+        let (mut base, mut nrm): (Vec<Vec<u8>>, Vec<Vec<u8>>) = (Vec::new(), Vec::new());
+        for p in packs {
+            let (mat0, layer0) = (mats.len() as u32, base.len() as f32);
+            for (b, n) in &p.layers {
+                let fit = |px: &Vec<u8>| if p.tex_size == size { px.clone() } else { image::imageops::resize(&image::RgbaImage::from_raw(p.tex_size, p.tex_size, px.clone()).unwrap(), size, size, image::imageops::FilterType::Triangle).into_raw() };
+                base.push(fit(b));
+                nrm.push(fit(n));
+            }
+            mats.extend(p.mats.iter().map(|m| {
+                let mut m = *m;
+                if m.p[3] >= 0.0 {
+                    m.p[3] += layer0;
+                }
+                m
+            }));
+            for m in &p.meshes {
+                let verts = m.verts.iter().map(|v| crate::scenery::SceneryVertex { mat: v.mat + mat0, ..*v }).collect::<Vec<_>>();
+                meshes.push((verts, m.idx.clone()));
+            }
+        }
+        if meshes.is_empty() {
+            return;
+        }
+        assert!(mats.len() <= SC_MATS, "scenery: {} materials, the shader holds {SC_MATS}", mats.len());
+        if base.is_empty() {
+            base.push(vec![255; (size * size * 4) as usize]);
+            nrm.push([128u8, 128, 200, 0].repeat((size * size) as usize));
+        }
+        mats.resize(SC_MATS, crate::scenery::SceneryMat::zeroed());
+        let d = &self.device;
+        let ub = d.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("scenery materials"), contents: bytemuck::cast_slice(&mats), usage: wgpu::BufferUsages::UNIFORM });
+        let tb = layer_texture(d, &self.queue, "scenery base", size, &base, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let tn = layer_texture(d, &self.queue, "scenery normal", size, &nrm, wgpu::TextureFormat::Rgba8Unorm);
+        self.bg_scenery = Some(d.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("scenery"), layout: &self.l_scenery, entries: &[buf_res(0, &ub, SC_MATS as u64 * 64), tex_res(1, &tb), tex_res(2, &tn)] }));
+        self.scenery_lib = Some(self.mesh_lib(&meshes));
     }
 
     /// The paint of the aircraft being flown (none: `None`): only its pictures are on the GPU.
@@ -3356,11 +3556,13 @@ impl Renderer {
             let f = {
                 let _big = BIG_COMPILE.lock().unwrap_or_else(|e| e.into_inner());
                 let m = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("plane fast"), source: wgpu::ShaderSource::Wgsl(specialise(&src, kind).into()) });
-                let cut = obj_pipeline(&d, &pl, &m, true);
+                let cut = obj_pipeline(&d, &pl, &m, ObjPass::Cut);
                 FAST_STEPS.store(1, Relaxed);
-                let solid = obj_pipeline(&d, &pl, &m, false);
+                let solid = obj_pipeline(&d, &pl, &m, ObjPass::Solid);
                 FAST_STEPS.store(2, Relaxed);
-                ObjFast { kind, cut, solid }
+                // (a trivial fragment shader: quick next to the two above)
+                let pre = obj_pipeline(&d, &pl, &m, ObjPass::Pre);
+                ObjFast { kind, cut, solid, pre }
             };
             FAST_STATE.store(2, Relaxed);
             log::info!("aircraft shader for kind {kind} ready in {:.1} s", t.elapsed().as_secs_f64());
@@ -3492,6 +3694,9 @@ impl Renderer {
         let t_enc = std::time::Instant::now();
         self.stats[1] += (t_enc - t_acq).as_secs_f64();
         crate::gputime::cpu("render.acquire_frame");
+        if !f.photo.is_empty() && !self.photo_mask_big {
+            self.grow_photo_mask();
+        }
         // (asked for first: a screenshot waiting below for the generic set
         // would otherwise hold it back until the 15 s are up)
         let kind = f.objs.iter().find(|o| !o.glass).map(|o| o.glow[1].round().max(0.0) as u32);
@@ -3722,6 +3927,19 @@ impl Renderer {
             }
             q.write_buffer(&self.inst_buf, 0, bytemuck::cast_slice(&data));
             inst_ranges = ranges;
+        }
+        let mut scenery_ranges = Vec::new();
+        if let Some(lib) = &self.scenery_lib {
+            let d2 = |i: &Inst| i.m[0][3] * i.m[0][3] + i.m[1][3] * i.m[1][3] + i.m[2][3] * i.m[2][3];
+            f.scenery.sort_by(|a, b| d2(&a.1).total_cmp(&d2(&b.1)));
+            let n = f.scenery.len().min(MAX_SCENERY);
+            let (order, ranges) = group(lib.ranges.len(), &mut f.scenery.iter().take(n).map(|i| i.0));
+            let mut data = vec![Inst::zeroed(); n];
+            for (k, (_, inst)) in f.scenery.iter().take(n).enumerate() {
+                data[order[k] as usize] = *inst;
+            }
+            q.write_buffer(&self.scenery_buf, 0, bytemuck::cast_slice(&data));
+            scenery_ranges = ranges;
         }
         let mut fall_ranges = Vec::new();
         if let Some(lib) = &self.tree_lib {
@@ -4106,9 +4324,45 @@ impl Renderer {
                 }
                 rmark(rp, lab[3]);
             }
+            if let (Some(lib), Some(bg)) = (self.scenery_lib.as_ref().filter(|_| part & 2 != 0), self.bg_scenery.as_ref()) {
+                rp.set_pipeline(if shadow { &self.p_scenery_shadow } else { &self.p_scenery });
+                rp.set_bind_group(1, bg, &[]);
+                rp.set_vertex_buffer(0, lib.vbuf.slice(..));
+                rp.set_vertex_buffer(1, self.scenery_buf.slice(..));
+                rp.set_index_buffer(lib.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                for (k, r) in scenery_ranges.iter().enumerate() {
+                    if r.1 > r.0 {
+                        let (first, count, base) = lib.ranges[k];
+                        rp.draw_indexed(first..first + count, base, r.0..r.1);
+                    }
+                }
+            }
+            let fast = self.obj_fast.as_ref().filter(|_| !shadow);
+            // Depth prepass of the whole pieces the specialised shader draws
+            // (`ObjPass`): their shading below then runs once per visible pixel.
+            // The instruments and other kinds (generic pipelines) go without.
+            if let Some(fp) = fast.filter(|_| part & 1 != 0) {
+                let mut set = false;
+                for (i, o) in f.objs.iter().take(n_objs).enumerate() {
+                    let m = &self.meshes[o.mesh];
+                    if o.glass || o.cut || m.n_main == 0 || fp.kind != o.glow[1].round() as u32 {
+                        continue;
+                    }
+                    if !set {
+                        rp.set_pipeline(&fp.pre);
+                        set = true;
+                    }
+                    rp.set_bind_group(1, m.bind.as_deref().unwrap_or(&self.bg_obj), &[(i as u64 * OBJ_STRIDE) as u32]);
+                    rp.set_vertex_buffer(0, m.vbuf.slice(..));
+                    rp.set_index_buffer(m.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                    rp.draw_indexed(0..m.n_main, 0, 0..1);
+                }
+                if set {
+                    rmark(rp, "view.aircraft_prepass");
+                }
+            }
             // pipeline set last: 0 generic solid, 1 generic cut, 2 fast solid, 3 fast cut.
             let mut cur: Option<u8> = None;
-            let fast = self.obj_fast.as_ref().filter(|_| !shadow);
             // (until the generic pipelines are built, only what the fast ones draw)
             let generic = self.obj_gen.as_ref();
             let rest = generic.and_then(|g| g.rest.as_ref());
@@ -4231,6 +4485,9 @@ impl Renderer {
         }
         mark(&mut enc, "shore.field");
         for c in 0..CASCADES {
+            if f.casc_skip & (1 << c) != 0 {
+                continue;
+            }
             let mut rp = enc.begin_render_pass(&pass_desc(&[], Some(depth_att(&self.shadow[c], 1.0))));
             if f.g.csm[3] > 0.0 {
                 rp.set_bind_group(0, &self.bg0_shadow, &[]);
@@ -4884,6 +5141,23 @@ impl Renderer {
                 Err(e) => log::error!("screenshot failed: {e}"),
             }
         }
+    }
+}
+
+/// Largest device-local memory heap in bytes (Vulkan only; None elsewhere).
+fn vram_bytes(adapter: &wgpu::Adapter) -> Option<u64> {
+    #[cfg(any(windows, target_os = "linux"))]
+    {
+        // safety: only reads the physical device's memory properties
+        let a = unsafe { adapter.as_hal::<wgpu::hal::api::Vulkan>() }?;
+        let props = unsafe { a.shared_instance().raw_instance().get_physical_device_memory_properties(a.raw_physical_device()) };
+        let heaps = &props.memory_heaps[..props.memory_heap_count as usize];
+        heaps.iter().filter(|h| h.flags.contains(ash::vk::MemoryHeapFlags::DEVICE_LOCAL)).map(|h| h.size).max()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
+    {
+        let _ = adapter;
+        None
     }
 }
 
