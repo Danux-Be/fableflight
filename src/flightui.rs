@@ -587,7 +587,10 @@ impl Game {
         self.heading_strip(ctx, h.hdg as f32);
         self.menu_hint(ctx);
         self.speed_tape(ctx, h, cy);
-        self.altitude_tape(ctx, h, cy);
+        // the altitude tape steps down below a tutorial or job card over it (small or scaled screens).
+        let over = ["hud_hint", "mission_card", "job_card"].iter().filter_map(|n| shown(ctx, n, if *n == "hud_hint" { egui::Order::Background } else { egui::Order::Middle })).map(|r| r.bottom()).fold(f32::NEG_INFINITY, f32::max);
+        let cy_alt = cy.max(over + 36.0 + TAPE_H * 0.5).min(screen.bottom() - TAPE_H * 0.5 - 40.0);
+        self.altitude_tape(ctx, h, cy_alt);
         if self.path_marker {
             self.flight_path_marker(ctx);
         }

@@ -269,64 +269,87 @@ impl Game {
         }
     }
 
-    /// the awards of the last few seconds, at the top of the screen.
+    /// the awards of the last few seconds: achievements and levels as cards in the
+    /// bottom right (sliding up, as steam's do), experience as quiet lines in the bottom left.
     pub(crate) fn toasts_ui(&mut self, ctx: &egui::Context) {
-        const LIFE: f64 = 4.5;
+        const CARD_LIFE: f64 = 5.0;
+        const XP_LIFE: f64 = 2.6;
         let now = self.real;
-        self.toasts.retain(|(_, t0)| now - *t0 < LIFE);
+        self.toasts.retain(|(t, t0)| now - *t0 < if matches!(t, Toast::Xp { .. }) { XP_LIFE } else { CARD_LIFE });
         if self.toasts.is_empty() {
             return;
         }
         let screen = ctx.content_rect();
-        // under the notices at the top centre, if any.
-        let top = if self.mode == crate::Mode::Fly && self.hud_on() {
-            crate::flightui::shown(ctx, "notices", egui::Order::Middle).map_or(crate::flightui::HEADING_TOP + crate::flightui::HEADING_H + 10.0, |r| r.bottom() + 8.0)
-        } else {
-            24.0
-        };
+        let flying = self.mode == crate::Mode::Fly;
         let toasts = self.toasts.clone();
+        // a slide in and out, eased: 0 hidden, 1 in place.
+        let ease = |age: f64, life: f64| -> f32 {
+            let inn = (age / 0.35).min(1.0);
+            let out = ((life - age) / 0.35).clamp(0.0, 1.0);
+            let k = inn.min(out) as f32;
+            1.0 - (1.0 - k).powi(3)
+        };
+        // the bottom right, over google's logo if it is up.
+        let right_floor = crate::flightui::shown(ctx, "attr", egui::Order::Middle).map_or(screen.bottom() - 16.0, |r| r.top() - 10.0);
+        // the bottom left, over the map while flying, over quit on the menus.
+        let left_floor = if flying {
+            crate::flightui::shown(ctx, "minimap", egui::Order::Middle).map_or(screen.bottom() - 16.0, |r| r.top() - 10.0)
+        } else {
+            screen.bottom() - 70.0
+        };
         egui::Area::new(egui::Id::unique("xp_toasts")).order(egui::Order::Tooltip).fixed_pos(screen.min).interactable(false).show(ctx, |ui| {
             let p = ui.painter();
-            let mut y = screen.top() + top;
-            for (t, t0) in toasts.iter().rev().take(4) {
+            let (mut ry, mut ly) = (right_floor, left_floor);
+            for (t, t0) in toasts.iter().rev() {
                 let age = now - t0;
-                // in, held, out.
-                let a = ((age / 0.25).min(1.0) * ((LIFE - age) / 0.6).clamp(0.0, 1.0)) as f32;
-                let slide = (1.0 - (age / 0.25).min(1.0) as f32) * -10.0;
-                let (h, w) = match t {
-                    Toast::Level { .. } => (64.0, 380.0),
-                    Toast::Badge { .. } => (56.0, 380.0),
-                    Toast::Xp { .. } => (34.0, 300.0),
-                };
-                let r = Rect::from_center_size(pos2(screen.center().x, y + h * 0.5 + slide), vec2(w, h));
-                let fill = Color32::from_rgba_premultiplied(9, 12, 17, (225.0 * a) as u8);
-                p.rect_filled(r, menu::R_PANEL, fill);
-                p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, Color32::from_white_alpha((30.0 * a) as u8)), egui::StrokeKind::Inside);
-                let acc = menu::ACCENT.gamma_multiply(a);
-                let white = Color32::WHITE.gamma_multiply(a);
-                let dim = menu::DIM.gamma_multiply(a);
                 match t {
                     Toast::Xp { what, xp } => {
-                        p.text(pos2(r.left() + 14.0, r.center().y), Align2::LEFT_CENTER, format!("+{xp} XP"), menu::bold(17.0), acc);
-                        let g = menu::one_line(p, what, menu::label(), white, r.width() - 110.0);
-                        p.galley(pos2(r.left() + 92.0, r.center().y - g.size().y * 0.5), g, white);
+                        if ly < screen.bottom() * 0.55 {
+                            continue;
+                        }
+                        let a = ease(age, XP_LIFE);
+                        let acc = menu::ACCENT.gamma_multiply(a);
+                        let g = p.layout_no_wrap(format!("+{xp} XP"), menu::semibold(14.0), acc);
+                        let wg = menu::one_line(p, what, menu::caption(), menu::TEXT.gamma_multiply(a), 260.0);
+                        let h = 26.0;
+                        let w = g.size().x + wg.size().x + 30.0;
+                        let r = Rect::from_min_size(pos2(screen.left() + 14.0 - 12.0 * (1.0 - a), ly - h), vec2(w, h));
+                        p.rect_filled(r, menu::R_WIDGET, Color32::from_black_alpha((150.0 * a) as u8));
+                        p.galley(pos2(r.left() + 10.0, r.center().y - g.size().y * 0.5), g.clone(), acc);
+                        p.galley(pos2(r.left() + 18.0 + g.size().x, r.center().y - wg.size().y * 0.5), wg, menu::TEXT);
+                        ly -= h + 6.0;
                     }
-                    Toast::Level { n } => {
-                        p.rect_filled(Rect::from_min_size(r.min, vec2(4.0, r.height())), 0.0, acc);
-                        level_ring(p, pos2(r.left() + 40.0, r.center().y), 22.0, 1.0, *n, a);
-                        p.text(pos2(r.left() + 76.0, r.center().y - 10.0), Align2::LEFT_CENTER, tr_en("LEVEL UP"), menu::bold(20.0), acc);
-                        p.text(pos2(r.left() + 76.0, r.center().y + 13.0), Align2::LEFT_CENTER, format!("{} {n}  ·  {}", tr_en("Level"), tr_en(rank(*n))), menu::label(), white);
-                    }
-                    Toast::Badge { id } => {
-                        let bd = badge(id);
-                        medal(p, pos2(r.left() + 32.0, r.center().y), 17.0, true, a);
-                        p.text(pos2(r.left() + 62.0, r.center().y - 10.0), Align2::LEFT_CENTER, tr_en("ACHIEVEMENT"), menu::semibold(12.0), dim);
-                        p.text(pos2(r.left() + 62.0, r.center().y + 9.0), Align2::LEFT_CENTER, bd.map_or("", |b| tr_en(b.name)), menu::semibold(17.0), white);
+                    Toast::Level { .. } | Toast::Badge { .. } => {
+                        let a = ease(age, CARD_LIFE);
+                        let (w, h) = (330.0, 72.0);
+                        // rises from below its place as it comes in.
+                        let r = Rect::from_min_size(pos2(screen.right() - 16.0 - w, ry - h + 24.0 * (1.0 - a)), vec2(w, h));
+                        p.rect_filled(r, menu::R_PANEL, Color32::from_rgba_premultiplied(16, 20, 27, (240.0 * a) as u8));
+                        p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, Color32::from_white_alpha((34.0 * a) as u8)), egui::StrokeKind::Inside);
+                        let icon = Rect::from_min_size(r.min + vec2(12.0, 12.0), vec2(48.0, 48.0));
+                        p.rect_filled(icon, menu::R_WIDGET, Color32::from_rgba_premultiplied(30, 36, 46, (255.0 * a) as u8));
+                        let white = Color32::WHITE.gamma_multiply(a);
+                        let dim = menu::DIM.gamma_multiply(a);
+                        let (head, name) = match t {
+                            Toast::Level { n } => {
+                                level_ring(p, icon.center(), 18.0, 1.0, *n, a);
+                                (tr_en("Level up"), format!("{} {n}  ·  {}", tr_en("Level"), tr_en(rank(*n))))
+                            }
+                            Toast::Badge { id } => {
+                                medal(p, icon.center(), 15.0, true, a);
+                                (tr_en("Achievement unlocked"), badge(id).map_or(String::new(), |b| tr_en(b.name).to_string()))
+                            }
+                            Toast::Xp { .. } => unreachable!(),
+                        };
+                        p.text(pos2(icon.right() + 12.0, r.center().y - 10.0), Align2::LEFT_CENTER, head, menu::caption(), dim);
+                        let ng = menu::one_line(p, &name, menu::semibold(16.0), white, r.right() - icon.right() - 24.0);
+                        p.galley(pos2(icon.right() + 12.0, r.center().y + 10.0 - ng.size().y * 0.5), ng, white);
+                        ry -= h + 8.0;
                     }
                 }
-                y += h + 8.0;
             }
         });
+        ctx.request_repaint();
     }
 }
 

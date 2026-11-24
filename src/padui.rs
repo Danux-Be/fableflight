@@ -290,9 +290,15 @@ pub enum Hint<'a> {
 }
 
 impl<'a> Hint<'a> {
-    /// the pad's buttons while a pad is in use, else nothing.
-    pub fn of(_key: &'a str, pad: &'a str) -> Self {
-        if active() && !pad.is_empty() { Hint::Pad(pad) } else { Hint::None }
+    /// the pad's buttons while a pad is in use, else the key on a cap.
+    pub fn of(key: &'a str, pad: &'a str) -> Self {
+        if active() {
+            if pad.is_empty() { Hint::None } else { Hint::Pad(pad) }
+        } else if key.is_empty() {
+            Hint::None
+        } else {
+            Hint::Text(key)
+        }
     }
 }
 

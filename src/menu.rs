@@ -1040,9 +1040,8 @@ pub fn panel() -> egui::Frame {
 fn paint_hint(p: &egui::Painter, hint: Hint, right: f32, y: f32, pad_h: f32, col: Color32) {
     match hint {
         Hint::Text(h) => {
-            // keys in mono, words in barlow.
-            let font = if h.contains(' ') { egui::FontId::proportional(13.0) } else { egui::FontId::monospace(11.0) };
-            p.text(egui::pos2(right, y), egui::Align2::RIGHT_CENTER, h, font, col);
+            let w = cap_width(p, h);
+            paint_cap(p, egui::Rect::from_min_size(egui::pos2(right - w, y - 12.0), egui::vec2(w, 24.0)), h, if col.a() < 200 { 0.8 } else { 1.0 });
         }
         Hint::Pad(spec) => {
             let x = right - padui::spec_width(p, spec, pad_h);
@@ -1281,15 +1280,71 @@ pub fn heading(ui: &mut egui::Ui, s: &str) {
 
 /// a key cap: the key's name in a raised cap, big enough to read at a glance.
 pub fn key_cap(ui: &mut egui::Ui, keys: &str) -> egui::Response {
-    let g = ui.painter().layout_no_wrap(keys.to_string(), semibold(13.5), Color32::WHITE);
-    let (r, resp) = ui.allocate_exact_size(egui::vec2((g.size().x + 16.0).max(26.0), 24.0), egui::Sense::hover());
-    let p = ui.painter();
-    p.rect_filled(r, R_WIDGET + 1, Color32::from_rgb(14, 17, 23));
-    let top = r.with_max_y(r.bottom() - 2.5);
-    p.rect_filled(top, R_WIDGET + 1, Color32::from_rgb(58, 68, 84));
-    p.rect_stroke(top, R_WIDGET + 1, Stroke::new(1.0, Color32::from_white_alpha(28)), egui::StrokeKind::Inside);
-    p.galley(egui::pos2(top.center().x - g.size().x * 0.5, top.center().y - g.size().y * 0.5), g, Color32::WHITE);
+    let w = cap_width(ui.painter(), keys);
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(w, 24.0), egui::Sense::hover());
+    paint_cap(ui.painter(), r, keys, 1.0);
     resp
+}
+
+/// a short fade in when what is shown changes (a screen, a tab, a page):
+/// the new one comes up out of the dark. `key` 0 changes to without a fade.
+pub fn transition(ctx: &egui::Context, key: u64) {
+    let id = egui::Id::unique("screen_veil");
+    let now = ctx.input(|i| i.time);
+    let (was, t0) = ctx.data(|d| d.get_temp::<(u64, f64)>(id)).unwrap_or((key, f64::NEG_INFINITY));
+    let t0 = if was != key && key != 0 { now } else { t0 };
+    ctx.data_mut(|d| d.insert_temp(id, (key, t0)));
+    let k = ((now - t0) / 0.26).clamp(0.0, 1.0) as f32;
+    if k >= 1.0 {
+        return;
+    }
+    // eased out: quick at first, settling.
+    let a = 0.85 * (1.0 - k).powi(3);
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("veil")));
+    p.rect_filled(ctx.content_rect(), 0.0, Color32::from_rgba_unmultiplied(BG.r(), BG.g(), BG.b(), (255.0 * a) as u8));
+    ctx.request_repaint();
+}
+
+/// the letters on a key cap: the body face, whose q has a clear tail.
+fn cap_font() -> egui::FontId {
+    egui::FontId::new(13.5, egui::FontFamily::Name(MEDIUM.into()))
+}
+
+/// how wide a key cap is for these keys.
+pub fn cap_width(p: &egui::Painter, keys: &str) -> f32 {
+    (p.layout_no_wrap(keys.to_string(), cap_font(), Color32::WHITE).size().x + 16.0).max(26.0)
+}
+
+/// a key cap filling `r`, its face raised over a darker foot.
+pub fn paint_cap(p: &egui::Painter, r: egui::Rect, keys: &str, a: f32) {
+    let g = p.layout_no_wrap(keys.to_string(), cap_font(), Color32::WHITE.gamma_multiply(a));
+    p.rect_filled(r, R_WIDGET + 1, Color32::from_rgb(14, 17, 23).gamma_multiply(a));
+    let top = r.with_max_y(r.bottom() - 2.5);
+    p.rect_filled(top, R_WIDGET + 1, Color32::from_rgb(58, 68, 84).gamma_multiply(a));
+    p.rect_stroke(top, R_WIDGET + 1, Stroke::new(1.0, Color32::from_white_alpha((28.0 * a) as u8)), egui::StrokeKind::Inside);
+    p.galley(egui::pos2(top.center().x - g.size().x * 0.5, top.center().y - g.size().y * 0.5), g, Color32::WHITE);
+}
+
+/// the prompt for turning pages: a key cap (q, e) or the pad's bumper, as wide as it draws.
+pub fn page_prompt(ui: &mut egui::Ui, next: bool) {
+    let (key, btn) = if next { ("E", "RB") } else { ("Q", "LB") };
+    if padui::active() {
+        let w = padui::spec_width(ui.painter(), btn, 22.0);
+        let (r, _) = ui.allocate_exact_size(egui::vec2(w, 40.0), egui::Sense::hover());
+        padui::paint_spec(ui.painter(), r.left(), r.center().y, btn, 22.0, Color32::from_white_alpha(200));
+    } else {
+        let (r, _) = ui.allocate_exact_size(egui::vec2(cap_width(ui.painter(), key), 40.0), egui::Sense::hover());
+        paint_cap(ui.painter(), egui::Rect::from_center_size(r.center(), egui::vec2(r.width(), 24.0)), key, 1.0);
+    }
+}
+
+/// a page turn asked for this frame: q or e (not while typing), or the pad's bumpers and triggers.
+pub fn page_turn(ctx: &egui::Context) -> i32 {
+    let pad = ctx.data_mut(|d| d.remove_temp::<i32>(egui::Id::unique("page_turn"))).unwrap_or(0);
+    if pad != 0 || ctx.text_edit_focused() {
+        return pad;
+    }
+    ctx.input(|i| i.key_pressed(egui::Key::E) as i32 - i.key_pressed(egui::Key::Q) as i32)
 }
 
 /// One `buttons … action` row of the gamepad controls list.

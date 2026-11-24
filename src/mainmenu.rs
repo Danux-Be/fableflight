@@ -16,6 +16,14 @@ use egui::{pos2, vec2, Align2, Color32, FontId, Painter, Pos2, Rect, Sense, Stro
 /// its size beyond the aspect (it is cropped to fill the tile).
 pub const GLOBE_PICTURE: &[u8] = include_bytes!("../assets/ui/globe.jpg");
 
+/// the pictures behind fly's two choices, the game's own frames at 1600 x 1200
+/// with the hud off, scaled to 1200 x 900. free flight: the 172 over the golden
+/// gate (`--lat 37.79 --lon -122.52 --alt 500 --heading 70 --aircraft c172
+/// --time 16 --weather fair --tail-view`). career: the 747 lined up at san
+/// francisco at sunrise (`--airport KSFO --aircraft 747 --time 7.4`).
+pub const FREE_PICTURE: &[u8] = include_bytes!("../assets/ui/free.jpg");
+pub const CAREER_PICTURE: &[u8] = include_bytes!("../assets/ui/career.jpg");
+
 /// What a tile does when pressed.
 #[derive(Copy, Clone, PartialEq, Eq)]
 enum Tile {
@@ -39,6 +47,8 @@ impl Game {
     pub(crate) fn main_menu(&mut self, ctx: &egui::Context) {
         let screen = ctx.content_rect();
         let globe = self.picture(ctx, GLOBE_PICTURE);
+        let free_pic = self.picture(ctx, FREE_PICTURE);
+        let career_pic = self.picture(ctx, CAREER_PICTURE);
         let spec = aircraft::nth(self.menu.aircraft);
         let still = self.still(ctx, spec);
         let mut press: Option<Tile> = None;
@@ -150,7 +160,7 @@ impl Game {
                 self.pad_home_focus(&r);
                 let mut pf = fg.clone();
                 pf.set_opacity(a);
-                free_card(&pf, left, &r, k);
+                photo_card(&pf, left, &r, k, &free_pic, tr_en("Free flight"), tr_en("Any aircraft, anywhere on Earth."));
                 if r.clicked() {
                     press = Some(Tile::Free);
                 }
@@ -161,7 +171,7 @@ impl Game {
                 } else {
                     tr_en("Start as a student pilot").to_string()
                 };
-                career_card(&pf, right, &r, k, &sub);
+                photo_card(&pf, right, &r, k, &career_pic, tr_en("Career"), &sub);
                 if r.clicked() {
                     press = Some(Tile::Career);
                 }
@@ -199,7 +209,9 @@ impl Game {
                 let mut f = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_center_size(pos2(screen.center().x, foot_y), vec2(360.0, 28.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
                 padui::prompts(&mut f, &[("Dpad", tr_en("move")), ("A", tr_en("press"))], 20.0, 12.5, DIM);
             }
-            p.text(pos2(screen.right() - 24.0, foot_y), Align2::RIGHT_CENTER, t!("menu.globe_esri_maxar_earthstar_geographics"), FontId::proportional(11.5), FAINT);
+            // the picture's credits behind a small word, not a line across the foot.
+            let cr = p.text(pos2(screen.right() - 24.0, foot_y), Align2::RIGHT_CENTER, tr_en("Image credits"), FontId::proportional(11.5), FAINT);
+            ui.interact(cr, ui.scope_id().with("credits"), Sense::hover()).on_hover_text(t!("menu.globe_esri_maxar_earthstar_geographics"));
         });
         // while fly asks, only its two cards answer.
         let press = if picking { press.filter(|t| matches!(t, Tile::Free | Tile::Career)) } else { press };
@@ -285,61 +297,18 @@ fn activities_bar(p: &Painter, r: Rect, resp: &egui::Response, count: &str) {
     p.galley(pos2(r.right() - 14.0 - g.size().x, r.center().y - g.size().y * 0.5), g, DIM);
 }
 
-/// free flight: an aircraft over a globe on a dark blue card, the word, the line under it.
-fn free_card(p: &Painter, r: Rect, resp: &egui::Response, k: f32) {
+/// one of fly's choices: its picture filling the card (easing in on hover, as
+/// fly's own tile does), a shade along the foot, the word and the line under it.
+fn photo_card(p: &Painter, r: Rect, resp: &egui::Response, k: f32, pic: &egui::TextureHandle, title: &str, sub: &str) {
     let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
-    let sky = Color32::from_rgb(96, 170, 255);
-    p.rect_filled(r, menu::R_PANEL, menu::mix(Color32::from_rgb(11, 18, 30), Color32::from_rgb(16, 28, 46), lit));
-    let clip = p.with_clip_rect(r.shrink(1.0));
-    let c = pos2(r.center().x, r.top() + r.height() * 0.36);
-    menu::glow(&clip, c, vec2(r.width() * 0.5, r.height() * 0.4), sky.gamma_multiply(0.06 + 0.05 * lit));
-    globe_plane(p, c, 52.0 * k.max(0.7), menu::mix(sky.gamma_multiply(0.85), sky, lit));
+    let zoom = p.ctx().animate_bool_with_time(resp.id.with("zoom"), lit > 0.5, 0.9);
+    p.rect_filled(r, menu::R_PANEL, Color32::BLACK);
+    let z = 1.0 - 0.04 * (zoom * zoom * (3.0 - 2.0 * zoom));
+    cover(p, r.shrink(1.0), pic, vec2(0.5, 0.55), z, menu::mix(Color32::from_gray(205), Color32::WHITE, lit));
+    let inner = r.shrink(1.0);
+    gradient(p, Rect::from_min_max(pos2(inner.left(), inner.top() + inner.height() * 0.45), inner.max), Color32::TRANSPARENT, Color32::from_black_alpha(215));
     tile_frame(p, r, lit, false);
-    card_words(p, r, k, lit, tr_en("Free flight"), tr_en("Any aircraft, anywhere on Earth."));
-}
-
-/// the free flight mark: a globe's outline and an aircraft climbing across it.
-fn globe_plane(p: &Painter, c: Pos2, s: f32, col: Color32) {
-    let faint = Stroke::new(1.4, col.gamma_multiply(0.45));
-    p.circle_stroke(c, s, Stroke::new(1.8, col.gamma_multiply(0.7)));
-    // the equator and two meridians, as flattened ellipses.
-    let ellipse = |rx: f32, ry: f32| -> Vec<Pos2> { (0..=48).map(|i| { let a = i as f32 / 48.0 * std::f32::consts::TAU; c + vec2(a.cos() * rx, a.sin() * ry) }).collect() };
-    p.add(egui::Shape::line(ellipse(s, s * 0.32), faint));
-    p.add(egui::Shape::line(ellipse(s * 0.45, s), faint));
-    p.hline(c.x - s..=c.x + s, c.y, faint);
-    // the aircraft from above, nose to the upper right, over the globe.
-    let rot = -0.785f32;
-    let (sn, cs) = rot.sin_cos();
-    let at = c + vec2(s * 0.15, -s * 0.1);
-    let u = s * 0.95;
-    let pt = |x: f32, y: f32| at + vec2(x * cs - y * sn, x * sn + y * cs) * u;
-    let shapes: [&[(f32, f32)]; 6] = [
-        &[(-0.06, -0.62), (0.0, -0.78), (0.06, -0.62), (0.06, 0.62), (-0.06, 0.62)],
-        &[(-0.06, -0.18), (-0.06, 0.08), (-0.82, 0.22), (-0.82, 0.1)],
-        &[(0.06, -0.18), (0.82, 0.1), (0.82, 0.22), (0.06, 0.08)],
-        &[(-0.05, 0.46), (-0.05, 0.62), (-0.3, 0.7), (-0.3, 0.62)],
-        &[(0.05, 0.46), (0.3, 0.62), (0.3, 0.7), (0.05, 0.62)],
-        &[(-0.06, -0.62), (0.06, -0.62), (0.06, -0.5), (-0.06, -0.5)],
-    ];
-    // a dark cut round it so it reads over the lines.
-    for sh in shapes {
-        p.add(egui::Shape::convex_polygon(sh.iter().map(|&(x, y)| pt(x, y)).collect(), col, Stroke::new(3.0, Color32::from_rgb(11, 18, 30))));
-    }
-    for sh in shapes {
-        p.add(egui::Shape::convex_polygon(sh.iter().map(|&(x, y)| pt(x, y)).collect(), col, Stroke::NONE));
-    }
-}
-
-/// career: pilot's wings on a dark gold card, the word, where the career stands.
-fn career_card(p: &Painter, r: Rect, resp: &egui::Response, k: f32, sub: &str) {
-    let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
-    p.rect_filled(r, menu::R_PANEL, menu::mix(Color32::from_rgb(20, 19, 12), Color32::from_rgb(32, 29, 14), lit));
-    let clip = p.with_clip_rect(r.shrink(1.0));
-    let c = pos2(r.center().x, r.top() + r.height() * 0.36);
-    menu::glow(&clip, c, vec2(r.width() * 0.5, r.height() * 0.4), ACCENT.gamma_multiply(0.06 + 0.05 * lit));
-    wings(p, c, 3.0 * k.max(0.7), menu::mix(ACCENT.gamma_multiply(0.8), ACCENT, lit));
-    tile_frame(p, r, lit, false);
-    card_words(p, r, k, lit, tr_en("Career"), sub);
+    card_words(p, r, k, lit, title, sub);
 }
 
 /// a choice card's word and the line under it, bottom left.
@@ -348,24 +317,6 @@ fn card_words(p: &Painter, r: Rect, k: f32, lit: f32, title: &str, sub: &str) {
     let y = r.bottom() - 58.0 * k.max(0.7);
     spaced(p, pos2(x - 2.0, y), Align2::LEFT_BOTTOM, &title.to_uppercase(), menu::bold(44.0 * k.max(0.7)), menu::mix(Color32::WHITE, ACCENT, lit), 2.5 * k);
     p.text(pos2(x, y + 10.0), Align2::LEFT_TOP, sub, menu::medium(16.0), menu::mix(TEXT, Color32::WHITE, lit));
-}
-
-/// pilot's wings at `c`, `s` times their small size: a badge and swept feathers each side.
-fn wings(p: &Painter, c: Pos2, s: f32, col: Color32) {
-    for sx in [-1.0f32, 1.0] {
-        for i in 0..4 {
-            let f = i as f32;
-            let y = (-5.0 + f * 3.4) * s;
-            let len = (30.0 - f * 6.5) * s;
-            let x0 = 8.0 * s;
-            let tip = c + vec2(sx * (x0 + len), y - (6.0 - f * 1.2) * s);
-            let root = c + vec2(sx * x0, y);
-            let w = (2.4 - f * 0.3) * s * 0.5;
-            p.add(egui::Shape::convex_polygon(vec![root + vec2(0.0, -w), tip, root + vec2(0.0, w)], col, Stroke::NONE));
-        }
-    }
-    p.circle_filled(c, 7.0 * s, col);
-    p.circle_filled(c, 4.0 * s, Color32::from_rgb(20, 19, 12));
 }
 
 /// a picture filling `r`, cropped to its aspect, pushed in by `zoom` (below 1) toward `focus`.

@@ -1222,6 +1222,14 @@ fn draw_prep(p: &egui::Painter, top: egui::Pos2, w: f32, prep: render::AircraftP
     p.galley(egui::pos2(top.x, y_note), note, egui::Color32::WHITE);
 }
 
+/// how much of the data credits to show.
+#[derive(Clone, Copy, PartialEq)]
+enum Credits {
+    Full,
+    Label,
+    Logo,
+}
+
 /// Shown on the loading screen, one at a time (translated in i18n.rs).
 const LOADING_TIPS: &[&str] = &[
     "C switches between the chase view and the cockpit; drag the mouse to look around.",
@@ -4811,8 +4819,13 @@ impl Game {
             (Nav::Globe, Button::East) => self.menu_back(),
             (Nav::Globe, Button::Start) if self.menu.screen == menu::Screen::Fly => self.begin(),
             (Nav::Globe, Button::West) if self.menu.screen == menu::Screen::Fly => self.pad_pick_centre(),
-            (Nav::Globe, Button::LeftTrigger | Button::RightTrigger) if self.menu.screen == menu::Screen::Settings => {
-                self.settings_sec = self.settings_sec.cycle(b == Button::RightTrigger);
+            (Nav::Globe, Button::LeftTrigger | Button::RightTrigger | Button::LeftTrigger2 | Button::RightTrigger2) if self.menu.screen == menu::Screen::Settings => {
+                self.settings_sec = self.settings_sec.cycle(matches!(b, Button::RightTrigger | Button::RightTrigger2));
+                self.pad_home = true;
+            }
+            (Nav::Globe, Button::LeftTrigger | Button::RightTrigger | Button::LeftTrigger2 | Button::RightTrigger2) if matches!(self.menu.screen, menu::Screen::Career | menu::Screen::Logbook | menu::Screen::Activities) => {
+                let d: i32 = if matches!(b, Button::RightTrigger | Button::RightTrigger2) { 1 } else { -1 };
+                self.egui_ctx.data_mut(|m| m.insert_temp(egui::Id::unique("page_turn"), d));
                 self.pad_home = true;
             }
             (Nav::Globe, Button::LeftTrigger | Button::RightTrigger) if self.menu.screen == menu::Screen::Aircraft => {
@@ -4830,8 +4843,8 @@ impl Game {
             }
             (Nav::Pause, Button::Start | Button::East) => self.set_pause_menu(false),
             (Nav::Pause, Button::South) => self.pad_key(egui::Key::Enter),
-            (Nav::Pause, Button::LeftTrigger | Button::RightTrigger) if self.pause_page == menu::Page::Settings => {
-                self.settings_sec = self.settings_sec.cycle(b == Button::RightTrigger);
+            (Nav::Pause, Button::LeftTrigger | Button::RightTrigger | Button::LeftTrigger2 | Button::RightTrigger2) if self.pause_page == menu::Page::Settings => {
+                self.settings_sec = self.settings_sec.cycle(matches!(b, Button::RightTrigger | Button::RightTrigger2));
                 self.pad_home = true;
             }
             (Nav::Pause, _) => {}
@@ -7757,6 +7770,15 @@ impl Game {
             let ctx = &root.ctx().clone();
             self.pad_pass(ctx);
             self.toasts_ui(ctx);
+            // a fade between screens and their tabs.
+            let tab = match self.menu.screen {
+                menu::Screen::Career => self.career.view.tab as u64,
+                menu::Screen::Logbook => self.pilot_tab as u64,
+                menu::Screen::Activities => self.activity_tab as u64,
+                menu::Screen::Settings => self.settings_sec as u64,
+                _ => 0,
+            };
+            menu::transition(ctx, 1 + ((self.menu.screen as u64) << 8 | tab));
             // The main menu, the aircraft and the settings screens each take
             // the whole window; the rest of this draws the globe's.
             match self.menu.screen {
@@ -8282,7 +8304,7 @@ impl Game {
                     });
                 });
             }
-            self.credits(ctx);
+            self.credits(ctx, Credits::Label);
             padui::focus_ring(ctx, ACCENT);
         });
         self.egui_state.handle_platform_output(&self.window, out.platform_output);
@@ -8354,7 +8376,9 @@ impl Game {
     /// The bottom-right credits: Google's logo (its official outlined
     /// artwork, unaltered, 22 px with its outline, clear space round it) while
     /// their imagery or 3D tiles are on screen, then the data credits.
-    fn credits(&mut self, ctx: &egui::Context) {
+    /// the data credits: in full (the pause menu), behind a small label (the globe),
+    /// or only google's logo while its imagery shows (flying).
+    fn credits(&mut self, ctx: &egui::Context, how: Credits) {
         use egui::{Align2, Color32, RichText};
         // (Aircraft-picker stills show the aircraft alone.)
         if still_mode() { return; }
@@ -8370,9 +8394,23 @@ impl Game {
         let text = self.attribution();
         // The logo on a line of its own at the right, above the credits (which
         // can run long), so nothing else on screen comes near it.
-        egui::Area::new(egui::Id::unique("attr")).anchor(Align2::RIGHT_BOTTOM, [-10.0, -5.0]).show(ctx, |ui| {
+        if how == Credits::Logo && logo.is_none() {
+            return;
+        }
+        let order = if how == Credits::Full { egui::Order::Foreground } else { egui::Order::Middle };
+        egui::Area::new(egui::Id::unique("attr")).order(order).anchor(Align2::RIGHT_BOTTOM, [-12.0, -8.0]).show(ctx, |ui| {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Max), |ui| {
-                ui.label(RichText::new(text).size(10.0).color(Color32::from_rgba_unmultiplied(255, 255, 255, 110)));
+                let faint = Color32::from_rgba_unmultiplied(255, 255, 255, 110);
+                match how {
+                    Credits::Full => {
+                        ui.set_max_width(ctx.content_rect().width() * 0.5);
+                        ui.add(egui::Label::new(RichText::new(text).size(11.0).color(faint)).wrap());
+                    }
+                    Credits::Label => {
+                        ui.label(RichText::new(tr_en("Map data")).size(11.5).color(faint)).on_hover_text(text);
+                    }
+                    Credits::Logo => {}
+                }
                 if let Some(t) = logo {
                     let s = t.size_vec2();
                     ui.add_space(4.0);
@@ -8488,7 +8526,7 @@ impl Game {
     /// The pause menu (Esc): full screen over the dimmed, stopped game. A
     /// column of big buttons on the left; the key list and the failures open
     /// in a panel beside it; Settings opens the settings screen (settings_ui.rs).
-    fn pause_menu(&mut self, ctx: &egui::Context, act: &mut Option<PauseAct>, lat: f64, lon: f64, local: f64) {
+    fn pause_menu(&mut self, ctx: &egui::Context, act: &mut Option<PauseAct>, local: f64) {
         use egui::{Align2, Color32, RichText};
         use menu::{Page, ACCENT, DIM, TEXT};
         if self.pause_page.is_info() {
@@ -8554,7 +8592,7 @@ impl Game {
                 *act = Some(PauseAct::Respawn);
             }
             // Leaving: back to the globe for a new start (its Menu button goes on to the main menu).
-            if menu::big_button(ui, t!("game.end_flight"), Hint::Text(t!("game.pick_a_new_start")), false, false).clicked() {
+            if menu::big_button(ui, t!("game.end_flight"), Hint::None, false, false).clicked() {
                 *act = Some(PauseAct::Globe);
             }
             ui.add_space(14.0);
@@ -8566,9 +8604,6 @@ impl Game {
             ui.add_space(18.0);
             if pad {
                 padui::prompts(ui, &[("Dpad", tr_en("move")), ("A", tr_en("press")), ("B", tr_en("back"))], 20.0, 12.0, DIM);
-            } else {
-                let t = t!("game.while_you_fly_tab_opens");
-                ui.add(egui::Label::new(RichText::new(t).font(menu::caption()).color(DIM)).wrap());
             }
         });
 
@@ -8577,7 +8612,6 @@ impl Game {
             ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                 ui.spacing_mut().item_spacing.y = 3.0;
                 ui.label(RichText::new(self.spec.name).font(menu::item_title()).color(TEXT));
-                ui.label(RichText::new(menu::latlon(lat, lon)).font(menu::caption()).color(DIM));
                 ui.label(RichText::new(t!("game.local_2", menu::hhmm(local))).font(menu::caption()).color(DIM));
             });
         });
@@ -9013,7 +9047,10 @@ impl Game {
                 });
             };
             if self.pause_open {
-                self.pause_menu(ctx, &mut act, lat.to_degrees(), lon.to_degrees(), local);
+                let sec = if self.pause_page == menu::Page::Settings { self.settings_sec as u64 } else { 0 };
+                menu::transition(ctx, 1 + ((self.pause_page as u64) << 8 | sec));
+                self.pause_menu(ctx, &mut act, local);
+                self.credits(ctx, Credits::Full);
                 padui::focus_ring(ctx, menu::ACCENT);
                 return;
             }
@@ -9182,10 +9219,8 @@ impl Game {
             if self.loading.is_none() {
                 self.aircraft_prep_overlay(ctx);
             }
-            // Google's imagery has to carry its credit, HUD or not.
-            if self.hud_on() || self.google_shown() {
-                self.credits(ctx);
-            }
+            // Google's imagery has to carry its logo, HUD or not; the rest is in the pause menu.
+            self.credits(ctx, Credits::Logo);
             // Damage: warnings while the airframe is being overstressed, what has
             // already broken, and a flash for each new loss.
             let p = &self.plane;

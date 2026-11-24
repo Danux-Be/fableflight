@@ -307,6 +307,12 @@ pub fn show(ctx: &egui::Context, game: &mut Game, in_flight: bool) -> bool {
 impl Game {
     pub(crate) fn settings_screen(&mut self, ctx: &egui::Context, in_flight: bool) -> bool {
         let screen = ctx.content_rect();
+        if !in_flight {
+            match menu::page_turn(ctx) {
+                0 => {}
+                d => self.settings_sec = self.settings_sec.cycle(d > 0),
+            }
+        }
         let mut closed = false;
         egui::Area::new(egui::Id::unique("settings_screen")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
             // The backdrop takes every click; the game (or globe) behind is all but hidden.

@@ -64,8 +64,14 @@ pub fn back_button(ui: &mut egui::Ui) -> egui::Response {
 
 /// words on a line with the chosen one underlined in the accent.
 pub fn tab_strip(ui: &mut egui::Ui, tabs: &[&str], current: usize) -> Option<usize> {
-    let mut hit = None;
+    let n = tabs.len().max(1);
+    let mut hit = match menu::page_turn(ui.ctx()) {
+        0 => None,
+        d => Some((current as i32 + d).rem_euclid(n as i32) as usize),
+    };
     ui.spacing_mut().item_spacing.x = 4.0;
+    menu::page_prompt(ui, false);
+    ui.add_space(6.0);
     for (i, t) in tabs.iter().enumerate() {
         let on = i == current;
         let font = menu::semibold(15.5);
@@ -86,6 +92,8 @@ pub fn tab_strip(ui: &mut egui::Ui, tabs: &[&str], current: usize) -> Option<usi
             hit = Some(i);
         }
     }
+    ui.add_space(6.0);
+    menu::page_prompt(ui, true);
     hit
 }
 
