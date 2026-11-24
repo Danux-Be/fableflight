@@ -641,6 +641,16 @@ impl Plane {
         self.settle_engine(v, h);
     }
 
+    /// After its state was set from outside (a saved flight, a replay taken
+    /// over): the engine settled where the throttle and speed have it.
+    pub fn settle_after_load(&mut self) {
+        self.charge = self.throttle;
+        if self.running {
+            let (_, _, h) = geo::pos_to_lla(self.pos);
+            self.settle_engine(self.airspeed().length(), h);
+        }
+    }
+
     /// Whether switch `k` (0 L, 1 R) of a pair on a shared state is on: `w` 0
     /// the fuel controls (`ignition`), 1 the batteries (`sys.elec.master`).
     /// See `pair_off`; both marked off cannot hold the state on, so both show it.

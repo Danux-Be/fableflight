@@ -26,6 +26,8 @@ enum Tile {
     Again,
     /// the settings' Multiplayer section
     Multiplayer,
+    /// fly on from the newest saved flight
+    Continue,
 }
 
 impl Game {
@@ -38,6 +40,16 @@ impl Game {
         let mut press: Option<Tile> = None;
         let mut quit = false;
         let again = self.last_start_label();
+        // (the saved flights are looked up every few seconds, not every frame)
+        if self.real - self.flights_read > 3.0 {
+            self.flights = crate::replay::list();
+            self.flights_read = self.real;
+        }
+        let resume = self.flights.first().map(|(_, h)| {
+            let plane = crate::i18n::tr_en_owned(&h.aircraft_name);
+            // (the name it was saved under often says the aircraft already)
+            (h.name.clone(), if h.name.contains(&plane) { String::new() } else { plane })
+        });
         let rise = entrance(ctx);
         egui::Area::new(egui::Id::unique("main_menu")).order(egui::Order::Background).fixed_pos(screen.min).show(ctx, |ui| {
             let p = ui.painter().clone();
@@ -108,9 +120,22 @@ impl Game {
                 r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t!("menu.fly_again")));
                 let mut pg = p.clone();
                 pg.set_opacity(rise(3));
-                again_button(&pg, b, &r, place, plane);
+                again_button(&pg, b, &r, t!("menu.fly_again"), place, plane);
                 if r.clicked() {
                     press = Some(Tile::Again);
+                }
+            }
+            // and under that, the newest saved flight.
+            if let Some((name, plane)) = &resume {
+                let row = if again.is_some() { 1.0 } else { 0.0 };
+                let b = Rect::from_min_size(pos2(fly.left(), fly.bottom() + 14.0 * k + row * 56.0), vec2(fly.width(), 46.0));
+                let r = ui.interact(b, ui.scope_id().with("continue"), Sense::click());
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t!("flights.continue")));
+                let mut pg = p.clone();
+                pg.set_opacity(rise(3));
+                again_button(&pg, b, &r, t!("flights.continue"), name, plane);
+                if r.clicked() {
+                    press = Some(Tile::Continue);
                 }
             }
 
@@ -143,6 +168,11 @@ impl Game {
                 self.menu.screen = Screen::Settings;
             }
             Some(Tile::Multiplayer) => self.open_settings(settings_ui::Section::Multiplayer, Screen::Main),
+            Some(Tile::Continue) => {
+                if let Some((file, _)) = self.flights.first().cloned() {
+                    self.load_flight(&file);
+                }
+            }
             Some(Tile::Again) => {
                 // over the globe, which shows it preparing.
                 self.restore_last_start();
@@ -179,7 +209,7 @@ fn entrance(ctx: &egui::Context) -> impl Fn(usize) -> f32 {
 }
 
 /// the fly again bar under fly.
-fn again_button(p: &Painter, r: Rect, resp: &egui::Response, place: &str, plane: &str) {
+fn again_button(p: &Painter, r: Rect, resp: &egui::Response, label: &str, place: &str, plane: &str) {
     let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
     p.rect_filled(r, menu::R_WIDGET, menu::mix(Color32::from_rgba_premultiplied(12, 16, 22, 226), Color32::from_rgba_premultiplied(26, 32, 42, 238), lit));
     p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, menu::mix(Color32::from_white_alpha(26), ACCENT, lit)), egui::StrokeKind::Inside);
@@ -193,8 +223,16 @@ fn again_button(p: &Painter, r: Rect, resp: &egui::Response, place: &str, plane:
     let end = *pts.last().unwrap();
     p.line(pts, Stroke::new(1.8, col));
     p.add(egui::Shape::convex_polygon(vec![end + vec2(3.5, -3.5), end + vec2(4.0, 3.0), end + vec2(-2.5, 1.5)], col, Stroke::NONE));
-    p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, t!("menu.fly_again"), menu::label(), menu::mix(TEXT, Color32::WHITE, lit));
-    let g = p.layout_no_wrap(format!("{place}  ·  {plane}"), menu::caption(), DIM);
+    let title = p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, label, menu::label(), menu::mix(TEXT, Color32::WHITE, lit));
+    // (a long name is cut to the room left)
+    let room = r.right() - 16.0 - title.right() - 24.0;
+    let full = if plane.is_empty() { place.to_string() } else { format!("{place}  ·  {plane}") };
+    let (mut text, mut n) = (full.clone(), full.chars().count());
+    while n > 4 && p.layout_no_wrap(text.clone(), menu::caption(), DIM).size().x > room {
+        n -= 1;
+        text = full.chars().take(n).collect::<String>().trim_end().to_string() + "…";
+    }
+    let g = p.layout_no_wrap(text, menu::caption(), DIM);
     p.galley(pos2(r.right() - 16.0 - g.size().x, r.center().y - g.size().y * 0.5), g, DIM);
 }
 

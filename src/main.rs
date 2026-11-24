@@ -17,6 +17,7 @@ mod destruct;
 mod fetch;
 mod flightlog;
 mod challenge;
+mod replay;
 mod frame_pacer;
 mod fsr3;
 mod fsr4;
@@ -121,6 +122,25 @@ enum PauseAct {
     Quit,
     /// fly a landing challenge (challenge::ALL)
     Challenge(usize),
+    /// watch the flight again (replay.rs), and out of it: back to where the
+    /// aircraft is, or flying on from the frame shown
+    Replay,
+    ReplayExit,
+    ReplayTakeOver,
+    /// saved flights: keep this one, fly on from one (by its place in the list), forget one
+    SaveFlight,
+    LoadFlight(usize),
+    DeleteFlight(usize),
+}
+
+/// A replay under way: the recording plays the aircraft, while the one
+/// being flown waits here (with its wreck, if it crashed) for the replay to end.
+struct Replay {
+    player: replay::Player,
+    live: Plane,
+    crashed: bool,
+    crash: Option<Crash>,
+    cam: (DVec3, DVec3, DVec3, Option<f64>),
 }
 
 use crash::Crash;
@@ -319,6 +339,12 @@ struct Args {
     day: Option<f64>,
     weather_panel: bool,
     challenge: Option<String>,
+    /// fly on from a saved flight (its name or file), and watch the replay after so many seconds
+    load: Option<String>,
+    replay_at: Option<f64>,
+    replay_take: Option<f64>,
+    /// save the flight after so many seconds (for scripted tests)
+    save_at: Option<f64>,
     /// real weather on for this run (else the saved setting, off when the command line sets the weather)
     live_weather: bool,
     /// print where it is storming now (weather radar) and quit
@@ -443,7 +469,7 @@ struct Args {
     mcp_port: u16,
 }
 
-const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures|logbook|challenges[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--challenge first|crosswind|night|mountain|rain|short|jumbo|paro] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--full-map] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--no-scenery] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
+const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures|logbook|challenges|flights[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--challenge first|crosswind|night|mountain|rain|short|jumbo|paro] [--load SAVED_FLIGHT] [--replay SECONDS[:TAKE_OVER_AT]] [--save-at SECONDS] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--full-map] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--no-scenery] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
 
 fn parse_args() -> Args {
     let v: Vec<String> = std::env::args().skip(1).collect();
@@ -485,6 +511,10 @@ fn parse_args_from(v: &[String]) -> Result<Args, String> {
         day: None,
         weather_panel: false,
         challenge: None,
+        load: None,
+        replay_at: None,
+        replay_take: None,
+        save_at: None,
         live_weather: false,
         find_storms: false,
         vsync: true,
@@ -743,6 +773,18 @@ fn parse_args_from(v: &[String]) -> Result<Args, String> {
             "--haze" => a.haze = Some(req_num(flag, i)? as f32),
             "--day" => a.day = Some(req_num(flag, i)?),
             "--challenge" => a.challenge = Some(req(flag, i)?.to_string()),
+            "--load" => a.load = Some(req(flag, i)?.to_string()),
+            "--replay" => {
+                // SECONDS, or SECONDS:TAKE to fly on from the replay at TAKE (scripted tests)
+                let v = req(flag, i)?;
+                let num = |x: &str| x.parse::<f64>().map_err(|_| format!("{flag}: invalid time '{x}'"));
+                let (at, take) = match v.split_once(':') {
+                    Some((a2, t)) => (num(a2)?, Some(num(t)?)),
+                    None => (num(v)?, None),
+                };
+                (a.replay_at, a.replay_take) = (Some(at), take);
+            }
+            "--save-at" => a.save_at = Some(req_num(flag, i)?),
             "--weather" => {
                 // a preset name (clear, fair, hazy, overcast, windy, storm), or on its own: open the weather panel
                 match v.get(i + 1).filter(|s| !s.starts_with("--")) {
@@ -1395,6 +1437,18 @@ struct Game {
     challenge: Option<challenge::Active>,
     challenge_records: challenge::Records,
     pending_challenge: Option<usize>,
+    /// the flight so far, for the replay (replay.rs), and the replay under way
+    tape: replay::Recorder,
+    replay: Option<Replay>,
+    replay_at: Option<f64>,
+    replay_take: Option<f64>,
+    save_at: Option<f64>,
+    /// the saved flights listed on their page, the name to save this one
+    /// under, and one to fly on from once the frame begins
+    flights: Vec<(String, replay::Header)>,
+    flight_name: String,
+    flights_read: f64,
+    pending_load: Option<String>,
     pause_at: Option<(menu::Page, Option<settings_ui::Section>, f64)>,
     /// when to open the flight menu, for scripted screenshots.
     radial_at: Option<f64>,
@@ -1876,7 +1930,7 @@ impl Game {
             frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, plan_text: String::new(), plan_msg: String::new(), plan_pick: false, arcade: args.arcade || prefs.arcade, goto_open: false, goto_text: String::new(), goto_rx: None,
             status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, pad_y: false, pad_y_combo: false, pad_held: Vec::new(), pad_note: (String::new(), 0.0), pad_aim: false, pad_live: None, ap: autopilot::Autopilot::default(), ap_off_t: -100.0, ap_script: args.ap_script.clone(), cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
-            record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, snow: args.snow.unwrap_or(prefs.snow), info_open: args.weather_panel, radial: Default::default(), info_page: if args.weather_panel { menu::Page::Weather } else { menu::Page::Flight }, pause_open: false, pause_page: menu::Page::Game, flight: None, logbook: flightlog::Logbook::load(), challenge: None, challenge_records: challenge::Records::load(), pending_challenge: args.challenge.as_deref().and_then(challenge::by_id), logbook_saves: !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench"), pause_at: args.pause_menu, radial_at: args.flight_menu, settings_sec: args.settings.unwrap_or(settings_ui::Section::General), look_sens: prefs.look_sens, invert_look_cockpit: prefs.invert_look_cockpit, invert_look_outside_x: prefs.invert_look_outside_x, invert_look_outside_y: prefs.invert_look_outside_y, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
+            record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, snow: args.snow.unwrap_or(prefs.snow), info_open: args.weather_panel, radial: Default::default(), info_page: if args.weather_panel { menu::Page::Weather } else { menu::Page::Flight }, pause_open: false, pause_page: menu::Page::Game, flight: None, logbook: flightlog::Logbook::load(), challenge: None, challenge_records: challenge::Records::load(), pending_challenge: args.challenge.as_deref().and_then(challenge::by_id), tape: replay::Recorder::default(), replay: None, replay_at: args.replay_at, replay_take: args.replay_take, save_at: args.save_at, flights: Vec::new(), flight_name: String::new(), flights_read: f64::NEG_INFINITY, pending_load: args.load.clone(), logbook_saves: !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench"), pause_at: args.pause_menu, radial_at: args.flight_menu, settings_sec: args.settings.unwrap_or(settings_ui::Section::General), look_sens: prefs.look_sens, invert_look_cockpit: prefs.invert_look_cockpit, invert_look_outside_x: prefs.invert_look_outside_x, invert_look_outside_y: prefs.invert_look_outside_y, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
             g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
@@ -2055,6 +2109,8 @@ impl Game {
         }
         self.head.rear = false;
         self.head.center_seat();
+        self.stop_replay(false);
+        self.tape.clear();
         self.restore_wreck_meshes();
         self.sheds.items.clear();
         self.contrails.clear();
@@ -2334,7 +2390,12 @@ impl Game {
     }
 
     fn respawn_at(&mut self, lat: f64, lon: f64, alt: f64, heading: f64, speed: f64) {
+        if let Some(r) = self.replay.take() {
+            self.crash = r.crash;
+        }
         self.end_flight(false);
+        // A new flight: a new recording (a replay taken over, or a saved flight, put theirs back after).
+        self.tape.clear();
         self.cancel_cockpit_input();
         self.ap.disengage();
         self.hold_spot = None;
@@ -5110,6 +5171,9 @@ impl Game {
             }
             return;
         }
+        if self.replay.is_some() && self.replay_key(code) {
+            return;
+        }
         match code {
             KeyCode::Tab => self.flight_menu_key(),
             KeyCode::Escape if self.radial.open => self.radial.open = false,
@@ -5293,6 +5357,9 @@ impl Game {
         self.pause_open = open;
         self.radial.open = false;
         self.pause_page = menu::Page::Game;
+        if open {
+            self.flights = replay::list();
+        }
         self.pad_home = open;
         self.drag = false;
         self.show_help = false;
@@ -5430,6 +5497,9 @@ impl Game {
                     if ui.button(RichText::new(t!("challenge.try_again")).font(menu::label())).clicked() {
                         *act = Some(PauseAct::Challenge(idx));
                     }
+                    if ui.button(RichText::new(t!("replay.replay")).font(menu::label())).clicked() {
+                        *act = Some(PauseAct::Replay);
+                    }
                     if ui.button(RichText::new(t!("challenge.challenges")).font(menu::label())).clicked() {
                         list = true;
                     }
@@ -5477,6 +5547,266 @@ impl Game {
             });
             ui.add_space(6.0);
         }
+    }
+
+    /// Into the replay: the recording plays the aircraft (the one flown, and
+    /// its wreck, wait aside until the replay ends).
+    fn start_replay(&mut self) {
+        if self.replay.is_some() || self.tape.len_s() < 1.0 {
+            if self.replay.is_none() {
+                self.status = t!("replay.nothing").into();
+                self.status_until = self.real + 5.0;
+            }
+            return;
+        }
+        let player = replay::Player::new(&self.tape);
+        let Some(f) = self.tape.at(player.t) else { return };
+        self.set_pause_menu(false);
+        self.info_open = false;
+        self.cancel_cockpit_input();
+        let (lat, lon, alt) = geo::pos_to_lla(f.pos());
+        let ghost = Plane::spawn(self.spec, lat, lon, alt, 0.0, 0.0);
+        let live = std::mem::replace(&mut self.plane, ghost);
+        self.replay = Some(Replay { player, live, crashed: self.crashed, crash: self.crash.take(), cam: (self.cam_pos, self.cam_dir, self.cam_look, self.cam_ang) });
+        self.crashed = false;
+        // (the aircraft shown whole again, whatever came off it)
+        self.restore_wreck_meshes();
+        f.show(&mut self.plane, 0.0);
+        self.cam_ang = None;
+        self.cam_rise = 0.0;
+        self.cam_pos = self.plane.pos - self.plane.forward() * self.spec.cam_dist;
+        self.cam_dir = -self.plane.forward();
+        self.prev_cam = self.cam_pos;
+        self.gauges = gauges::Gauges::new(&self.plane, self.frame ^ 0x7e91);
+    }
+
+    /// Out of the replay: back to the aircraft as it was, or (`take_over`)
+    /// flying on from the frame shown, the rest of the recording forgotten.
+    fn stop_replay(&mut self, take_over: bool) {
+        let Some(r) = self.replay.take() else { return };
+        if take_over && let Some(f) = self.tape.at(r.player.t) {
+            let mut tape = std::mem::take(&mut self.tape);
+            tape.cut(r.player.t);
+            // A fresh start where the frame is (the flight so far goes into the logbook).
+            self.crash = r.crash;
+            self.crashed = r.crashed;
+            let (lat, lon, alt) = geo::pos_to_lla(f.pos());
+            let fwd = f.rot() * DVec3::NEG_Z;
+            let (e, n, _) = geo::enu(f.pos());
+            self.respawn_at(lat, lon, alt, fwd.dot(e).atan2(fwd.dot(n)), 0.0);
+            f.take_over(&mut self.plane);
+            // (the fuel then is not recorded: what there is now, if any is left)
+            if r.live.fuel > 1.0 {
+                self.plane.fuel = r.live.fuel;
+            }
+            self.plane.payload = r.live.payload;
+            self.gauges = gauges::Gauges::new(&self.plane, self.frame ^ 0x7e93);
+            self.tape = tape;
+            self.status = t!("replay.took_over", replay::clock(r.player.t - self.tape.start()));
+            self.status_until = self.real + 6.0;
+            return;
+        }
+        self.plane = r.live;
+        self.crashed = r.crashed;
+        self.crash = r.crash;
+        (self.cam_pos, self.cam_dir, self.cam_look, self.cam_ang) = r.cam;
+        self.prev_cam = self.cam_pos;
+        self.gauges = gauges::Gauges::new(&self.plane, self.frame ^ 0x7e92);
+    }
+
+    /// A short name for the flight as it is now: where, in what, when.
+    fn flight_label(&self) -> (String, String) {
+        let (lat, lon, _) = geo::pos_to_lla(self.plane.pos);
+        let place = flightlog::airport_at(lat.to_degrees(), lon.to_degrees()).unwrap_or_default();
+        let at = if place.is_empty() { menu::latlon(lat, lon) } else { place.clone() };
+        (format!("{at} · {} · {}", i18n::tr_en(self.spec.name), flightlog::date_text(flightlog::now_unix())), place)
+    }
+
+    fn save_flight(&mut self) {
+        if self.replay.is_some() || self.crashed {
+            return;
+        }
+        let (label, place) = self.flight_label();
+        let name = Some(self.flight_name.trim().to_string()).filter(|n| !n.is_empty()).unwrap_or(label);
+        let state = replay::State::of(&self.plane, self.utc, self.doy, &self.radios);
+        let saved = replay::Saved::new(name.clone(), self.spec, place, state, &self.tape);
+        self.status = match saved.save() {
+            Some(_) => t!("flights.saved", name),
+            None => t!("flights.not_saved").into(),
+        };
+        self.status_until = self.real + 6.0;
+        self.flight_name.clear();
+        self.flights = replay::list();
+    }
+
+    /// Flies on from a saved flight (`file` in the flights folder).
+    pub(crate) fn load_flight(&mut self, file: &str) {
+        let Some(saved) = replay::Saved::load(file) else {
+            self.status = t!("flights.not_loaded").into();
+            self.status_until = self.real + 8.0;
+            return;
+        };
+        let st = &saved.header.state;
+        let Some(spec) = aircraft::by_key(&st.aircraft) else {
+            self.status = t!("flights.unknown_aircraft", st.aircraft);
+            self.status_until = self.real + 8.0;
+            return;
+        };
+        self.stop_replay(false);
+        self.leave_challenge();
+        self.set_pause_menu(false);
+        self.info_open = false;
+        self.set_aircraft(spec);
+        let pos = st.pos();
+        let (lat, lon, alt) = geo::pos_to_lla(pos);
+        let fwd = DQuat::from_array(st.rot).normalize() * DVec3::NEG_Z;
+        let (e, n, _) = geo::enu(pos);
+        self.respawn_at(lat, lon, alt, fwd.dot(e).atan2(fwd.dot(n)), 0.0);
+        st.apply(&mut self.plane);
+        self.radios = st.radios();
+        if !self.wx.real_time {
+            (self.utc, self.doy) = (st.utc, st.doy);
+        }
+        // On the ground it waits for the ground under it, as at a start on a runway.
+        if st.on_ground {
+            self.plane.hold = true;
+            self.hold_spot = Some((lat, lon, self.real + 30.0));
+        }
+        self.gauges = gauges::Gauges::new(&self.plane, self.frame ^ 0x10ad);
+        self.cam_pos = self.plane.pos - self.plane.forward() * self.spec.cam_dist;
+        self.cam_dir = -self.plane.forward();
+        self.prev_cam = self.cam_pos;
+        self.tape.resume(saved.frames);
+        self.loading = Some(Loading::new(self.real));
+        self.mode = Mode::Fly;
+        self.menu.starting = false;
+        self.status = t!("flights.loaded", saved.header.name);
+        self.status_until = self.real + 8.0;
+    }
+
+    /// The pause menu's page of saved flights: this one kept, the others flown on from.
+    fn flights_page(&mut self, ui: &mut egui::Ui, act: &mut Option<PauseAct>) {
+        use egui::RichText;
+        use menu::{DIM, TEXT};
+        ui.label(RichText::new(t!("flights.intro")).font(menu::caption()).color(DIM));
+        ui.add_space(8.0);
+        if !self.crashed {
+            ui.horizontal(|ui| {
+                let hint = self.flight_label().0;
+                ui.add(egui::TextEdit::singleline(&mut self.flight_name).hint_text(hint).desired_width((ui.available_width() - 200.0).max(160.0)).font(menu::body()));
+                if ui.button(RichText::new(t!("flights.save")).font(menu::label())).clicked() {
+                    *act = Some(PauseAct::SaveFlight);
+                }
+            });
+            ui.add_space(10.0);
+        }
+        if self.flights.is_empty() {
+            ui.label(RichText::new(t!("flights.none")).font(menu::body()).color(DIM));
+            return;
+        }
+        for (i, (_, h)) in self.flights.iter().enumerate() {
+            menu::panel().inner_margin(12.0).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.set_width((ui.available_width() - 190.0).max(200.0));
+                        ui.label(RichText::new(&h.name).font(menu::item_title()).color(TEXT));
+                        let (_, _, alt) = geo::pos_to_lla(h.state.pos());
+                        let where_ = if h.state.on_ground { t!("flights.on_ground").to_string() } else { t!("flights.in_air", (alt * 3.28084 / 100.0).round() * 100.0) };
+                        let mut line = format!("{} · {} · {}", flightlog::date_text(h.saved), i18n::tr_en_owned(&h.aircraft_name), where_);
+                        if h.recorded > 1.0 {
+                            line += &format!(" · {}", t!("flights.recorded", replay::clock(h.recorded)));
+                        }
+                        ui.label(RichText::new(line).font(menu::caption()).color(DIM));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(RichText::new(t!("flights.delete")).font(menu::caption())).clicked() {
+                            *act = Some(PauseAct::DeleteFlight(i));
+                        }
+                        if ui.button(RichText::new(t!("flights.load")).font(menu::label())).clicked() {
+                            *act = Some(PauseAct::LoadFlight(i));
+                        }
+                    });
+                });
+            });
+            ui.add_space(6.0);
+        }
+    }
+
+    /// The replay's bar along the foot of the screen: where in the flight,
+    /// play and pause, the speed, and the ways out.
+    fn replay_bar(&mut self, ctx: &egui::Context, act: &mut Option<PauseAct>) {
+        use egui::{Align2, RichText};
+        use menu::{ACCENT, DIM, TEXT};
+        let (start, end) = (self.tape.start(), self.tape.end());
+        let Some(r) = self.replay.as_mut() else { return };
+        let w = (ctx.content_rect().width() - 80.0).clamp(360.0, 900.0);
+        egui::Area::new(egui::Id::unique("replay_bar")).order(egui::Order::Foreground).anchor(Align2::CENTER_BOTTOM, [0.0, -28.0]).show(ctx, |ui| {
+            flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(18, 12)), |ui| {
+                ui.set_width(w);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(t!("replay.replay")).font(menu::item_title()).color(ACCENT));
+                    ui.label(RichText::new(format!("{} / {}", replay::clock(r.player.t - start), replay::clock(end - start))).font(menu::data()).color(TEXT));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(RichText::new(t!("replay.exit")).font(menu::label())).clicked() {
+                            *act = Some(PauseAct::ReplayExit);
+                        }
+                        if ui.button(RichText::new(t!("replay.take_over")).font(menu::label())).clicked() {
+                            *act = Some(PauseAct::ReplayTakeOver);
+                        }
+                        ui.add_space(12.0);
+                        if ui.button("+").clicked() {
+                            r.player.faster(true);
+                        }
+                        ui.label(RichText::new(format!("{}×", r.player.speed)).font(menu::data()).color(TEXT));
+                        if ui.button("−").clicked() {
+                            r.player.faster(false);
+                        }
+                        ui.add_space(12.0);
+                        if ui.button("+10 s").clicked() {
+                            r.player.t = (r.player.t + 10.0).min(end);
+                        }
+                        let play = if r.player.playing { t!("replay.pause") } else { t!("replay.play") };
+                        if ui.button(RichText::new(play).font(menu::label())).clicked() {
+                            if !r.player.playing && r.player.t >= end {
+                                r.player.t = start;
+                            }
+                            r.player.playing = !r.player.playing;
+                        }
+                        if ui.button("−10 s").clicked() {
+                            r.player.t = (r.player.t - 10.0).max(start);
+                        }
+                    });
+                });
+                ui.spacing_mut().slider_width = w;
+                ui.add(egui::Slider::new(&mut r.player.t, start..=end.max(start + 0.01)).show_value(false));
+                ui.label(RichText::new(t!("replay.keys")).font(menu::caption()).color(DIM));
+            });
+        });
+    }
+
+    /// Keys during a replay (the aircraft is not being flown): true if taken.
+    fn replay_key(&mut self, code: KeyCode) -> bool {
+        let (start, end) = (self.tape.start(), self.tape.end());
+        let Some(r) = self.replay.as_mut() else { return false };
+        match code {
+            KeyCode::Space => {
+                if !r.player.playing && r.player.t >= end {
+                    r.player.t = start;
+                }
+                r.player.playing = !r.player.playing;
+            }
+            KeyCode::ArrowLeft => r.player.t = (r.player.t - 10.0).max(start),
+            KeyCode::ArrowRight => r.player.t = (r.player.t + 10.0).min(end),
+            KeyCode::ArrowUp => r.player.faster(true),
+            KeyCode::ArrowDown => r.player.faster(false),
+            KeyCode::Enter | KeyCode::NumpadEnter => self.stop_replay(true),
+            KeyCode::Escape => self.stop_replay(false),
+            // (the views, help and screenshots work as in flight; nothing flies the aircraft)
+            KeyCode::KeyC | KeyCode::F1 | KeyCode::F12 => return false,
+            _ => {}
+        }
+        true
     }
 
     /// The flight under way is over: into the logbook with it.
@@ -6431,6 +6761,27 @@ impl Game {
         if let Some(i) = self.pending_challenge.take() {
             self.start_challenge(i);
         }
+        if let Some(what) = self.pending_load.take() {
+            match replay::find(&what) {
+                Some(file) => self.load_flight(&file),
+                None => {
+                    self.status = t!("flights.not_found", what);
+                    self.status_until = self.real + 8.0;
+                }
+            }
+        }
+        if self.save_at.is_some_and(|t| self.real >= t && self.mode == Mode::Fly && self.loading.is_none()) {
+            self.save_at = None;
+            self.save_flight();
+        }
+        if self.replay_at.is_some_and(|t| self.real >= t && self.mode == Mode::Fly && self.loading.is_none()) {
+            self.replay_at = None;
+            self.start_replay();
+        }
+        if self.replay.is_some() && self.replay_take.is_some_and(|t| self.real >= t) {
+            self.replay_take = None;
+            self.stop_replay(true);
+        }
         // Released once the ground under the wheels is there in full detail.
         if let Some((lat, lon, until)) = self.hold_spot {
             let fine = self.world.ground_zoom(lat, lon).is_some_and(|z| z >= self.world.max_zoom.min(16));
@@ -6519,7 +6870,7 @@ impl Game {
         let mut emit = Vec::new();
         let mut femit: Vec<(DVec3, render::Particle)> = Vec::new();
         let (mut scrape_n, mut steps) = (0usize, 0usize);
-        if !self.crashed && !in_menu {
+        if !self.crashed && !in_menu && self.replay.is_none() {
             // A flight starts with the first step of a new aircraft, and ends parked after landing.
             if self.flight.as_ref().is_some_and(|f| f.parked()) {
                 self.end_flight(false);
@@ -6546,6 +6897,7 @@ impl Game {
             while self.acc >= h && steps < MAX_SUBSTEPS {
                 self.acc -= h;
                 let imp = self.plane.step(h, &c, &self.world);
+                self.tape.step(h, &self.plane);
                 if self.flight.is_some() {
                     let s = self.log_sample();
                     let events = self.flight.as_mut().map(|f| f.step(s, h)).unwrap_or_default();
@@ -6739,6 +7091,16 @@ impl Game {
                     self.acc = 0.0;
                     break;
                 }
+            }
+        }
+        // A replay: the recording moves the aircraft instead.
+        if !in_menu && let Some(r) = self.replay.as_mut() {
+            let moved = if self.pause_open { 0.0 } else { r.player.advance(dt_real, &self.tape) };
+            if let Some(f) = self.tape.at(r.player.t) {
+                f.show(&mut self.plane, moved);
+            }
+            if dt > 0.0 {
+                self.gauges.update(dt, &self.plane, self.time);
             }
         }
         crate::gputime::cpu("sim.flight_physics+weapons");
@@ -8501,8 +8863,11 @@ impl Game {
             if page == Page::Game {
                 self.pad_home_focus(&resume);
             }
+            if self.tape.len_s() >= 1.0 && menu::big_button(ui, t!("replay.watch_again"), Hint::None, false, false).clicked() {
+                *act = Some(PauseAct::Replay);
+            }
             ui.add_space(8.0);
-            for (p, text) in [(Page::Settings, t!("game.settings")), (Page::Controls, t!("game.controls_reference")), (Page::Failures, t!("game.failures_2")), (Page::Logbook, t!("log.logbook")), (Page::Challenges, t!("challenge.challenges"))] {
+            for (p, text) in [(Page::Settings, t!("game.settings")), (Page::Controls, t!("game.controls_reference")), (Page::Failures, t!("game.failures_2")), (Page::Logbook, t!("log.logbook")), (Page::Challenges, t!("challenge.challenges")), (Page::Flights, t!("flights.saved_flights"))] {
                 let b = menu::big_button(ui, text, Hint::None, false, page == p);
                 if b.clicked() {
                     self.pause_page = if page == p && p != Page::Settings { Page::Game } else { p };
@@ -8546,7 +8911,7 @@ impl Game {
         });
 
         // The key list or the failures, beside the buttons.
-        if matches!(self.pause_page, Page::Controls | Page::Failures | Page::Logbook | Page::Challenges) {
+        if matches!(self.pause_page, Page::Controls | Page::Failures | Page::Logbook | Page::Challenges | Page::Flights) {
             let x = margin + col_w + 48.0;
             let w = (screen.width() - x - margin).clamp(300.0, 820.0);
             let h = screen.height() - 2.0 * margin.max(64.0);
@@ -8554,7 +8919,7 @@ impl Game {
                 menu::panel().inner_margin(24.0).show(ui, |ui| {
                     ui.set_width(w - 48.0);
                     ui.set_max_height(h - 48.0);
-                    let title = match self.pause_page { Page::Controls => t!("game.controls_reference"), Page::Logbook => t!("log.logbook"), Page::Challenges => t!("challenge.challenges"), _ => t!("game.failures_2") };
+                    let title = match self.pause_page { Page::Controls => t!("game.controls_reference"), Page::Logbook => t!("log.logbook"), Page::Challenges => t!("challenge.challenges"), Page::Flights => t!("flights.saved_flights"), _ => t!("game.failures_2") };
                     ui.label(RichText::new(title).font(menu::page_title()).color(Color32::WHITE));
                     ui.add_space(10.0);
                     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
@@ -8567,6 +8932,8 @@ impl Game {
                             self.logbook_page(ui);
                         } else if self.pause_page == Page::Challenges {
                             self.challenges_page(ui, act);
+                        } else if self.pause_page == Page::Flights {
+                            self.flights_page(ui, act);
                         } else {
                             self.failures_page(ui);
                         }
@@ -8934,7 +9301,7 @@ impl Game {
         let mut act = None;
         let mut bar: Option<flightui::Bar> = None;
         let airport_hud = self.airport_hud();
-        let landing_guide = if self.minimap.landing_guidance && !self.crashed {
+        let landing_guide = if self.minimap.landing_guidance && !self.crashed && self.replay.is_none() {
             self.world.airfield_near(self.plane.pos, 18_000.0).and_then(|field| {
                 let g = &field.geo;
                 field.traffic.active.or_else(|| g.active(self.wx.wind_from as f32, (self.wx.wind * 1.94384) as f32))
@@ -9231,7 +9598,7 @@ impl Game {
                                 items.retain(|i| !i.0.is_empty());
                                 padui::prompts(ui, &items, 24.0, 16.0, white);
                             } else {
-                                keys_line(ui, &[("R", t!("game.respawn")), ("G", t!("game.go_somewhere_else")), ("Esc", t!("game.menu_2"))]);
+                                keys_line(ui, &[("R", t!("game.respawn")), ("G", t!("game.go_somewhere_else")), ("Esc", t!("replay.menu_or_replay"))]);
                             }
                         });
                     });
@@ -9246,7 +9613,7 @@ impl Game {
                             items.retain(|i| !i.0.is_empty());
                             padui::prompts(ui, &items, 24.0, 16.0, white);
                         } else {
-                            keys_line(ui, &[("R", t!("game.respawn")), ("G", t!("game.go_somewhere_else")), ("Esc", t!("game.menu_2"))]);
+                            keys_line(ui, &[("R", t!("game.respawn")), ("G", t!("game.go_somewhere_else")), ("Esc", t!("replay.menu_or_replay"))]);
                         }
                     });
                 });
@@ -9256,7 +9623,7 @@ impl Game {
             }
             self.minimap.trail.push(lat.to_degrees(), lon.to_degrees());
             self.minimap.tuned = minimap_tuned(&self.radios);
-            if !self.pause_open && !self.show_help && !self.goto_open && (self.minimap.full || (self.hud_on() && self.minimap.visible)) {
+            if !self.pause_open && !self.show_help && !self.goto_open && self.replay.is_none() && (self.minimap.full || (self.hud_on() && self.minimap.visible)) {
                 {
                     let horizontal = f.dot(e).hypot(f.dot(n));
                     let up = self.plane.pos.normalize();
@@ -9265,8 +9632,11 @@ impl Game {
                     self.minimap.show(ctx, &self.src, lat, lon, (horizontal > 1e-5).then_some(hdg.to_radians()), self.info_open, landing_guide.as_ref(), &self.world, route);
                 }
             }
-            if self.challenge.as_ref().is_some_and(|a| a.result.is_some()) && !self.pause_open {
+            if self.challenge.as_ref().is_some_and(|a| a.result.is_some()) && !self.pause_open && self.replay.is_none() {
                 self.challenge_card(ctx, &mut act);
+            }
+            if self.replay.is_some() && !self.pause_open {
+                self.replay_bar(ctx, &mut act);
             }
             if self.show_help {
                 egui::Area::new(egui::Id::unique("help")).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
@@ -9335,11 +9705,26 @@ impl Game {
             self.toolbar_act(b);
         }
         // Going anywhere else leaves the challenge.
-        if !matches!(act, None | Some(PauseAct::Resume)) {
+        if !matches!(act, None | Some(PauseAct::Resume | PauseAct::Replay | PauseAct::ReplayExit | PauseAct::SaveFlight | PauseAct::DeleteFlight(_))) {
             self.leave_challenge();
         }
         match act {
             Some(PauseAct::Resume) => self.set_pause_menu(false),
+            Some(PauseAct::Replay) => self.start_replay(),
+            Some(PauseAct::ReplayExit) => self.stop_replay(false),
+            Some(PauseAct::ReplayTakeOver) => self.stop_replay(true),
+            Some(PauseAct::SaveFlight) => self.save_flight(),
+            Some(PauseAct::LoadFlight(i)) => {
+                if let Some((file, _)) = self.flights.get(i).cloned() {
+                    self.load_flight(&file);
+                }
+            }
+            Some(PauseAct::DeleteFlight(i)) => {
+                if let Some((file, _)) = self.flights.get(i) {
+                    replay::delete(file);
+                }
+                self.flights = replay::list();
+            }
             Some(PauseAct::Challenge(i)) => self.start_challenge(i),
             Some(PauseAct::Respawn) => {
                 self.set_pause_menu(false);

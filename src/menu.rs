@@ -548,11 +548,13 @@ pub enum Page {
     Logbook,
     /// the landing challenges (challenge.rs)
     Challenges,
+    /// the saved flights (replay.rs)
+    Flights,
 }
 
 impl Page {
     pub const INFO: [Page; 5] = [Page::Flight, Page::Places, Page::Radio, Page::Autopilot, Page::Weather];
-    pub const PAUSE: [Page; 6] = [Page::Game, Page::Settings, Page::Controls, Page::Failures, Page::Logbook, Page::Challenges];
+    pub const PAUSE: [Page; 7] = [Page::Game, Page::Settings, Page::Controls, Page::Failures, Page::Logbook, Page::Challenges, Page::Flights];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -567,6 +569,7 @@ impl Page {
             Page::Failures => "Failures",
             Page::Logbook => "Logbook",
             Page::Challenges => "Challenges",
+            Page::Flights => "Flights",
         }
     }
 

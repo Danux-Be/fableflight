@@ -371,7 +371,7 @@ impl Tracker {
 }
 
 /// The airport whose ground this is, if any (degrees).
-fn airport_at(lat: f64, lon: f64) -> Option<String> {
+pub fn airport_at(lat: f64, lon: f64) -> Option<String> {
     let db = airports::Db::get();
     db.near(lat, lon, 4000.0).into_iter().find(|(i, d)| *d <= db.apts[*i as usize].reach().max(1500.0)).map(|(i, _)| db.apts[i as usize].ident.clone())
 }
