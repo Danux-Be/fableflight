@@ -3,7 +3,7 @@
 //! area 17.95 m² (aspect ratio 16.1), length 8.35 m, empty mass 360 kg, most
 //! 600 kg, best glide 34 at about 50 kt, least sink 0.65 m/s at about 40 kt,
 //! never exceed 151 kt, schempp-hirth airbrakes, a fixed main and nose wheel,
-//! a t tail. built on the robin's spec (handling, sounds) with all of that
+//! a t tail. its skins are plain gloss white (glass fibre: no rivets or laps). built on the robin's spec (handling, sounds) with all of that
 //! set; the model is built here, kept simple: the pod, the wings, the tail,
 //! the canopy, and the front seat with its instruments. no engine: it starts
 //! in the air (or on a tow line it does not have) and soars in the thermals.
@@ -80,7 +80,7 @@ fn fuselage(b: &mut Builder) {
             let a = k as f32 / segs as f32 * std::f32::consts::TAU;
             let p = Vec3::new(w * a.cos(), y + h * a.sin(), z);
             let nrm = Vec3::new(a.cos() / w.max(0.01), a.sin() / h.max(0.01), 0.0).normalize_or_zero();
-            m.push(p, nrm, [a * 0.3, z], &WHITE.pat(pat::FUSE), 0.0);
+            m.push(p, nrm, [a * 0.3, z], &WHITE, 0.0);
         }
     }
     let nc = segs as u32 + 1;
@@ -104,7 +104,7 @@ fn fuselage(b: &mut Builder) {
 
 fn wings(b: &mut Builder) {
     let f = foil();
-    let skin = WHITE.pat(pat::WING);
+    let skin = WHITE;
     let one = |_: f32| 1.0;
     let zero = |_: f32| 0.0;
     let ah = |_: f32| 0.76;
@@ -117,7 +117,7 @@ fn wings(b: &mut Builder) {
     b.pair(["left wing", "right wing"], [G_LWING, G_RWING], w, |_| Anim::Fixed, Vec3::ZERO, Vec3::X, [None, None]);
     // the ailerons behind their hinge line.
     let mut a = Mesh::default();
-    f.skin(&mut a, &WHITE.pat(pat::CTRL), AILERON[0], AILERON[1], 18, &ah, &one, 10, true);
+    f.skin(&mut a, &WHITE, AILERON[0], AILERON[1], 18, &ah, &one, 10, true);
     let hinge0 = f.pt(AILERON[0], 0.76, 0.0, -1.0);
     let hinge1 = f.pt(AILERON[1], 0.76, 0.0, -1.0);
     let (l, r) = b.pair(["left aileron", "right aileron"], [G_LWING, G_RWING], a, |sd| Anim::hinge(Drive::new(Input::Aileron(sd), -0.35)), hinge0, hinge1 - hinge0, [None, None]);
@@ -138,11 +138,11 @@ fn tail(b: &mut Builder) {
     let one = |_: f32| 1.0;
     let zero = |_: f32| 0.0;
     let rh = |_: f32| 0.66;
-    fin.skin(&mut m, &WHITE.pat(pat::TAIL), 0.0, 1.15, 10, &zero, &rh, 18, false);
+    fin.skin(&mut m, &WHITE, 0.0, 1.15, 10, &zero, &rh, 18, false);
     fin.cap(&mut m, &GREY, 1.15, 0.0, 1.0, false);
     b.fixed("fin", G_TAIL, m);
     let mut r = Mesh::default();
-    fin.skin(&mut r, &WHITE.pat(pat::CTRL), 0.0, 1.15, 10, &rh, &one, 8, true);
+    fin.skin(&mut r, &WHITE, 0.0, 1.15, 10, &rh, &one, 8, true);
     let h0 = fin.pt(0.0, 0.66, 0.0, -1.0);
     let h1 = fin.pt(1.15, 0.66, 0.0, -1.0);
     let rud = b.add("rudder", G_TAIL, r, Anim::hinge(Drive::new(Input::Rudder, 0.5)), h0, h1 - h0, None);
@@ -150,11 +150,11 @@ fn tail(b: &mut Builder) {
     let stab = Foil { at: Box::new(|s: f32| Sect { le: Vec3::new(s, 1.46, 3.95 + s * 0.05), c: 0.62 - s * 0.16, cdir: Vec3::Z, up: Vec3::Y, tf: 1.0 }), t: 0.10, camber: 0.0 };
     let eh = |_: f32| 0.62;
     let mut st = Mesh::default();
-    stab.skin(&mut st, &WHITE.pat(pat::TAIL), 0.0, 1.6, 10, &zero, &eh, 16, false);
+    stab.skin(&mut st, &WHITE, 0.0, 1.6, 10, &zero, &eh, 16, false);
     stab.cap(&mut st, &GREY, 1.6, 0.0, 1.0, false);
     b.pair(["left stabiliser", "right stabiliser"], [G_TAIL, G_TAIL], st, |_| Anim::Fixed, Vec3::ZERO, Vec3::X, [None, None]);
     let mut e = Mesh::default();
-    stab.skin(&mut e, &WHITE.pat(pat::CTRL), 0.0, 1.6, 10, &eh, &one, 8, true);
+    stab.skin(&mut e, &WHITE, 0.0, 1.6, 10, &eh, &one, 8, true);
     let e0 = stab.pt(0.0, 0.62, 0.0, -1.0);
     let (l, rr) = b.pair(["left elevator", "right elevator"], [G_TAIL, G_TAIL], e, |_| Anim::hinge(Drive::new(Input::Elevator, 0.4)), e0, Vec3::X, [None, None]);
     b.role(l, Role::Elevator).role(rr, Role::Elevator);
