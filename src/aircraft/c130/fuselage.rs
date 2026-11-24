@@ -66,7 +66,12 @@ pub(super) fn body_pt(z: f32, th: f32) -> Vec3 {
         return p;
     }
     let xj = sec_pt(&sec(z), thj).x;
-    let q = fair_pt(th / thj, top, w, xj, yj);
+    let mut q = fair_pt(th / thj, top, w, xj, yj);
+    // The wing box broadens the shoulders. Keep the rounded pressure hull
+    // wherever it stands above the fairing, including aft of the wing.
+    let s = sec(z);
+    let arc = (1.0 - (q.x / s.w).powf(s.nt)).max(0.0).powf(1.0 / s.nt);
+    q.y = q.y.max(s.mid + (s.top - s.mid) * arc);
     p.lerp(Vec3::new(q.x, q.y, z), f)
 }
 fn body_fn(z: f32, th: f32) -> Vec3 {
@@ -78,6 +83,59 @@ fn fuse_fn(z: f32, th: f32) -> Vec3 {
 /// The crown's height at station z (with the fairing).
 pub(super) fn crown(z: f32) -> f32 {
     body_pt(z, 0.0).y
+}
+
+/// The angle round the section at z (from the crown) where the radome's
+/// joint crosses it: 0 ahead of the joint's top, the joint's foot
+/// (`RADOME_JOINT[0]` high) from `D_RADOME` aft.
+pub(super) fn joint_th(z: f32) -> f32 {
+    let y = by(radome_joint_h(z + ZN));
+    if y >= sec(z).top - 1e-4 {
+        0.0
+    } else {
+        fuse_th(z, y)
+    }
+}
+
+/// Points along the radome's joint on the flight deck section's side of
+/// it (3 cm off), about every 7.5 cm, right side from the crown round to
+/// the keel, then the left side back: where its fasteners go.
+fn radome_ring() -> Vec<(Vec3, Vec3)> {
+    let off = 0.03;
+    let mut line: Vec<Vec3> = Vec::new();
+    // the curved part, from the top of the nose down to the joint's foot
+    let n = 60;
+    for k in 0..=n {
+        let d = RADOME_JOINT[1] + (D_RADOME - RADOME_JOINT[1]) * k as f32 / n as f32;
+        let z = bz(d);
+        let y = by(radome_joint_h(d)) + off;
+        if y < sec(z).top {
+            line.push(fuse_pt(z, fuse_th(z, y)));
+        }
+    }
+    // the upright part, round to the keel
+    let z = bz(D_RADOME) + off;
+    let th0 = fuse_th(z, by(RADOME_JOINT[0]) + off);
+    for k in 0..=80 {
+        line.push(fuse_pt(z, th0 + (PI - th0) * k as f32 / 80.0));
+    }
+    // resampled evenly
+    let mut out = Vec::new();
+    let (mut acc, step) = (0.0, 0.075);
+    let mut next = 0.0;
+    for w in line.windows(2) {
+        let l = (w[1] - w[0]).length();
+        while next <= acc + l {
+            let q = w[0].lerp(w[1], (next - acc) / l.max(1e-6));
+            let th = fuse_th(q.z, q.y);
+            out.push((fuse_pt(q.z, th), fuse_n(q.z, th)));
+            next += step;
+        }
+        acc += l;
+    }
+    let left: Vec<(Vec3, Vec3)> = out.iter().map(|(p, n)| (*p * Vec3::new(-1.0, 1.0, 1.0), *n * Vec3::new(-1.0, 1.0, 1.0))).collect();
+    out.extend(left);
+    out
 }
 
 /// Skin row spacing: fine round the nose and the fairing, coarser along the box.
@@ -159,8 +217,9 @@ pub(super) fn fuselage(b: &mut Builder) {
     let skin = SKIN.pat(pat::FUSE);
     let zero = |_: f32| 0.0;
     let pi = |_: f32| PI;
-    // The radome: composite, no pattern (no rivets or panels); its joint's fasteners on the deck section.
-    let radome = section_grid(&stations(D_NOSE, D_RADOME, &skin_step), 96, &fuse_fn, &zero, &pi, 0.0, false, &mt(mat::LIVERY, 0.20, 0.22, 0.22));
+    // The radome: composite, no pattern (no rivets or panels); its joint's
+    // fasteners on the deck section. Each section from its joint down.
+    let radome = section_grid(&stations(D_NOSE, D_RADOME, &skin_step), 96, &fuse_fn, &joint_th, &pi, 0.0, false, &mt(mat::LIVERY, 0.20, 0.22, 0.22));
     b.fixed("radome", G_PROP, radome);
 
     // The body, FS 245 to the ramp hinge, with the wing-root fairing on its crown.
@@ -473,6 +532,26 @@ pub(super) fn sponsons(b: &mut Builder) {
         lip.grid(&WELL_MAT, &rows, false, true);
     }
     r.append(&lip);
+    // The well's outboard skirt: a fixed panel just inside the door's
+    // opening, down to below the door's top edge with the gear down, so the
+    // dropped door hangs under unbroken skin (photographs show no open slot
+    // over it, e.g. https://commons.wikimedia.org/wiki/File:JASDF_KC-130H(85-1080)_right_main_landing_gear_right_front_view_at_Komaki_Air_Base_March_2,_2019.jpg ).
+    // With the door shut it lies hidden inside the sponson. [est]
+    let mut skirt = Mesh::default();
+    let rows: Vec<Vec<SP>> = stations(w0 + ZN, w1 + ZN, &|_| 0.2)
+        .iter()
+        .map(|&d| {
+            let z = bz(d);
+            let top = spon_pt(z, DOOR_T[0]);
+            let x = top.x - 0.10;
+            let y1 = top.y + 0.03;
+            let y0 = top.y - DOOR_DROP - 0.06;
+            vec![(Vec3::new(x, y1, z), [z, DOOR_T[0]], 0.0), (Vec3::new(x, y0, z), [z, DOOR_T[0] + 0.08], 0.0)]
+        })
+        .collect();
+    skirt.grid(&skin, &rows, false, false);
+    skirt.grid(&skin, &rows, false, true);
+    r.append(&skirt);
     // The wells, and in each the vertical tracks the struts ride and the
     // screw jack that drives them [est: C-130 main gear: each strut is
     // raised straight up by a jack screw along its tracks].
@@ -527,22 +606,15 @@ pub(super) fn flight_deck(b: &mut Builder) {
     let zero = |_: f32| 0.0;
     let pi = |_: f32| PI;
     let mut deck = section_grid(&stations(D_RADOME, D_DECK, &skin_step), 96, &fuse_fn, &zero, &pi, 0.0, false, &SKIN.pat(pat::FUSE));
+    // Over the radome's curved joint: each section from the crown down to it.
+    deck.append(&section_grid(&stations(RADOME_JOINT[1], D_RADOME, &skin_step), 96, &fuse_fn, &zero, &joint_th, 0.0, false, &SKIN.pat(pat::FUSE)));
     well_box(&mut deck, NOSE_WELL, NOSE_WELL_ROOF);
-    // Fasteners round the radome's joint.
-    let zr = bz(D_RADOME) + 0.03;
-    let s = sec(zr);
-    let ring: Vec<(Vec3, Vec3)> = (0..80)
-        .map(|k| {
-            let th = k as f32 / 80.0 * std::f32::consts::TAU;
-            let (t, sx) = if th > PI { (std::f32::consts::TAU - th, -1.0) } else { (th, 1.0) };
-            let q = sec_pt(&s, t);
-            (Vec3::new(q.x * sx, q.y, zr), fuse_n(zr, t) * Vec3::new(sx, 1.0, 1.0))
-        })
-        .collect();
+    // Fasteners along the radome's joint.
+    let ring = radome_ring();
     screw_row(&mut deck, &ring, 0.008, 3.0);
-    // Pitot-static probes, two each side under the side windows [est: places from photographs].
+    // Pitot-static probes, two each side under the chin windows [est: places from the side photograph of 05-1085].
     for sx in [-1.0f32, 1.0] {
-        for (d, h) in [(2.62f32, 2.32f32), (2.75, 2.04)] {
+        for (d, h) in [(2.78f32, 2.26f32), (2.80, 1.92)] {
             let (p, n) = on_side(bz(d), by(h), sx, 0.0);
             deck.rbox(&ALU, p + n * 0.004, Vec3::new(0.035, 0.05, 0.06).max(Vec3::splat(0.004)), 0.01, Quat::from_rotation_arc(Vec3::X, n));
             deck.tube(&ALU, &[p - n * 0.01, p + n * 0.11, p + n * 0.13 - Vec3::Z * 0.20], &|t| 0.013 - 0.004 * t, 8, true);
@@ -557,7 +629,7 @@ pub(super) fn flight_deck(b: &mut Builder) {
         // the skin point at that x where the pane's lower frame is
         let at_h = |h: f32| -> Vec3 {
             let mut best = Vec3::ZERO;
-            let mut d = 1.95;
+            let mut d = D_GLASS[0];
             while d < 3.0 {
                 let z = bz(d);
                 let s = sec(z);
@@ -572,8 +644,9 @@ pub(super) fn flight_deck(b: &mut Builder) {
             }
             best
         };
-        let p0 = at_h(2.99);
-        let p1 = at_h(3.04);
+        let foot = WINDOWS[0].pts[0][1];
+        let p0 = at_h(foot - 0.06);
+        let p1 = at_h(foot - 0.01);
         let along = Vec3::new(-sx * 0.55, 0.0, 0.0);
         deck.tube(&DARK, &[p0 + Vec3::Y * 0.02, p1 + along + Vec3::Y * 0.02], &|_| 0.008, 6, true);
         deck.rbox(&DARK, p0 + Vec3::Y * 0.02, Vec3::new(0.025, 0.02, 0.025), 0.008, Quat::IDENTITY);

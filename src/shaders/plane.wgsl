@@ -3096,36 +3096,38 @@ fn well747(p: vec3f) -> f32 {
 const C130_ZN = 12.1;
 const C130_YG = 2.7;
 const C130_WIN_R = 0.035;
-const C130_WINP = array<vec4f, 16>(
-  vec4f(0.07, 2.95, 0.68, 2.95), vec4f(0.66, 3.62, 0.07, 3.66),
-  vec4f(0.76, 2.95, 1.3, 2.95), vec4f(1.24, 3.45, 0.76, 3.6),
-  vec4f(3.02, 0.12, 3.42, 0.12), vec4f(3.42, 0.5, 3.02, 0.5),
-  vec4f(3.02, 0.58, 3.42, 0.58), vec4f(3.42, 0.92, 3.02, 0.92),
-  vec4f(3.15, 3.05, 3.95, 3.05), vec4f(3.95, 3.62, 3.15, 3.55),
-  vec4f(4.1, 3.08, 4.75, 3.08), vec4f(4.75, 3.6, 4.1, 3.6),
-  vec4f(1.75, 1.5, 2.25, 1.47), vec4f(2.25, 2.15, 1.75, 2.2),
-  vec4f(2.33, 1.46, 2.78, 1.44), vec4f(2.78, 2.1, 2.33, 2.14)
+const C130_WINP = array<vec4f, 18>(
+  vec4f(0.07, 3.4, 0.68, 3.4), vec4f(0.66, 4.0, 0.07, 4.04),
+  vec4f(0.76, 3.4, 1.16, 3.4), vec4f(1.13, 3.8, 0.76, 3.96),
+  vec4f(0.66, 3.07, 0.98, 3.07), vec4f(0.98, 3.31, 0.7, 3.31),
+  vec4f(2.88, 4.02, 3.24, 4.02), vec4f(3.24, 4.25, 2.92, 4.25),
+  vec4f(3.32, 4.02, 3.68, 4.02), vec4f(3.68, 4.25, 3.32, 4.25),
+  vec4f(2.72, 3.47, 3.12, 3.47), vec4f(3.12, 3.88, 2.76, 3.88),
+  vec4f(3.2, 3.47, 3.68, 3.47), vec4f(3.68, 3.88, 3.2, 3.88),
+  vec4f(2.14, 2.5, 2.42, 2.48), vec4f(2.42, 3.06, 2.14, 3.08),
+  vec4f(2.5, 2.48, 2.8, 2.46), vec4f(2.8, 3.04, 2.5, 3.06)
 );
-const C130_WINK = array<vec4f, 8>(
-  vec4f(0.0, 1.95, 3.25, 0.0),
-  vec4f(0.0, 1.95, 3.25, 0.0),
-  vec4f(2.0, 3.45, 0.0, 0.0),
-  vec4f(2.0, 3.45, 0.0, 0.0),
+const C130_WINK = array<vec4f, 9>(
+  vec4f(0.0, 1.55, 2.7, 0.0),
+  vec4f(0.0, 1.55, 2.7, 0.0),
+  vec4f(0.0, 1.55, 2.7, 0.0),
+  vec4f(1.0, 0.7, 0.0, 0.0),
+  vec4f(1.0, 0.7, 0.0, 0.0),
   vec4f(1.0, 1.0, 0.0, 0.0),
   vec4f(1.0, 1.0, 0.0, 0.0),
   vec4f(1.0, 0.5, 0.0, 0.0),
   vec4f(1.0, 0.5, 0.0, 0.0)
 );
-const C130_DECK = vec4f(1.95, -0.65, -9.8, -5.15);
-const C130_DECK_TOP = 1.3;
+const C130_DECK = vec4f(1.95, -0.2, -10.36, -5.15);
+const C130_DECK_TOP = 1.9;
 // C-130: the flight deck windows; matches c130::dims::window.
 fn window_c130(p: vec3f) -> f32 {
   let d = p.z + C130_ZN;
   let h = p.y + C130_YG;
   let ax = abs(p.x);
-  if (d < 1.5 || d > 4.9 || h < 1.3) { return 1.0; }
+  if (d < 1.5 || d > 4.0 || h < 1.3) { return 1.0; }
   var best = 1.0;
-  for (var i = 0; i < 8; i++) {
+  for (var i = 0; i < 9; i++) {
     let k = C130_WINK[i];
     var q = vec2f(d, ax);
     var on = h > k.y;
@@ -3155,10 +3157,12 @@ fn well_c130(p: vec3f) -> f32 {
 // these copies of c130::dims (each named after the Rust constant; checked by
 // c130::paint's test `shader_mirrors_dims`). d: distance back from the
 // nose, h: height above the ground (as in dims.rs).
-const C130P_D = vec4f(1.95, 6.95, 19.45, 29.79);        // dims D_RADOME, D_DECK, D_RAMP, D_TAIL
-const C130P_FUSE_H = vec3f(4.1, 2.42, 0.66);            // dims FUSE_TOP_H, FUSE_MID_H, FUSE_BOT_H
+const C130P_D = vec4f(1.75, 6.95, 19.45, 29.79);        // dims D_RADOME, D_DECK, D_RAMP, D_TAIL
+const C130P_RADOME = vec3f(2.45, 1.4, 3.05);             // dims RADOME_JOINT
+const C130P_FUSE_H = vec3f(4.68, 2.42, 0.55);            // dims FUSE_TOP_H, FUSE_MID_H, FUSE_BOT_H
 const C130P_FUSE_HALF_W = 2.16;                          // dims FUSE_HALF_W
-const C130P_WING = vec4f(10.74325, 5.427, 2.596, 20.205); // dims LE0_D, CR, CT, SPAN
+const C130P_WING = vec4f(10.8808, 4.8768, 2.54, 20.205); // dims LE0_D, CR, CT, SPAN
+const C130P_TAPER_X = 5.588;
 const C130P_WING_ROOT = vec3f(2.16, 4.46, 0.043661);    // dims WING_ROOT_X, WING_ROOT_H, DIHEDRAL
 const C130P_FLAPS = vec4f(2.25, 13.55, 0.7, 0.75);      // dims FLAP_IB[0], FLAP_OB[1], XF_FLAP, XF_AIL
 const C130P_AILERON = vec2f(13.65, 19.7);               // dims AILERON
@@ -3166,10 +3170,10 @@ const C130P_ENG0 = vec3f(4.98, 3.8, 8.47);              // dims ENG[0]: span sta
 const C130P_ENG1 = vec3f(10.3, 4.03, 8.65);             // dims ENG[1]
 const C130P_NAC = vec2f(0.66, 0.95);                    // dims NAC_R, SPINNER_L
 const C130P_EXHAUST = vec4f(0.5, 0.42, 12.15, 12.3);    // dims EXHAUST_OFF (out, up), EXHAUST_D (inboard, outboard)
-const C130P_EXT_TANK = vec4f(7.64, 3.3, 9.4, 6.6);      // dims EXT_TANK: span station, height, nose d, length
-const C130P_STAB = vec4f(25.55, 27.05, 29.3, 29.05);    // dims STAB_LE (root, tip), STAB_TE (root, tip)
+const C130P_EXT_TANK = vec4f(7.64, 3.15, 9.4, 7.6);      // dims EXT_TANK: span station, height, nose d, length
+const C130P_STAB = vec4f(24.65688, 27.3253, 29.3, 29.05);    // dims STAB_LE (root, tip), STAB_TE (root, tip)
 const C130P_STAB_SH = vec2f(8.025, 4.0);                // dims STAB_SPAN, STAB_H
-const C130P_FIN = vec4f(22.4, 26.1, 28.55, 28.65);      // dims FIN_LE (root, tip), FIN_TE (root, tip)
+const C130P_FIN = vec4f(22.2, 26.7704, 28.55, 28.65);      // dims FIN_LE (root, tip), FIN_TE (root, tip)
 const C130P_FIN_H = vec3f(4.1, 7.56, 0.66);             // dims FIN_ROOT_H, FIN_H, RUDDER_HINGE
 const C130P_CREW_DOOR = vec4f(5.3, 6.2, 0.95, 2.7);     // dims CREW_DOOR (d0, d1, h0, h1), left side
 const C130P_PARA_DOOR = vec4f(17.75, 18.75, 1.1, 3.05); // dims PARA_DOOR, both sides
@@ -3177,10 +3181,11 @@ const C130P_RAMP = vec4f(19.45, 22.5, 26.0, 1.6);       // dims D_RAMP, RAMP_TIP
 const C130P_SPON = vec4f(9.9, 17.2, 2.66, 2.7);         // dims SPON_D, SPON_XO, SPON_TOP_H
 const C130P_GEAR = vec4f(2.17, 0.24, 0.508, 0.33);      // dims TRACK / 2, NOSE_WHEEL_X, MAIN_TYRE_W, NOSE_TYRE_W
 // The skin's circumferential butt joints (d) [est, from photographs and the
-// 20 in frame pitch], except the radome's (D_RADOME), FS 245 (D_DECK) and the
-// ramp hinge, FS 737 (D_RAMP); the overhead escape hatches (d) [est]; the
+// 20 in frame pitch], except the radome's (D_RADOME: the first, which
+// follows the joint's curve, c130_joint), FS 245 (D_DECK) and the ramp
+// hinge, FS 737 (D_RAMP); the overhead escape hatches (d) [est]; the
 // fuselage's lap joints (angle round the section from the crown) [est].
-const C130P_BUTTS = array<f32, 11>(1.95, 4.2, 6.95, 10.0, 13.05, 16.1, 19.45, 21.6, 24.0, 26.4, 28.5);
+const C130P_BUTTS = array<f32, 11>(1.75, 4.2, 6.95, 10.0, 13.05, 16.1, 19.45, 21.6, 24.0, 26.4, 28.5);
 const C130P_HATCH = vec3f(5.6, 9.3, 17.9);
 const C130P_LAPS = vec4f(0.42, 1.15, 1.95, 2.62);
 // The paints when no scheme was sent (another type's uniform): AMC grey.
@@ -3191,12 +3196,13 @@ const C130_INK = vec3f(0.014);
 // Chord, leading edge (d) and the chord line's height (h) at span station x
 // and chord fraction f (dims chord, le_d, wing_sect: 2°30' of dihedral
 // outboard of the root, 3° of incidence washing out to the tip).
-fn c130_chord(x: f32) -> f32 { return C130P_WING.y - (C130P_WING.y - C130P_WING.z) * min(abs(x), C130P_WING.w) / C130P_WING.w; }
+fn c130_outer(x: f32) -> f32 { return sat((abs(x) - C130P_TAPER_X) / (C130P_WING.w - C130P_TAPER_X)); }
+fn c130_chord(x: f32) -> f32 { return C130P_WING.y - (C130P_WING.y - C130P_WING.z) * c130_outer(x); }
 fn c130_le(x: f32) -> f32 { return C130P_WING.x + 0.25 * (C130P_WING.y - c130_chord(x)); }
 fn c130_wing_h(x: f32, f: f32) -> f32 {
   let ax = abs(x);
-  let ym = C130P_WING_ROOT.y + C130P_WING_ROOT.z * max(ax - C130P_WING_ROOT.x, 0.0);
-  let inc = radians(3.0 * (1.0 - min(ax / C130P_WING.w, 1.0)));
+  let ym = C130P_WING_ROOT.y + C130P_WING_ROOT.z * max(ax - C130P_TAPER_X, 0.0);
+  let inc = radians(3.0 * (1.0 - c130_outer(ax)));
   return ym + sin(inc) * c130_chord(ax) * (0.5 - f);
 }
 // Height of the fuselage section's widest point along it (dims FUSE's mid
@@ -3265,9 +3271,17 @@ fn c130_insignia_at(L: vec3f, part: u32) -> vec2f {
 // The radome (forward of its joint), the flat black anti-glare panel on the
 // nose ahead of the windshield, and a line on the fuselage's sides in the
 // inboard propellers' plane: coverage.
-fn c130_radome(d: f32, aa: f32) -> f32 { return smoothstep(C130P_D.x + aa, C130P_D.x - aa, d); }
+// How far aft of the radome's joint (d) a point at height h is (dims
+// radome_joint_d: upright, then curving forward over the top).
+fn c130_joint(d: f32, h: f32) -> f32 {
+  let u = sat((h - C130P_RADOME.x) / (C130P_RADOME.z - C130P_RADOME.x));
+  return d - (C130P_D.x - (C130P_D.x - C130P_RADOME.y) * u * u);
+}
+fn c130_radome(d: f32, h: f32, aa: f32) -> f32 { return smoothstep(aa, -aa, c130_joint(d, h)); }
+// (From the radome's joint up to the windshield's top frame, out to its
+// corner panes: dims WINDOWS[0..2], about 4.04 m high and 1.2 m out.)
 fn c130_antiglare(d: f32, h: f32, ax: f32, aa: f32) -> f32 {
-  let e = max(max(2.6 - h, ax - 1.35 + max(h - 3.4, 0.0)), max(C130P_D.x - d, d - 2.95));
+  let e = max(max(3.0 - h, max(h - 4.1, ax - 1.25 + max(h - 3.75, 0.0) * 0.8)), max(-c130_joint(d, h), d - 2.7));
   return smoothstep(aa, -aa, e);
 }
 fn c130_prop_line(d: f32, h: f32, ax: f32, aa: f32) -> f32 {
@@ -3315,7 +3329,7 @@ fn livery_c130(L: vec3f, aa: f32, pt: u32) -> vec3f {
   let ins = c130_insignia_at(L, part);
   c = mix(c, dark, afill(ins.x, aa) * (1.0 - afill(ins.y, aa)));
   if (part == 0u) {
-    c = mix(c, dark, c130_radome(d, aa));
+    c = mix(c, dark, c130_radome(d, h, aa));
     c = mix(c, ink, max(c130_antiglare(d, h, ax, aa), c130_prop_line(d, h, ax, aa)));
   }
   if (part == 1u) { c = mix(c, ink, c130_walkway(L, aa)); }
@@ -3343,7 +3357,7 @@ fn c130_euro1(L: vec3f, aa: f32, pt: u32, part: u32) -> vec3f {
   c = mix(c, gy, smoothstep(0.55 - e, 0.55 + e, f));
   let ins = c130_insignia_at(L, part);
   c = mix(c, ink, sat(aline(ins.x, 0.025, aa) + aline(ins.y, 0.025, aa) * afill(ins.x, aa)));
-  if (part == 0u) { c = mix(c, ink, max(max(c130_radome(d, aa), c130_antiglare(d, h, ax, aa)), c130_prop_line(d, h, ax, aa))); }
+  if (part == 0u) { c = mix(c, ink, max(max(c130_radome(d, h, aa), c130_antiglare(d, h, ax, aa)), c130_prop_line(d, h, ax, aa))); }
   if (part == 1u) { c = mix(c, ink, c130_walkway(L, aa)); }
   if (part == 3u && pt == P_TAIL) { c = mix(c, ink, c130_fin_title(L, aa)); }
   return c;
@@ -3375,7 +3389,7 @@ fn c130_cargo(L: vec3f, aa: f32, pt: u32, part: u32) -> vec3f {
   let y0 = 2.85 + rise;
   c = mix(c, teal, smoothstep(aa, -aa, abs(h - y0) - 0.12 * taper));
   c = mix(c, coral, smoothstep(aa, -aa, abs(h - y0 - 0.2 * taper) - 0.028 * taper));
-  c = mix(c, grey, c130_radome(d, aa));
+  c = mix(c, grey, c130_radome(d, h, aa));
   c = mix(c, C130_INK, c130_antiglare(d, h, ax, aa));
   c = mix(c, vec3f(0.42, 0.025, 0.02), c130_prop_line(d, h, ax, aa));
   return mix(c, teal, c130_side_title(L, aa, 0.34));
@@ -3397,7 +3411,7 @@ fn c130_rescue(L: vec3f, aa: f32, pt: u32, part: u32) -> vec3f {
   if (part == 1u) { return mix(mix(grey, orange, smoothstep(17.3 - aa, 17.3 + aa, ax)), ink, c130_walkway(L, aa)); }
   if (part == 2u) { return grey; }
   var c = mix(grey, orange, smoothstep(aa, -aa, abs(d - 21.2) - 0.75));
-  c = mix(c, ink, max(max(c130_radome(d, aa), c130_antiglare(d, h, ax, aa)), c130_prop_line(d, h, ax, aa)));
+  c = mix(c, ink, max(max(c130_radome(d, h, aa), c130_antiglare(d, h, ax, aa)), c130_prop_line(d, h, ax, aa)));
   return mix(c, ink, c130_side_title(L, aa, 0.5));
 }
 
@@ -3532,12 +3546,13 @@ fn relief_c130(pt: u32, L: vec3f, Nl: vec3f, px: f32) -> vec3f {
     let spon = ax > C130P_FUSE_HALF_W - 0.03 && d > C130P_SPON.x && d < C130P_SPON.y && y < C130P_SPON.w + 0.05;
     // (round the section: about metres of skin from the crown; up the sponsons' sides)
     let around = select(th * 2.05, y + ax, spon);
-    if (d > C130P_D.x + 0.1 && d < C130P_D.w - 0.4) {
+    if (c130_joint(d, y) > 0.1 && d < C130P_D.w - 0.4) {
       let fr = (fract((d - C130P_D.y) / 0.508 + 0.5) - 0.5) * 0.508;
       rv = max(rv, rivets(around, abs(fr), 0.034, rr) * rf * 0.7);
     }
     for (var i = 0; i < 11; i++) {
-      let dz = d - C130P_BUTTS[i];
+      var dz = d - C130P_BUTTS[i];
+      if (i == 0) { dz = c130_joint(d, y); }
       if (abs(dz) < 0.06) {
         h -= ga * line(dz, gw);
         dirt += line(dz, gw * 2.5);

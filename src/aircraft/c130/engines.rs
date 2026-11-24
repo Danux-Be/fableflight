@@ -4,26 +4,32 @@ use glam::Mat4;
 use std::f32::consts::TAU;
 
 /// The nacelle's section along its length, relative to the propeller hub:
-/// (distance aft of the propeller plane, half width, top, bottom,
-/// squareness). Ahead of the wing it is deep and slightly flat-sided, the
-/// chin swelling under the spinner round the engine's air intake and the
-/// oil cooler's scoop (the T56's compressor sits below the offset
-/// reduction gearbox that drives the propeller); from the leading edge its
-/// top runs up into the wing, and under the wing it closes up into the
-/// lower skin ahead of the flaps. [est, from photographs; the leading edge
-/// is 2.45 m behind the propeller plane on both engines (dims)]
+/// (distance aft of the propeller plane, half width of the upper part, top,
+/// bottom, squareness, half width of the chin). Seen from ahead the T56
+/// nacelle is a keyhole: a round upper part about 1 m across round the
+/// offset reduction gearbox, over a narrower, slab-sided chin round the
+/// engine's air intake and the oil cooler; it is deeper than it is wide
+/// (about 1.5 m by 1.0-1.2 m). Its top climbs gently from the cowl's face to
+/// the wing's upper skin behind the leading edge; it widens a little to
+/// about 1.2 m where the wing meets it, and stays at full depth well back
+/// under the wing before its underside sweeps up into the lower skin ahead
+/// of the flaps. [est: read off the three-view's front and plan views
+/// (33 px/m: the nacelle 0.9-1.0 m across the cowl face, 1.2 m at the
+/// leading edge, 1.5 m deep, the chin about 0.76 m wide) and photographs,
+/// e.g. https://commons.wikimedia.org/wiki/File:JASDF_KC-130H(85-1080)_T56-A-15_turboprop_engine_nacelle(right_wing,_outside)_right_front_view_at_Komaki_Air_Base_March_2,_2019.jpg ;
+/// the leading edge is 2.45 m behind the propeller plane on both engines (dims)]
 #[rustfmt::skip]
-const NAC: [[f32; 5]; 10] = [
-    [0.00, 0.42, 0.42, -0.42, 2.0],
-    [0.15, 0.50, 0.50, -0.60, 2.1],
-    [0.40, 0.58, 0.57, -0.80, 2.3],
-    [0.80, 0.63, 0.62, -0.91, 2.5],
-    [1.60, 0.65, 0.66, -0.95, 2.5],
-    [2.40, 0.65, 0.70, -0.95, 2.5],
-    [2.75, 0.65, 0.98, -0.94, 2.5],
-    [3.60, 0.62, 1.00, -0.88, 2.5],
-    [4.40, 0.55, 0.96, -0.72, 2.4],
-    [5.10, 0.40, 0.92, -0.45, 2.3],
+const NAC: [[f32; 6]; 10] = [
+    [0.00, 0.44, 0.44, -0.44, 2.2, 0.44],
+    [0.12, 0.48, 0.48, -0.62, 2.4, 0.40],
+    [0.35, 0.50, 0.52, -0.84, 2.6, 0.40],
+    [0.70, 0.51, 0.56, -0.93, 2.7, 0.40],
+    [1.20, 0.52, 0.62, -0.95, 2.8, 0.42],
+    [1.80, 0.54, 0.72, -0.95, 2.8, 0.46],
+    [2.40, 0.57, 0.86, -0.94, 2.8, 0.50],
+    [2.90, 0.59, 1.00, -0.92, 2.8, 0.52],
+    [3.60, 0.58, 1.00, -0.90, 2.8, 0.52],
+    [4.20, 0.55, 0.98, -0.84, 2.7, 0.50],
 ];
 /// Where the nacelle's tail closes against the wing's lower skin: the
 /// distance aft of the propeller plane (just ahead of the flaps' noses) and
@@ -36,7 +42,7 @@ fn nac_tail(e: usize) -> (f32, f32) {
 }
 
 /// Catmull-Rom through the table's column.
-fn nac_at(col: usize, s: f32, tbl: &[[f32; 5]]) -> f32 {
+fn nac_at(col: usize, s: f32, tbl: &[[f32; 6]]) -> f32 {
     let n = tbl.len();
     if s <= tbl[0][0] {
         return tbl[0][col];
@@ -56,24 +62,32 @@ fn nac_at(col: usize, s: f32, tbl: &[[f32; 5]]) -> f32 {
     (2.0 * t3 - 3.0 * t2 + 1.0) * y0 + (t3 - 2.0 * t2 + t) * m0 + (-2.0 * t3 + 3.0 * t2) * y1 + (t3 - t2) * m1
 }
 
-/// The nacelle's table for engine e, its tail closing on the wing.
-fn nac_table(e: usize) -> Vec<[f32; 5]> {
+/// The nacelle's table for engine e, its tail closing on the wing: full
+/// depth to about 1.3 m ahead of the flaps, then the underside sweeps up.
+fn nac_table(e: usize) -> Vec<[f32; 6]> {
     let (s_end, lower) = nac_tail(e);
-    let mut t: Vec<[f32; 5]> = NAC.iter().copied().filter(|r| r[0] < s_end - 1.6).collect();
-    t.push([s_end - 1.0, 0.44, 0.94, lower - 0.62, 2.3]);
-    t.push([s_end - 0.45, 0.26, 0.90, lower - 0.28, 2.2]);
-    t.push([s_end, 0.03, 0.85, lower + 0.04, 2.0]);
+    let mut t: Vec<[f32; 6]> = NAC.iter().copied().filter(|r| r[0] < s_end - 1.3).collect();
+    t.push([s_end - 0.9, 0.48, 0.94, lower - 0.70, 2.6, 0.44]);
+    t.push([s_end - 0.4, 0.32, 0.88, lower - 0.32, 2.4, 0.30]);
+    t.push([s_end, 0.05, 0.80, lower + 0.04, 2.0, 0.05]);
     t
 }
 
 /// A point on engine e's nacelle (right side): s aft of the propeller
-/// plane, a round from the top (0) through the outboard side.
-fn nac_pt(e: usize, tbl: &[[f32; 5]], s: f32, a: f32) -> Vec3 {
-    let (w, t, bt, n) = (nac_at(1, s, tbl), nac_at(2, s, tbl), nac_at(3, s, tbl), nac_at(4, s, tbl));
+/// plane, a round from the top (0) through the outboard side. The upper
+/// half is a superellipse of the upper half width; below the thrust line
+/// the sides draw in to the chin's half width, squarer (slab-sided).
+fn nac_pt(e: usize, tbl: &[[f32; 6]], s: f32, a: f32) -> Vec3 {
+    let (w, t, bt, n, wb) = (nac_at(1, s, tbl), nac_at(2, s, tbl), nac_at(3, s, tbl), nac_at(4, s, tbl), nac_at(5, s, tbl));
     let (sn, cs) = a.sin_cos();
-    let ex = |v: f32| v.signum() * v.abs().powf(2.0 / n);
-    let y = if cs > 0.0 { t * ex(cs) } else { -bt * ex(cs) };
-    prop_hub(e) + Vec3::new(w * ex(sn), y, s)
+    let ex = |v: f32, n: f32| v.signum() * v.abs().powf(2.0 / n);
+    if cs >= 0.0 {
+        prop_hub(e) + Vec3::new(w * ex(sn, n), t * ex(cs, n), s)
+    } else {
+        let nb = n + 0.6;
+        let ww = w + (wb - w) * smoothstep(0.10, 0.85, -cs);
+        prop_hub(e) + Vec3::new(ww * ex(sn, nb), -bt * ex(cs, nb), s)
+    }
 }
 
 /// One nacelle (right side, engine e): the cowling, its intakes, the jet
@@ -104,15 +118,15 @@ fn nacelle(e: usize) -> Mesh {
         .collect();
     m.grid(&cowl, &rows, true, false);
     // The front: a ring round the spinner's back plate.
-    m.lathe(&cowl, hub, Vec3::Z, &[[0.36, 0.0], [0.42, 0.0]], 32, false);
+    m.lathe(&cowl, hub, Vec3::Z, &[[0.38, 0.0], [0.445, 0.0]], 32, false);
     // The engine's air intake under the spinner: a polished lip round a dark duct.
-    let ic = hub + Vec3::new(0.0, -0.50, 0.12);
+    let ic = hub + Vec3::new(0.0, -0.58, 0.10);
     let mut intake = Mesh::default();
     intake.lathe(&mt(mat::ALU, 0.70, 0.71, 0.73), Vec3::ZERO, Vec3::Z, &[[0.15, 0.20], [0.15, 0.04], [0.165, 0.0], [0.19, -0.012], [0.215, 0.0], [0.225, 0.05], [0.22, 0.14]], 24, true);
     intake.disc(&DARK, Vec3::Z * 0.18, Vec3::NEG_Z, Vec3::Y, 0.155, 20);
     for v in &mut intake.v {
         let q = Vec3::from(v.pos);
-        v.pos = (ic + Vec3::new(q.x * 1.25, q.y, q.z)).into();
+        v.pos = (ic + Vec3::new(q.x * 1.35, q.y * 0.95, q.z)).into();
     }
     m.append(&intake);
     // The oil cooler's scoop under the chin, and its exit flap further aft.
@@ -156,16 +170,19 @@ fn nacelle(e: usize) -> Mesh {
 /// one fixed pitch, about 30° at the tip].
 fn propeller(hub: Vec3) -> (Mesh, Mesh, Mesh) {
     let mut sp = Mesh::default();
-    // The spinner: a long blunt cone, its after-body round to the cowling.
-    let prof: Vec<[f32; 2]> = (0..=20)
+    // The spinner: a blunt bullet, full-bodied over most of its length and
+    // rounded at the tip, its after-body round to the cowling [est, from
+    // photographs]. (Built along -Z, forward, so its profile rises along the
+    // lathe's axis and the normals face out.)
+    let prof: Vec<[f32; 2]> = (0..=24)
         .map(|k| {
-            let u = k as f32 / 20.0;
-            let r = SPINNER_R * (1.0 - u.powf(1.15)).max(0.0).powf(0.72);
-            [if k == 20 { 0.0 } else { r.max(0.012) }, -SPINNER_L * u]
+            let u = k as f32 / 24.0;
+            let r = SPINNER_R * (1.0 - u.powf(1.7)).max(0.0).powf(0.55);
+            [if k == 24 { 0.0 } else { r.max(0.012) }, SPINNER_L * u]
         })
         .collect();
-    sp.lathe(&FLAT_BLACK, hub, Vec3::Z, &prof, 36, true);
-    sp.lathe(&FLAT_BLACK, hub, Vec3::Z, &[[0.36, 0.06], [SPINNER_R + 0.005, 0.04], [SPINNER_R + 0.005, 0.0], [SPINNER_R, -0.02]], 36, true);
+    sp.lathe(&FLAT_BLACK, hub, Vec3::NEG_Z, &prof, 36, true);
+    sp.lathe(&FLAT_BLACK, hub, Vec3::NEG_Z, &[[0.36, -0.06], [SPINNER_R + 0.005, -0.04], [SPINNER_R + 0.005, 0.0], [SPINNER_R, 0.02]], 36, true);
     // Its fasteners round the joint with the after-body.
     for k in 0..16 {
         let a = k as f32 / 16.0 * TAU;
@@ -218,12 +235,12 @@ fn propeller(hub: Vec3) -> (Mesh, Mesh, Mesh) {
 }
 
 /// The external tank's radius (fraction of `EXT_TANK_R`) at fraction u of
-/// its length from the nose: a blunt ogive nose, a parallel middle, a long
-/// tapered tail [est].
+/// its length from the nose: an ogive nose coming to a small rounded cap, a
+/// parallel middle, a long tapered tail [est, from photographs].
 pub(super) fn tank_r(u: f32) -> f32 {
     if u < 0.24 {
         let v = 1.0 - u / 0.24;
-        (1.0 - v * v).max(0.0).sqrt()
+        (1.0 - v.powf(1.8)).max(0.0).powf(0.6)
     } else if u < 0.52 {
         1.0
     } else {
@@ -238,8 +255,9 @@ fn ext_tank() -> Mesh {
     let c = ext_tank_nose();
     let tank = SKIN.pat(pat::NACELLE);
     // A blunt ogive nose, a parallel middle, a long tapered tail [est].
+    // (Nose to tail along +Z, so the profile rises along the lathe's axis
+    // and the normals face out.)
     let prof: Vec<[f32; 2]> = (0..=40)
-        .rev()
         .map(|k| {
             let u = k as f32 / 40.0;
             let r = tank_r(u);

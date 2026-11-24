@@ -580,7 +580,10 @@ impl Chart {
                 let du = g((i + 1).min(nz - 1), j).unwrap_or(pc) - g(i.saturating_sub(1), j).unwrap_or(pc);
                 let dv = g(i, (j + 1).min(ns - 1)).unwrap_or(pc) - g(i, j.saturating_sub(1)).unwrap_or(pc);
                 let mut n = du.cross(dv).normalize_or_zero();
-                if n.dot(Vec3::new(-pc.x, FLOOR + 0.9 - pc.y, 0.0)) < 0.0 {
+                // (the way in: toward the middle of the deck at the pilots'
+                // station, which also holds where the ceiling slopes steeply
+                // down to the windshield's foot ahead of it)
+                if n.dot(Vec3::new(0.0, FLOOR + 0.6, EYE.z) - pc) < 0.0 {
                     n = -n;
                 }
                 let k = c.k(i, j);
@@ -1044,9 +1047,9 @@ fn window_frames(m: &mut Mesh) {
 }
 
 /// The sun visors (tinted plastic), stowed flat under the ceiling over each
-/// pilot just aft of the brow windows, on the rod they swing down on.
+/// pilot, on the rod they swing down on.
 fn sun_visors(m: &mut Mesh) {
-    let zv = bz(WINDOWS[2].pts[1][0] + WIN_R + 0.16);
+    let zv = EYE.z + 0.05;
     for sx in [-1.0f32, 1.0] {
         let p = inside(Vec3::new(sx * 0.53, deck_ceiling(zv) - 0.035, zv), 0.03);
         m.rbox(&mt(mat::PLASTIC, 0.035, 0.05, 0.04), p, Vec3::new(0.10, 0.003, 0.09), 0.003, Quat::IDENTITY);
@@ -1227,7 +1230,7 @@ fn side_panel(m: &mut Mesh, f: &Face, sx: f32) {
     let yb = FLOOR + 0.60;
     let z_o = PANEL_Z + 0.20;
     let top_in = PANEL_TOP_Y - 0.02;
-    let top_out = by(2.87);
+    let top_out = PANEL_TOP_Y - 0.19;
     let pt = |a: f32, b: f32| -> Vec3 {
         let yi = yb + (top_in - yb) * b;
         let yo = yb + (top_out - yb) * b;
@@ -1330,7 +1333,7 @@ fn glareshield(m: &mut Mesh, f: &Face) {
 /// engine stack and the gear handle are seen over it. (`dims::PED_TOP_Y` is
 /// the envelope's allowance; the pedestal is built lower than it.)
 fn q_pivot_y() -> f32 {
-    by(2.47)
+    FLOOR + 0.42
 }
 const Q_R: f32 = 0.125;
 const Q_ANG: f32 = 0.78;
@@ -1764,7 +1767,7 @@ fn aft_deck(m: &mut Mesh) {
     let xt = xw - 0.55;
     m.rbox(&WOOD, Vec3::new((xt + xw) * 0.5, yt, zc), Vec3::new((xw - xt) * 0.5, 0.012, (nz1 - nz0) * 0.5), 0.006, Quat::IDENTITY);
     m.rbox(&CHROME, Vec3::new(xt + 0.01, yt - 0.02, zc), Vec3::new(0.008, 0.012, (nz1 - nz0) * 0.5), 0.004, Quat::IDENTITY);
-    let rack = Face::new(Vec3::new(deck_half_w(zc, yt + 0.62) - 0.17, yt + 0.36, zc), Vec3::new(0.0, 0.0, 1.0), Vec3::Y);
+    let rack = Face::new(Vec3::new(deck_half_w(zc - 0.40, yt + 0.62) - 0.17, yt + 0.36, zc), Vec3::new(0.0, 0.0, 1.0), Vec3::Y);
     let rack = if rack.n().x > 0.0 { Face::new(rack.o, -rack.ax, rack.ay) } else { rack };
     m.rbox(&mt(mat::SATIN, 0.20, 0.22, 0.22), rack.at_h(0.0, 0.0, -0.08), Vec3::new(0.40, 0.26, 0.08), 0.01, rack.rot());
     for r in 0..3 {
@@ -1784,7 +1787,8 @@ fn aft_deck(m: &mut Mesh) {
     // The crew bunk along the left wall, aft, its curtain rail.
     let (bz0, bz1) = (DECK_AFT_Z - 1.90, DECK_AFT_Z - 0.06);
     let yb = FLOOR + 0.48;
-    let xwb = -(deck_half_w(bz0, FLOOR + 0.01).min(deck_half_w(bz1, FLOOR + 0.01)) - 0.02);
+    // (the wall at its narrowest from the floor up to the cushion's top)
+    let xwb = -([bz0, bz1].iter().flat_map(|&z| [0.01f32, 0.3, 0.62].map(|dy| deck_half_w(z, FLOOR + dy))).fold(f32::MAX, f32::min) - 0.02);
     let xi = xwb + 0.66;
     m.rbox(&SEAT_FRAME, Vec3::new((xwb + xi) * 0.5, (FLOOR + yb) * 0.5, (bz0 + bz1) * 0.5), Vec3::new((xi - xwb) * 0.5, (yb - FLOOR) * 0.5, (bz1 - bz0) * 0.5), 0.01, Quat::IDENTITY);
     m.rbox(&mt(mat::FABRIC, 0.10, 0.12, 0.08).pat(pat::SEAT), Vec3::new((xwb + xi) * 0.5, yb + 0.05, (bz0 + bz1) * 0.5), Vec3::new((xi - xwb) * 0.5 - 0.01, 0.05, (bz1 - bz0) * 0.5 - 0.01), 0.04, Quat::IDENTITY);
@@ -2017,8 +2021,8 @@ pub fn sees_inside(eye: Vec3, d: Vec3) -> bool {
         if p.y < FLOOR + 0.01 || p.z > DECK_AFT_Z {
             return true;
         }
-        // The panel and the glareshield ahead.
-        if (p - f.o).dot(n) < 0.01 && p.y < GLARE_Y + 0.005 && p.x.abs() < PW + 0.15 {
+        // The panel and the glareshield ahead (as far forward as it reaches).
+        if (p - f.o).dot(n) < 0.01 && p.y < GLARE_Y + 0.005 && p.x.abs() < PW + 0.15 && p.z > GLARE_Z - 0.01 {
             return true;
         }
         // The pedestal, the overhead, the seats.

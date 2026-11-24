@@ -30,9 +30,12 @@
 //!   [1] (Jane's-derived, https://baike.baidu.com/en/item/C-130%20Hercules/5058110);
 //!   centre wing to outer wing joint at WS 220, inboard nacelle on the WS 178
 //!   and 213 ribs [1] (Lockheed, https://asipcon.com/proceedings/proceedings_2006/2006_PDFs/Tuesday/0430_Bateman.pdf).
-//!   Root and tip chord are not published: the wing here is the trapezoid
-//!   (quarter chord unswept) that has exactly the published area, span and
-//!   MAC: 5.427 m on the centreline, 2.596 m at the tip [est].
+//!   C-130H wing and empennage chords: Structural Loads Handbook, Appendix C,
+//!   tables C.4–C.6: https://fenix.tecnico.ulisboa.pt/downloadFile/395143117996/58159%20-%20STRUCTURAL%20LOADS%20HANDBOOK.pdf
+//!   The 192 in centre wing starts tapering at WS 220 to a 100 in tip.
+//!   These nominal chords give 162.91 m² before rounding the tips.
+//!   Tailplane root/tip chords are 182.8/67.9 in, fin chords 250/74 in.
+//!   Tail trailing-edge stations remain estimates from the three-view.
 //! - Fuselage: cargo floor FS 245 to FS 737, ramp FS 737 (hinge) to FS 869,
 //!   compartment 123 in wide, 108 in high [1] (AMC load planning workbook,
 //!   https://milairx.com/wp-content/uploads/2020/12/AMC-ACLP-Workbook-36-101-Vol-II-1Jan15.pdf);
@@ -52,28 +55,31 @@
 //!   https://www.lockheedmartin.com/content/dam/lockheed-martin/aero/documents/sustainment/csc/service-news/sn-mag-v21-v30/v26n3.pdf).
 //!   Nacelles: inboard about WS 196 (4.98 m, between its attach ribs), outboard
 //!   about 10.3 m (measured off the pocket guide's plan view, ±0.5 m) [est].
-//! - Tail: tailplane span 52 ft 8 in (16.05 m) [2+]. Fin and tailplane chords,
-//!   areas and hinge lines: estimates.
+//! - Tail: tailplane span 52 ft 8 in (16.05 m) [2+]. Fin and tailplane chord sources above.
 //! - Tyres: mains 56x20-20 (one each on four struts, two in tandem a side),
 //!   nose twin 39x13-16: the commonly quoted C-130 sizes, NOT verified
 //!   against a manual [est].
 //! - Flight deck: no eye reference point, floor height or window layout was
 //!   found in a public source (TO 1C-130H-1 figures are not freely
-//!   available). The envelope below is an ESTIMATE from photographs: 23
-//!   windows in all [2+] (windshield, the brow windows above it, side
-//!   windows and two windows below the pilots' eyes: a former RAF Hercules
-//!   pilot, https://www.twz.com/air/confessions-of-a-c-130-hercules-pilot);
-//!   `WINDOWS` cuts 16 of them (eight a side: the windshield's centre and
-//!   corner panes, two brow windows, two side windows, two chin windows), so
-//!   seven of the real panes are not modelled.
+//!   available). The envelope below is an ESTIMATE: 23 windows in all [2+]
+//!   (windshield, the windows above it, side windows and two windows below
+//!   the pilots' eyes: a former RAF Hercules pilot,
+//!   https://www.twz.com/air/confessions-of-a-c-130-hercules-pilot); their
+//!   places and the nose's heights read off the three-view and photographs
+//!   (`WINDOWS`, `FUSE`). `WINDOWS` cuts 18 of them (nine a side: the
+//!   windshield's centre and corner panes and the small pane under the
+//!   corner, two of the upper row's three, two of the side row's three, the
+//!   two chin windows), so five of the real panes are not modelled. The
+//!   floor (`DECK_FLOOR_H`) is put level with the chin windows' sills and
+//!   the eye 1.20 m over it.
 //! - Known departures of the flight-deck envelope (`DECK_*`, `OVHD_*`,
 //!   `WINDOWS`) from the real aircraft, left as they are because the flight
 //!   deck is built to them: the overhead panel (`OVHD_FWD_Z`..`OVHD_AFT_Z`,
 //!   3.40-4.40 m from the nose) sits further aft than the real one, which
-//!   starts over the windshield's top frame; and the two chin windows each
-//!   side (h 1.44-2.20 m) lie mostly below the flight deck floor
-//!   (`DECK_FLOOR_H`, 2.05 m), where the real ones look out from beside the
-//!   pilots' rudder pedals, so from the seat they show little.
+//!   starts over the windshield's top frame; the windshield's lower edge is
+//!   about 10 cm lower than the photographs show, so that the line over the
+//!   glareshield meets glass; the lining levels off 2.05 m over the floor
+//!   (`DECK_HEADROOM`) where the real headliner follows the roof higher.
 //!
 //! The fuselage station of the nose tip is not published either: FS 245 is
 //! put 6.95 m behind it (FS_NOSE, an estimate), which puts the ramp hinge
@@ -121,41 +127,54 @@ pub const MAC: f32 = 4.178;
 /// Fuselage sections: distance from the nose, half width, top, height of the
 /// widest point, bottom (heights above the ground), squareness of the upper
 /// and the lower half (2 an ellipse, more squarer). The constant section
-/// (6.5 m to the ramp hinge) is 4.32 m wide, 0.66 m to 4.10 m high, widest
-/// at 2.42 m (4 ft 6 in above the cargo floor, where the pocket guide puts
-/// its widest inside), its belly flattened. The nose: a short blunt radome
-/// to 1.95 m, about 2 m across at its base and nearly round, its tip a
-/// little above its base's centre and its chin drooping away under it; the
-/// flight deck's face flaring out sharply behind it in plan (the radome
-/// stands proud of a broad, blunt face) while the profile runs on smoothly;
-/// the windshield rising from 2.95 m at 2.0 m back to the roof at 3.6 m.
-/// (Read off photographs and the three-views listed in mod.rs: the radome
-/// about 1.7-1.9 m long and 1.9-2.0 m across. The first, 2026-11 placeholder
-/// had a longer, pointed nose 3 m wide at the joint.) The tail sweeps up
-/// from the ramp hinge (19.45 m) to the tail cone's tip at 3.80 m. [est,
-/// except the width and the floor]
+/// (6.5 m to the ramp hinge) follows the near-circular outer shell in the
+/// Lockheed pocket guide cross sections (pp. 10–11, reference above).
+/// The 4.32 m beam and widest point 1.38 m above the cargo floor set the
+/// scale. Crown at 4.68 m and keel at 0.55 m are estimates, allowing a
+/// slightly fuller lower section around the floor rails (the Wikimedia
+/// three-view's side view, scaled to the 29.79 m length, puts the crown at
+/// 4.69 m and the belly at 0.58 m, and its fin tip at 11.7 m).
+///
+/// The nose (2026-11-24, read off that three-view's side and plan views
+/// at 37.7 px/m, a head-on photograph of a KC-130H and a side photograph of
+/// a C-130H's radome scaled by its 39 in nose tyre; listed in mod.rs): the
+/// flight deck's roof is flush with the crown, as on every C-130. From the
+/// radome's top (3.0 m high, about 1.4 m back) the windshield and the roof
+/// over it climb steeply: 3.7 m high 2 m back, 4.4 m at 2.7 m, the crown's
+/// height by 3.6 m. In plan the nose tapers smoothly, an ogive with no step
+/// at the radome: 2.0 m across at the radome's base (1.75 m back), 2.7 m at
+/// 2.3 m, 3.5 m at 3.1 m, 4.0 m at 4.3 m. The radome is about as wide as it
+/// is high from ahead (2.06 m by 2.1 m on the photograph): round on top,
+/// widest about 2.3 m up, its sides drawing in to a flattish bottom just
+/// above the belly, its tip at 2.2 m, its chin sloping up to it. The lower
+/// nose is slab-sided with a flat belly. (Earlier versions, 2026-11, kept
+/// the roof low, about 4 m, under a crown that rose behind it, and the
+/// radome first too round and then too narrow, 1.44 m across.) The tail
+/// sweeps up from the ramp hinge (19.45 m) to the tail cone's tip at
+/// 3.80 m. [est, except the width and the floor]
 #[rustfmt::skip]
-const FUSE: [[f32; 7]; 26] = [
-    [0.00, 0.05, 2.24, 2.21, 2.18, 2.0, 2.0],
-    [0.10, 0.40, 2.49, 2.19, 1.93, 2.0, 2.0],
-    [0.30, 0.64, 2.65, 2.17, 1.68, 2.0, 2.05],
-    [0.60, 0.82, 2.79, 2.16, 1.44, 2.0, 2.1],
-    [1.00, 0.93, 2.87, 2.16, 1.24, 2.0, 2.2],
-    [1.45, 0.99, 2.91, 2.17, 1.09, 2.0, 2.3],
-    [1.95, 1.04, 2.95, 2.20, 0.99, 2.0, 2.4],
-    [2.08, 1.36, 3.02, 2.23, 0.96, 2.0, 2.45],
-    [2.30, 1.62, 3.16, 2.27, 0.92, 2.0, 2.5],
-    [2.70, 1.78, 3.50, 2.33, 0.86, 2.0, 2.6],
-    [3.10, 1.90, 3.82, 2.38, 0.80, 2.0, 2.7],
-    [3.60, 2.00, 3.98, 2.40, 0.76, 2.0, 2.8],
-    [4.30, 2.08, 4.06, 2.41, 0.72, 2.0, 2.9],
-    [5.30, 2.13, 4.09, 2.42, 0.68, 2.0, 3.0],
-    [6.50, 2.16, 4.10, 2.42, 0.66, 2.0, 3.0],
-    [19.45, 2.16, 4.10, 2.42, 0.66, 2.0, 3.0],
-    [20.40, 2.15, 4.10, 2.46, 0.80, 2.0, 2.9],
-    [21.60, 2.10, 4.10, 2.58, 1.15, 2.0, 2.7],
-    [23.00, 1.98, 4.10, 2.78, 1.62, 2.0, 2.5],
-    [24.50, 1.74, 4.10, 3.02, 2.15, 2.0, 2.3],
+const FUSE: [[f32; 7]; 27] = [
+    [0.00, 0.04, 2.22, 2.20, 2.18, 2.0, 2.0],
+    [0.10, 0.34, 2.49, 2.21, 1.86, 2.0, 2.2],
+    [0.30, 0.53, 2.64, 2.23, 1.66, 2.0, 2.4],
+    [0.60, 0.66, 2.78, 2.25, 1.45, 2.0, 2.6],
+    [1.00, 0.79, 2.89, 2.28, 1.28, 2.0, 2.8],
+    [1.40, 0.90, 3.00, 2.31, 1.15, 2.0, 3.0],
+    [1.60, 0.95, 3.20, 2.33, 1.08, 2.0, 3.1],
+    [1.75, 1.00, 3.41, 2.34, 1.02, 2.0, 3.1],
+    [2.00, 1.14, 3.73, 2.36, 0.95, 2.0, 3.1],
+    [2.30, 1.35, 4.06, 2.38, 0.89, 2.0, 3.0],
+    [2.70, 1.57, 4.37, 2.39, 0.81, 2.0, 3.0],
+    [3.10, 1.75, 4.56, 2.40, 0.74, 2.0, 2.9],
+    [3.60, 1.91, 4.66, 2.41, 0.69, 2.0, 2.8],
+    [4.30, 2.03, 4.68, 2.42, 0.64, 2.0, 2.7],
+    [5.30, 2.13, 4.68, 2.42, 0.59, 2.0, 2.6],
+    [6.50, 2.16, FUSE_TOP_H, 2.42, FUSE_BOT_H, 2.0, 2.6],
+    [19.45, 2.16, FUSE_TOP_H, 2.42, FUSE_BOT_H, 2.0, 2.6],
+    [20.40, 2.15, 4.64, 2.46, 0.80, 2.0, 2.7],
+    [21.60, 2.10, 4.48, 2.58, 1.15, 2.0, 2.5],
+    [23.00, 1.98, 4.24, 2.78, 1.62, 2.0, 2.5],
+    [24.50, 1.74, 4.11, 3.02, 2.15, 2.0, 2.3],
     [26.00, 1.40, 4.09, 3.27, 2.65, 2.0, 2.2],
     [27.40, 1.02, 4.06, 3.48, 3.06, 2.0, 2.1],
     [28.50, 0.62, 4.01, 3.64, 3.36, 2.0, 2.0],
@@ -168,17 +187,39 @@ const FUSE: [[f32; 7]; 26] = [
 /// flight deck's aft bulkhead, FS 245), the cargo ramp's hinge (FS 737; the
 /// tail cone, ramp and aft door behind it).
 pub const D_NOSE: f32 = 0.0;
-pub const D_RADOME: f32 = 1.95;
+pub const D_RADOME: f32 = 1.75;
 pub const D_DECK: f32 = 6.95;
 pub const D_RAMP: f32 = 19.45;
 pub const D_TAIL: f32 = 29.79;
+/// The radome's joint, seen from the side: upright at `D_RADOME` up to
+/// `RADOME_JOINT[0]` high, then curving forward (d falling as the square of
+/// the height) to `RADOME_JOINT[1]` back at `RADOME_JOINT[2]` high, where
+/// it meets the top of the nose under the windshield. [est: the photograph
+/// of 05-1085's radome listed in mod.rs, scaled by its 39 in nose tyre,
+/// puts the upright part 1.66 m behind the tip, from 1.04 m up to 2.42 m,
+/// and its top end about 0.37 m further forward at 3.0 m; the three-view
+/// draws it 1.88 m back at the bottom and 1.43 m at the top.]
+pub const RADOME_JOINT: [f32; 3] = [2.45, 1.40, 3.05];
+/// The joint's distance from the nose at height h (d_j: the radome is the
+/// skin ahead of it; plane.wgsl's `c130_joint`).
+#[cfg_attr(not(test), allow(dead_code))] // (the shader's copy; the tests check the inverse against it)
+pub fn radome_joint_d(h: f32) -> f32 {
+    let u = ((h - RADOME_JOINT[0]) / (RADOME_JOINT[2] - RADOME_JOINT[0])).clamp(0.0, 1.0);
+    D_RADOME - (D_RADOME - RADOME_JOINT[1]) * u * u
+}
+/// The joint's height at distance d (its inverse, on the curved part;
+/// `RADOME_JOINT[2]` and above ahead of it).
+pub fn radome_joint_h(d: f32) -> f32 {
+    let u = ((D_RADOME - d) / (D_RADOME - RADOME_JOINT[1])).clamp(0.0, 1.0).sqrt();
+    RADOME_JOINT[0] + u * (RADOME_JOINT[2] - RADOME_JOINT[0])
+}
 /// The glazed part of the nose the window glass sheet covers.
-pub const D_GLASS: [f32; 2] = [1.5, 4.9];
+pub const D_GLASS: [f32; 2] = [1.5, 4.0];
 /// The outside skin's constant section: half width, top, widest, bottom (heights).
 pub const FUSE_HALF_W: f32 = 2.16;
-pub const FUSE_TOP_H: f32 = 4.10;
+pub const FUSE_TOP_H: f32 = 4.68;
 pub const FUSE_MID_H: f32 = 2.42;
-pub const FUSE_BOT_H: f32 = 0.66;
+pub const FUSE_BOT_H: f32 = 0.55;
 /// The cargo floor's height [1] and its stations (FS 245 to the ramp hinge, FS 737).
 pub const CARGO_FLOOR_H: f32 = 1.04;
 #[cfg_attr(not(test), allow(dead_code))] // (a sourced figure the tests check the drawing against)
@@ -355,43 +396,47 @@ pub fn skin_bottom(z: f32, x: f32) -> f32 {
 
 /// Span station of the wing tip (m out from the centreline).
 pub const SPAN: f32 = 20.205;
-/// The reference trapezoid: chord on the centreline and at the tip, the
+/// Centre and tapered outer panels: chord on the centreline and at the tip, the
 /// leading edge on the centreline (quarter chord unswept: the centre of
 /// gravity's station, `ZN`, is the quarter chord's).
-pub const CR: f32 = 5.427;
-pub const CT: f32 = 2.596;
+pub const CR: f32 = 4.8768;
+pub const CT: f32 = 2.54;
+pub const TAPER_X: f32 = 5.588;
 pub const LE0_D: f32 = ZN - 0.25 * CR;
 /// Where the MAC lies: its span station and its leading edge's distance from the nose.
 #[cfg_attr(not(test), allow(dead_code))] // (a sourced figure the tests check the drawing against)
-pub const MAC_X: f32 = 8.913;
+pub const MAC_X: f32 = TAPER_X + (SPAN - TAPER_X) * (CR - MAC) / (CR - CT);
 #[cfg_attr(not(test), allow(dead_code))] // (a sourced figure the tests check the drawing against)
 pub const LEMAC_D: f32 = ZN - 0.25 * MAC;
-/// Where the wing's upper and lower skins meet the fuselage's crown: it sits
-/// on top of the fuselage, its lower surface at the crown at the root.
+/// Lateral reference for the wing root. The centre wing crosses the
+/// upper cargo shell and blends into the shoulders through its fairing.
 pub const WING_ROOT_X: f32 = FUSE_HALF_W;
 /// The wing's mean plane at the root (height), and its dihedral (2°30').
 pub const WING_ROOT_H: f32 = 4.46;
 pub const DIHEDRAL: f32 = 0.043661; // tan 2.5°
 
 pub fn chord(x: f32) -> f32 {
-    CR - (CR - CT) * x.abs().min(SPAN) / SPAN
+    CR - (CR - CT) * outer_fraction(x)
+}
+fn outer_fraction(x: f32) -> f32 {
+    ((x.abs() - TAPER_X) / (SPAN - TAPER_X)).clamp(0.0, 1.0)
 }
 /// Leading edge (distance from the nose) at span station x.
 pub fn le_d(x: f32) -> f32 {
     LE0_D + 0.25 * (CR - chord(x))
 }
 /// Height of the wing's mean plane at span station x (flat across the
-/// fuselage, 2°30' of dihedral outboard of it).
+/// centre wing, 2°30' of dihedral outboard of it).
 pub fn wing_mid_h(x: f32) -> f32 {
-    WING_ROOT_H + DIHEDRAL * (x.abs() - WING_ROOT_X).max(0.0)
+    WING_ROOT_H + DIHEDRAL * (x.abs() - TAPER_X).max(0.0)
 }
 /// Thickness to chord: 18% at the root (64A318) to 12% at the tip (64A412).
 pub fn wing_tc(x: f32) -> f32 {
-    0.18 - 0.06 * (x.abs() / SPAN).min(1.0)
+    0.18 - 0.06 * outer_fraction(x)
 }
 /// Incidence (rad): 3° at the root washing out to 0° at the tip.
 pub fn wing_inc(x: f32) -> f32 {
-    (3.0 * (1.0 - (x.abs() / SPAN).min(1.0))).to_radians()
+    (3.0 * (1.0 - outer_fraction(x))).to_radians()
 }
 /// Right wing section at span station x.
 pub fn wing_sect(x: f32) -> Sect {
@@ -399,7 +444,7 @@ pub fn wing_sect(x: f32) -> Sect {
     let le = bz(le_d(x));
     let c = chord(x);
     let inc = wing_inc(x);
-    let dih = if x > WING_ROOT_X { DIHEDRAL } else { 0.0 };
+    let dih = if x > TAPER_X { DIHEDRAL } else { 0.0 };
     let ym = by(wing_mid_h(x));
     Sect { le: Vec3::new(x, ym + inc.sin() * c * 0.5, le), c, cdir: Vec3::new(0.0, -inc.sin(), inc.cos()), up: Vec3::new(-dih, inc.cos(), inc.sin()).normalize(), tf: wing_tc(x) / 0.18 }
 }
@@ -459,9 +504,16 @@ pub const fn exhaust(e: usize) -> Vec3 {
 }
 /// The lowest a propeller tip comes (height above the ground at rest).
 pub const PROP_TIP_LOW_H: f32 = ENG[0][1] - PROP_R;
-/// The external fuel tanks (1,360 US gal each) under each wing between the
-/// engines: span station, height of their axis, nose distance, length, radius [est].
-pub const EXT_TANK: [f32; 5] = [7.64, 3.30, 9.40, 6.60, 0.60];
+/// The external fuel tanks (1,360 US gal, 5.15 m³ each [2+]) under each
+/// wing between the engines: span station, height of their axis, nose
+/// distance, length, radius. [est: no dimensioned drawing found. The
+/// three-view's front view gives about 1.17 m across; its plan view puts the
+/// nose 1.5 m ahead of the leading edge; side photographs (e.g. JASDF
+/// 85-1079, listed in mod.rs) show a long slender tank, its pointed tail well
+/// behind the trailing edge, about 7.3-8.3 m long. 7.6 m by 1.2 m holds
+/// about 5.6 m³ with this profile (`engines::tank_r`), the fuel and its
+/// structure.]
+pub const EXT_TANK: [f32; 5] = [7.64, 3.15, 9.40, 7.60, 0.60];
 pub const EXT_TANK_L: f32 = EXT_TANK[3];
 pub const EXT_TANK_R: f32 = EXT_TANK[4];
 pub const fn ext_tank_nose() -> Vec3 {
@@ -472,9 +524,9 @@ pub const fn ext_tank_nose() -> Vec3 {
 
 /// The tailplane: half span (52 ft 8 in overall), leading and trailing edge
 /// at the root (centreline) and the tip, its height (no dihedral) [est
-/// except the span: 46 m² in all].
+/// except the span and chords].
 pub const STAB_SPAN: f32 = 8.025;
-pub const STAB_LE: [f32; 2] = [25.55, 27.05];
+pub const STAB_LE: [f32; 2] = [29.30 - 4.64312, 29.05 - 1.7247];
 pub const STAB_TE: [f32; 2] = [29.30, 29.05];
 pub const STAB_H: f32 = 4.00;
 /// The elevators: hinge chord fraction, and how far out from the centreline they start.
@@ -491,10 +543,10 @@ pub fn stab_foil() -> Foil {
 }
 /// The fin: its root on the crown, its height to 11.66 m overall; leading and
 /// trailing edges at the root and the tip; the rudder's hinge chord fraction
-/// and its span along the fin (from the root) [est: 33 m²].
-pub const FIN_ROOT_H: f32 = FUSE_TOP_H;
+/// and its span along the fin (from the root) (stations estimated, chords from Table C.6).
+pub const FIN_ROOT_H: f32 = 4.10;
 pub const FIN_H: f32 = HEIGHT - FIN_ROOT_H;
-pub const FIN_LE: [f32; 2] = [22.40, 26.10];
+pub const FIN_LE: [f32; 2] = [28.55 - 6.35, 28.65 - 1.8796];
 pub const FIN_TE: [f32; 2] = [28.55, 28.65];
 pub const RUDDER_HINGE: f32 = 0.66;
 pub const RUDDER_SPAN: [f32; 2] = [0.35, 7.25];
@@ -622,27 +674,37 @@ pub struct Win {
 }
 pub const FRONT: u8 = 0;
 pub const SIDE: u8 = 1;
+#[allow(dead_code)] // (no window is drawn in it at present)
 pub const TOP: u8 = 2;
 /// The windows' corner radius (m).
 pub const WIN_R: f32 = 0.035;
-/// The flight deck's windows [est, from photographs], each side: the
-/// windshield's centre and corner panes, the two brow windows over them, the
-/// two side windows, the two lower ("chin") windows below the eye.
-pub const WINDOWS: [Win; 8] = [
-    Win { view: FRONT, pts: [[0.07, 2.95], [0.68, 2.95], [0.66, 3.62], [0.07, 3.66]], gate: [1.95, 3.25] },
-    Win { view: FRONT, pts: [[0.76, 2.95], [1.30, 2.95], [1.24, 3.45], [0.76, 3.60]], gate: [1.95, 3.25] },
-    Win { view: TOP, pts: [[3.02, 0.12], [3.42, 0.12], [3.42, 0.50], [3.02, 0.50]], gate: [3.45, 0.0] },
-    Win { view: TOP, pts: [[3.02, 0.58], [3.42, 0.58], [3.42, 0.92], [3.02, 0.92]], gate: [3.45, 0.0] },
-    Win { view: SIDE, pts: [[3.15, 3.05], [3.95, 3.05], [3.95, 3.62], [3.15, 3.55]], gate: [1.0, 0.0] },
-    Win { view: SIDE, pts: [[4.10, 3.08], [4.75, 3.08], [4.75, 3.60], [4.10, 3.60]], gate: [1.0, 0.0] },
-    Win { view: SIDE, pts: [[1.75, 1.50], [2.25, 1.47], [2.25, 2.15], [1.75, 2.20]], gate: [0.5, 0.0] },
-    Win { view: SIDE, pts: [[2.33, 1.46], [2.78, 1.44], [2.78, 2.10], [2.33, 2.14]], gate: [0.5, 0.0] },
+/// The flight deck's windows, each side: the windshield's centre and
+/// corner panes, the small pane under the corner pane, two panes of the
+/// upper row over the side windows, two side windows beside the pilot, the
+/// two lower ("chin") windows by the rudder pedals. [est: read off the
+/// three-view's side view (side windows 2.62-3.76 m back, 3.47-3.92 m high;
+/// the upper row 2.84-3.76 m, 3.98-4.27 m; the chin windows 2.31-2.89 m,
+/// 2.41-3.02 m; the corner pane 2.20-2.73 m, 3.47-4.00 m), checked against
+/// the photographs listed in mod.rs (the chin windows 2.47-3.11 m high, the
+/// windshield's lower edge about 0.45 m above the radome's top: here 0.35,
+/// so that the view over the glareshield meets glass). The real
+/// side and upper rows have three panes each: here two.]
+pub const WINDOWS: [Win; 9] = [
+    Win { view: FRONT, pts: [[0.07, 3.40], [0.68, 3.40], [0.66, 4.00], [0.07, 4.04]], gate: [1.55, 2.70] },
+    Win { view: FRONT, pts: [[0.76, 3.40], [1.16, 3.40], [1.13, 3.80], [0.76, 3.96]], gate: [1.55, 2.70] },
+    Win { view: FRONT, pts: [[0.66, 3.07], [0.98, 3.07], [0.98, 3.31], [0.70, 3.31]], gate: [1.55, 2.70] },
+    Win { view: SIDE, pts: [[2.88, 4.02], [3.24, 4.02], [3.24, 4.25], [2.92, 4.25]], gate: [0.7, 0.0] },
+    Win { view: SIDE, pts: [[3.32, 4.02], [3.68, 4.02], [3.68, 4.25], [3.32, 4.25]], gate: [0.7, 0.0] },
+    Win { view: SIDE, pts: [[2.72, 3.47], [3.12, 3.47], [3.12, 3.88], [2.76, 3.88]], gate: [1.0, 0.0] },
+    Win { view: SIDE, pts: [[3.20, 3.47], [3.68, 3.47], [3.68, 3.88], [3.20, 3.88]], gate: [1.0, 0.0] },
+    Win { view: SIDE, pts: [[2.14, 2.50], [2.42, 2.48], [2.42, 3.06], [2.14, 3.08]], gate: [0.5, 0.0] },
+    Win { view: SIDE, pts: [[2.50, 2.48], [2.80, 2.46], [2.80, 3.04], [2.50, 3.06]], gate: [0.5, 0.0] },
 ];
 /// Signed distance to the nearest window opening (negative inside), body
 /// frame. Keep in step with `window_c130` in plane.wgsl.
 pub fn window(p: Vec3) -> f32 {
     let (d, h, ax) = (p.z + ZN, p.y + YG, p.x.abs());
-    if !(1.5..=4.9).contains(&d) || h < 1.3 {
+    if !(D_GLASS[0]..=D_GLASS[1]).contains(&d) || h < 1.3 {
         return 1.0;
     }
     let mut best = 1.0f32;
@@ -662,22 +724,29 @@ pub fn window(p: Vec3) -> f32 {
 
 // ---------------------------------------------------------------- flight deck envelope
 
-/// The flight deck: its floor's height, its forward limit (the rudder
-/// pedals under the panel) and its aft bulkhead (FS 245, the cargo
+/// The flight deck: its floor's height, its forward limit (the
+/// windshield's foot, under the glareshield; the rudder pedals hang under
+/// the panel aft of it) and its aft bulkhead (FS 245, the cargo
 /// compartment's front), as drawing distances. Everything the cockpit
 /// builds stays inside: above the floor, between the stations, under
 /// `deck_ceiling` and within `deck_half_w`. The exterior keeps its shell
-/// (skin, frames, insulation) outside the same surfaces. [est]
-pub const DECK_FLOOR_H: f32 = 2.05;
+/// (skin, frames, insulation) outside the same surfaces. [est: the floor is
+/// put level with the chin windows' sills, which look out beside the
+/// rudder pedals, 1.46 m over the cargo floor. Until 2026-11-24 the whole
+/// flight deck stood 0.45 m lower, under a roof that was too low.]
+pub const DECK_FLOOR_H: f32 = 2.50;
 pub const DECK_FLOOR_Y: f32 = by(DECK_FLOOR_H);
-pub const DECK_FWD_Z: f32 = bz(2.30);
+pub const DECK_FWD_Z: f32 = bz(1.74);
 pub const DECK_AFT_Z: f32 = bz(D_DECK);
 /// How far inside the outer skin the deck's lining runs (skin, frames and
 /// lining together), m.
 pub const LINING: f32 = 0.10;
-/// The lining's ceiling (body y) at station z.
+/// The lining's ceiling (body y) at station z: under the roof, levelling
+/// off 2.05 m over the floor (where the roof rounds over to the crown the
+/// lining, 10 cm in, would pinch).
+pub const DECK_HEADROOM: f32 = 2.05;
 pub fn deck_ceiling(z: f32) -> f32 {
-    sec(z).top - LINING - 0.02
+    sec(z).top.min(by(DECK_FLOOR_H + DECK_HEADROOM)) - LINING - 0.02
 }
 /// The lining's half width at station z and height y (0 where the section
 /// does not reach that height).
@@ -693,7 +762,7 @@ pub fn in_deck(p: Vec3) -> bool {
 /// right of the centreline): 1.20 m above the floor, 3.55 m behind the nose
 /// tip. From it the view over the glareshield lip down past the nose is
 /// about 11° [est].
-pub const EYE_H: f32 = 3.25;
+pub const EYE_H: f32 = DECK_FLOOR_H + 1.20;
 pub const EYE_D: f32 = 3.55;
 pub const EYE: Vec3 = Vec3::new(-0.62, by(EYE_H), bz(EYE_D));
 /// The seats' reference points: the middle of the cushion's top, 0.78 m
@@ -703,29 +772,29 @@ pub const SEAT_R: Vec3 = Vec3::new(0.62, by(EYE_H - 0.78), bz(EYE_D + 0.10));
 /// The main instrument panel: its face's station (0.75 m ahead of the
 /// eye), its top (just under the glareshield lip) and its bottom (body y).
 pub const PANEL_Z: f32 = bz(2.80);
-pub const PANEL_TOP_Y: f32 = by(3.06);
-pub const PANEL_BOT_Y: f32 = by(2.40);
+pub const PANEL_TOP_Y: f32 = by(DECK_FLOOR_H + 1.01);
+pub const PANEL_BOT_Y: f32 = by(DECK_FLOOR_H + 0.35);
 /// The glareshield: its lip over the panel (height, body y) and the
 /// station it reaches forward to under the windshield. The lip is on the
 /// line from the eye over the nose to the windshield's lower edge.
-pub const GLARE_Y: f32 = by(3.10);
-pub const GLARE_Z: f32 = bz(2.45);
+pub const GLARE_Y: f32 = by(DECK_FLOOR_H + 1.05);
+pub const GLARE_Z: f32 = bz(2.15);
 /// The centre pedestal between the seats: half width, top (body y), aft
 /// end, and the station of the power levers' pivots on it.
 pub const PED_HALF_W: f32 = 0.20;
-pub const PED_TOP_Y: f32 = by(2.85);
+pub const PED_TOP_Y: f32 = by(DECK_FLOOR_H + 0.80);
 pub const PED_AFT_Z: f32 = bz(3.75);
 pub const PED_LEVER_Z: f32 = bz(3.05);
 /// The overhead panel: its forward and aft stations, its lowest face (body y), half width.
 pub const OVHD_FWD_Z: f32 = bz(3.40);
 pub const OVHD_AFT_Z: f32 = bz(4.40);
-pub const OVHD_LOW_Y: f32 = by(3.70);
+pub const OVHD_LOW_Y: f32 = by(DECK_FLOOR_H + 1.65);
 pub const OVHD_HALF_W: f32 = 0.40;
 /// Where the landing gear lever sits on the main panel: its rest point, on
 /// the centre panel's face just right of the centreline, as the flight deck
 /// builds it (deck.rs `GEAR_U` for x, this height for its slot) [est, from
 /// photographs].
-pub const GEAR_HANDLE: Vec3 = Vec3::new(0.072, by(2.86), PANEL_Z + 0.03);
+pub const GEAR_HANDLE: Vec3 = Vec3::new(0.072, by(DECK_FLOOR_H + 0.81), PANEL_Z + 0.03);
 
 #[cfg(test)]
 mod tests {
@@ -753,16 +822,27 @@ mod tests {
         assert!((bz(D_TAIL) - bz(D_NOSE) - LENGTH).abs() < 1e-4);
         assert!((2.0 * SPAN - B).abs() < 0.01);
         assert!((by(FIN_ROOT_H) + FIN_H - by(HEIGHT)).abs() < 1e-4);
-        // The trapezoid has the published area and MAC.
-        let area = (CR + CT) * SPAN;
-        let mac = 2.0 / 3.0 * (CR * CR + CR * CT + CT * CT) / (CR + CT);
-        assert!((area - WING_AREA).abs() < 0.2, "{area}");
+        // Integrate the rectangular centre and trapezoidal outer panels before tip rounding.
+        assert_eq!(chord(TAPER_X), chord(0.0));
+        assert!((chord(SPAN) - CT).abs() < 1e-5);
+        let outer = SPAN - TAPER_X;
+        let area = 2.0 * TAPER_X * CR + outer * (CR + CT);
+        let mac = 2.0 * (TAPER_X * CR * CR + outer * (CR * CR + CR * CT + CT * CT) / 3.0) / area;
+        assert!((area - WING_AREA).abs() / WING_AREA < 0.005, "{area}");
         assert!((mac - MAC).abs() < 0.01, "{mac}");
         assert!((le_d(MAC_X) - LEMAC_D).abs() < 0.01 && (chord(MAC_X) - MAC).abs() < 0.01);
         // Tailplane span 52 ft 8 in.
         assert!((2.0 * STAB_SPAN - 16.05).abs() < 0.01);
         // The fuselage is 4.32 m wide; FS 245 and FS 737 where the cargo floor runs.
         assert!((2.0 * sec(bz(12.0)).w - 4.32).abs() < 0.01);
+        // The clean cargo barrel is nearly circular and encloses the full
+        // 123-inch load floor, including at the start of the ramp.
+        for d in [D_DECK, 12.0, D_RAMP] {
+            let z = bz(d);
+            let s = sec(z);
+            assert!(((s.top - s.bot) / (2.0 * s.w) - 1.0).abs() < 0.05);
+            assert!(half_width_at(z, by(CARGO_FLOOR_H)).unwrap() > 1.562);
+        }
         assert!((fs(245.0) - bz(CARGO_D[0])).abs() < 0.02 && (fs(737.0) - bz(CARGO_D[1])).abs() < 0.02);
     }
 
@@ -840,6 +920,51 @@ mod tests {
     }
 
     #[test]
+    fn the_nose_matches_the_three_view() {
+        // The roof is flush with the crown: no step behind the flight deck.
+        let mut prev = sec(bz(0.0)).top;
+        let mut d = 0.05;
+        while d < D_RAMP {
+            let t = sec(bz(d)).top;
+            assert!(t >= prev - 1e-4 && t <= by(FUSE_TOP_H) + 1e-4, "the top dips or humps at d {d:.2}");
+            prev = t;
+            d += 0.05;
+        }
+        // Read off the three-view's side view (height of the top and the
+        // bottom, m) and plan view (width), give or take 6 cm.
+        for (d, top, bot, w) in [(0.3f32, 2.66f32, 1.64f32, 1.06f32), (1.0, 2.91, 1.26, 1.57), (2.0, 3.74, 0.93, 2.28), (2.7, 4.37, 0.79, 3.13), (3.6, 4.67, 0.67, 3.78), (5.3, 4.70, 0.58, 4.25)] {
+            let s = sec(bz(d));
+            assert!((s.top + YG - top).abs() < 0.06 && (s.bot + YG - bot).abs() < 0.06 && (2.0 * s.w - w).abs() < 0.12, "d {d}: top {:.2} bottom {:.2} width {:.2}", s.top + YG, s.bot + YG, 2.0 * s.w);
+        }
+        // The radome is about as wide as it is high from ahead (2.06 m by 2.1 m on the photograph).
+        let (mut lo, mut hi, mut wide) = (f32::MAX, f32::MIN, 0.0f32);
+        let mut d = 0.0;
+        while d <= D_RADOME {
+            let z = bz(d);
+            let s = sec(z);
+            for k in 0..=200 {
+                let p = sec_pt(&s, k as f32 / 200.0 * PI);
+                if d <= radome_joint_d(p.y + YG) + 1e-3 {
+                    lo = lo.min(p.y + YG);
+                    hi = hi.max(p.y + YG);
+                    wide = wide.max(2.0 * p.x);
+                }
+            }
+            d += 0.01;
+        }
+        println!("radome from ahead: {wide:.2} m wide, {:.2} m high ({lo:.2} to {hi:.2})", hi - lo);
+        assert!((wide - 2.0).abs() < 0.12 && (hi - lo - 2.0).abs() < 0.15, "{wide} x {}", hi - lo);
+        // The joint's two forms agree, and it is on the skin at its top.
+        for h in [2.5f32, 2.7, 2.9, 3.0] {
+            assert!((radome_joint_h(radome_joint_d(h)) - h).abs() < 1e-3);
+        }
+        assert!(sec(bz(RADOME_JOINT[1])).top + YG < RADOME_JOINT[2]);
+        // The windshield is above the radome, the chin windows above the deck floor.
+        assert!(WINDOWS[0].pts[0][1] - RADOME_JOINT[2] > 0.3);
+        assert!(WINDOWS[7].pts[1][1] > DECK_FLOOR_H - 0.05);
+    }
+
+    #[test]
     fn flight_deck_envelope_is_consistent() {
         // The eye is inside the fuselage with room round the head, and in the envelope.
         assert!(inside_skin(EYE, 0.4), "eye too near the skin");
@@ -880,12 +1005,12 @@ mod tests {
             let p = exit(EYE, dir(yaw, pitch));
             assert!(window(p) < -0.01, "yaw {yaw} pitch {pitch}: skin at {p:?} (d {:.2} h {:.2}) is not a window", p.z + ZN, p.y + YG);
         }
-        // Out to the left, through the side window; up, through a brow window.
+        // Out to the left, through the side window; up and out, through the upper row.
         let p = exit(EYE, dir(-90.0, 0.0));
         assert!(window(p) < 0.0, "left: {p:?}");
-        let brow = Vec3::new(-0.3, by(4.0), bz(3.22));
-        let p = exit(EYE, (brow - EYE).normalize());
-        assert!(window(p) < 0.0, "brow: {p:?} (d {:.2} h {:.2})", p.z + ZN, p.y + YG);
+        let upper = Vec3::new(-1.5, by(4.13), bz(3.06));
+        let p = exit(EYE, (upper - EYE).normalize());
+        assert!(window(p) < 0.0, "upper row: {p:?} (d {:.2} h {:.2})", p.z + ZN, p.y + YG);
         // Over the glareshield lip: the line from the eye just over it reaches the windshield.
         let lip = Vec3::new(EYE.x, GLARE_Y + 0.01, PANEL_Z);
         let d = (lip - EYE).normalize();
@@ -920,10 +1045,13 @@ mod tests {
         has(format!("if (p.y < {:?}) {{ d = min(d, sd_box2(vec2f(p.z, p.x), vec4f({:?}, {:?}, {:?}, {:?}))); }}", r(NOSE_WELL_CUT), r(NOSE_WELL[0]), r(NOSE_WELL[1]), NOSE_WELL[2], NOSE_WELL[3]));
         has(format!("if (p.y < {:?}) {{ d = min(d, sd_box2(vec2f(p.z, abs(p.x)), vec4f({:?}, {:?}, {:?}, {:?}))); }}", r(MAIN_WELL_CUT), r(MAIN_WELL[0]), r(MAIN_WELL[1]), MAIN_WELL[2], MAIN_WELL[3]));
         has(format!("const C130_DECK = vec4f(1.95, {:?}, {:?}, {:?});", r(DECK_FLOOR_Y), r(DECK_FWD_Z), r(DECK_AFT_Z)));
+        has(format!("array<vec4f, {}>(", 2 * WINDOWS.len()));
+        has(format!("for (var i = 0; i < {}; i++) {{", WINDOWS.len()));
+        has(format!("if (d < {:?} || d > {:?} || h < 1.3) {{ return 1.0; }}", D_GLASS[0], D_GLASS[1]));
         // (the deck box's half width and top contain the envelope)
         let mut z = DECK_FWD_Z;
         while z < DECK_AFT_Z {
-            assert!(deck_ceiling(z) < 1.3 && (0..20).all(|k| deck_half_w(z, DECK_FLOOR_Y + k as f32 * 0.1) < 1.95 + 0.12));
+            assert!(deck_ceiling(z) < 1.9 && (0..20).all(|k| deck_half_w(z, DECK_FLOOR_Y + k as f32 * 0.1) < 1.95 + 0.12));
             z += 0.2;
         }
     }

@@ -85,9 +85,11 @@ mod tests {
         let src = include_str!("../../shaders/plane.wgsl");
         let want: &[(&str, &[f32])] = &[
             ("C130P_D", &[D_RADOME, D_DECK, D_RAMP, D_TAIL]),
+            ("C130P_RADOME", &RADOME_JOINT),
             ("C130P_FUSE_H", &[FUSE_TOP_H, FUSE_MID_H, FUSE_BOT_H]),
             ("C130P_FUSE_HALF_W", &[FUSE_HALF_W]),
             ("C130P_WING", &[LE0_D, CR, CT, SPAN]),
+            ("C130P_TAPER_X", &[TAPER_X]),
             ("C130P_WING_ROOT", &[WING_ROOT_X, WING_ROOT_H, DIHEDRAL]),
             ("C130P_FLAPS", &[FLAP_IB[0], FLAP_OB[1], XF_FLAP, XF_AIL]),
             ("C130P_AILERON", &AILERON),

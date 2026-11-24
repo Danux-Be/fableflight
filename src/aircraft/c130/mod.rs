@@ -23,6 +23,8 @@
 //! - Photographs (Wikimedia Commons): JASDF C-130H 85-1079 side view
 //!   https://commons.wikimedia.org/wiki/File:Lockheed_C-130H_Hercules_%E2%80%9885-1079_079%E2%80%99_(33890468248).jpg ;
 //!   the nose and radome https://commons.wikimedia.org/wiki/File:JASDF_C-130H(05-1085)_radome_%26_nose_landing_gear_right_side_view_at_Iruma_Air_Base_November_3,_2014.jpg ;
+//!   the nose head-on https://commons.wikimedia.org/wiki/File:JASDF_KC-130H(85-1080)_fuselage_section_front_view_at_Komaki_Air_Base_March_2,_2019.jpg ;
+//!   a USAF C-130H in profile https://commons.wikimedia.org/wiki/File:Lockheed_C-130H_Hercules_-_ANG_46707_-_Stuttgart_-_20090909-01.jpeg ;
 //!   the nacelle https://commons.wikimedia.org/wiki/File:JASDF_KC-130H(85-1080)_T56-A-15_turboprop_engine_nacelle(right_wing,_outside)_right_front_view_at_Komaki_Air_Base_March_2,_2019.jpg ;
 //!   the main gear and sponsons https://commons.wikimedia.org/wiki/File:JASDF_KC-130H(85-1080)_right_main_landing_gear_right_front_view_at_Komaki_Air_Base_March_2,_2019.jpg
 //!   and https://commons.wikimedia.org/wiki/File:JASDF_C-130H(75-1078)_Left_Main_Landing_Gear_at_Komaki_Air_Base_March_13,2016.JPG ;
