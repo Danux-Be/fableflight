@@ -792,12 +792,14 @@ impl Game {
                 note(ui, &format!("{} {}", tr_en("standby"), mhz(self.atc.standby)));
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
+                    // whole megahertz and 25 khz steps, then the standby swapped in.
+                    let w = ((ui.available_width() - 4.0 * 4.0) / 5.0).floor().max(44.0);
                     for (t, d) in [("−1", -1.0), ("−.025", -0.025), ("+.025", 0.025), ("+1", 1.0)] {
-                        if key(ui, t, false, 44.0, 22.0).clicked() {
+                        if key(ui, t, false, w, 26.0).clicked() {
                             step = d;
                         }
                     }
-                    if key(ui, "⇄", false, 30.0, 22.0).clicked() {
+                    if key(ui, tr_en("SWAP"), false, w, 26.0).on_hover_text(tr_en("Swap the active and standby frequencies")).clicked() {
                         swap = true;
                     }
                 });

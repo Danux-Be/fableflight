@@ -1,7 +1,8 @@
 //! guided flying: tutorials that walk through a flight a step at a time,
-//! landing challenges at famous airports scored on the touchdown, and short
+//! checkrides for the career's licences, scored on the landing, and short
 //! missions. each starts the right aircraft at the right place and watches
-//! what the pilot does; the best scores go in the profile.
+//! what the pilot does; the best scores go in the profile. the landing
+//! challenges are in challenge.rs.
 
 use crate::airports::{self, Db};
 use crate::{aircraft, atc, flightui, geo, menu, nav, tr_en, Game};
@@ -10,7 +11,8 @@ use egui::{Color32, RichText};
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cat {
     Tutorial,
-    Landing,
+    /// a checkride for a licence (career.rs): passed at `pass_mark`.
+    Exam,
     Mission,
 }
 
@@ -90,11 +92,6 @@ const fn st(text: &'static str, goal: Goal) -> Step {
     Step { text, goal }
 }
 
-const LAND: &[Step] = &[
-    st("Fly the approach by hand and put it down in the touchdown zone, on the centreline, gently.", Goal::Landed),
-    st("Brake to a stop on the runway.", Goal::Stopped),
-];
-
 pub static ALL: &[Mission] = &[
     Mission { id: "t1", cat: Cat::Tutorial, title: "1. First flight", brief: "Take off from Half Moon Bay on the Californian coast, climb out and level off.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 10.0, weather: Some("fair"), cold: false, steps: &[
         st("Welcome aboard. Release the parking brake with the full stop key (.).", Goal::ParkingBrake(false)),
@@ -147,18 +144,38 @@ pub static ALL: &[Mission] = &[
         st("Touch down.", Goal::Landed),
         st("Stop on the runway.", Goal::Stopped),
     ] },
-    Mission { id: "l_courchevel", cat: Cat::Landing, title: "Courchevel, French Alps", brief: "537 m of runway climbing 18.5 % up the mountainside. One way in, no going around.", aircraft: "dr400", airport: "LFLJ", runway: Some("22"), start: Start::Final, hour: 11.0, weather: Some("clear"), cold: false, steps: LAND },
-    Mission { id: "l_lukla", cat: Cat::Landing, title: "Lukla, Nepal", brief: "Tenzing-Hillary: a 527 m sloping strip at 2,860 m with a mountain face at its end.", aircraft: "dr400", airport: "VNLK", runway: Some("06"), start: Start::Final, hour: 8.0, weather: Some("fair"), cold: false, steps: LAND },
-    Mission { id: "l_saba", cat: Cat::Landing, title: "Saba, Caribbean", brief: "The shortest commercial runway in the world: 400 m between two cliffs.", aircraft: "dr400", airport: "TNCS", runway: Some("12"), start: Start::Final, hour: 14.0, weather: Some("windy"), cold: false, steps: LAND },
-    Mission { id: "l_stbarth", cat: Cat::Landing, title: "St Barthélemy", brief: "Dive over the hill at La Tourmente and land toward the beach.", aircraft: "c172", airport: "TFFJ", runway: Some("10"), start: Start::Final, hour: 15.0, weather: Some("fair"), cold: false, steps: LAND },
-    Mission { id: "l_telluride", cat: Cat::Landing, title: "Telluride, Colorado", brief: "A mesa at 9,070 feet: thin air and a long way down off either end.", aircraft: "c172", airport: "KTEX", runway: Some("09"), start: Start::Final, hour: 10.0, weather: Some("clear"), cold: false, steps: LAND },
-    Mission { id: "l_maho", cat: Cat::Landing, title: "Princess Juliana, St Maarten", brief: "Low over Maho Beach in a 747.", aircraft: "747", airport: "TNCM", runway: Some("10"), start: Start::Final, hour: 13.0, weather: Some("fair"), cold: false, steps: LAND },
-    Mission { id: "l_gibraltar", cat: Cat::Landing, title: "Gibraltar", brief: "The runway that crosses a road, under the Rock.", aircraft: "g650", airport: "LXGB", runway: Some("27"), start: Start::Final, hour: 12.0, weather: Some("windy"), cold: false, steps: LAND },
-    Mission { id: "l_innsbruck", cat: Cat::Landing, title: "Innsbruck, Austria", brief: "Down the Inn valley between the Alps.", aircraft: "g650", airport: "LOWI", runway: Some("26"), start: Start::Final, hour: 9.0, weather: Some("fair"), cold: false, steps: LAND },
-    Mission { id: "l_madeira", cat: Cat::Landing, title: "Madeira", brief: "Gusts off the cliffs onto a runway built out on pillars.", aircraft: "g650", airport: "LPMA", runway: Some("05"), start: Start::Final, hour: 17.0, weather: Some("windy"), cold: false, steps: LAND },
-    Mission { id: "l_london_city", cat: Cat::Landing, title: "London City", brief: "A 5.5 degree approach between the towers of Docklands.", aircraft: "g650", airport: "EGLC", runway: Some("27"), start: Start::Final, hour: 19.0, weather: Some("overcast"), cold: false, steps: LAND },
-    Mission { id: "l_paro", cat: Cat::Landing, title: "Paro, Bhutan", brief: "A valley approach to one of the hardest airports to reach.", aircraft: "g650", airport: "VQPR", runway: Some("15"), start: Start::Final, hour: 9.0, weather: Some("fair"), cold: false, steps: LAND },
-    Mission { id: "l_queenstown", cat: Cat::Landing, title: "Queenstown, New Zealand", brief: "Between the Remarkables and the lake.", aircraft: "g650", airport: "NZQN", runway: Some("23"), start: Start::Final, hour: 15.0, weather: Some("fair"), cold: false, steps: LAND },
+    Mission { id: "e_ppl", cat: Cat::Exam, title: "Private pilot checkride", brief: "The examiner is aboard: a circuit at Half Moon Bay, flown by hand, and a landing in the touchdown zone.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 14.0, weather: Some("fair"), cold: false, steps: &[
+        st("The examiner is watching. Release the brake and take off from runway 30.", Goal::Airborne),
+        st("Climb straight ahead to 1,000 feet above the field.", Goal::AglAbove(1000.0)),
+        st("Level off and hold your height for a few seconds.", Goal::Level(200.0, 5.0)),
+        st("Fly the circuit and land back on runway 30: aim for the touchdown zone, on the centreline.", Goal::LandAt("KHAF")),
+        st("Brake to a stop. The examiner marks the landing.", Goal::Stopped),
+    ] },
+    Mission { id: "e_ir", cat: Cat::Exam, title: "Instrument rating checkride", brief: "The ILS to San Francisco 28R by hand, in cloud, down to the minimums.", aircraft: "c172", airport: "KSFO", runway: Some("28R"), start: Start::Air { nm: 10.0, bearing: 110.0, ft: 3000.0, kt: 95.0 }, hour: 15.0, weather: Some("overcast"), cold: false, steps: &[
+        st("NAV 1 is on the ILS. Keep the autopilot off: follow the localizer and the glide slope by hand.", Goal::Read(8.0)),
+        st("Fly the needles down to 1,000 feet above the ground.", Goal::AglBelow(1000.0)),
+        st("Stay on the glide slope to the minimums, 200 feet.", Goal::AglBelow(200.0)),
+        st("Runway in sight: land.", Goal::Landed),
+        st("Stop on the runway.", Goal::Stopped),
+    ] },
+    Mission { id: "e_cpl", cat: Cat::Exam, title: "Commercial pilot checkride", brief: "A cross-country from Half Moon Bay to San Carlos, and a landing to commercial standards.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 11.0, weather: Some("fair"), cold: false, steps: &[
+        st("Take off and turn east over the hills toward San Carlos (KSQL).", Goal::Airborne),
+        st("Cruise at 2,500 feet or above.", Goal::AltAbove(2500.0)),
+        st("Land at San Carlos: a stable approach and a touchdown on the centreline.", Goal::LandAt("KSQL")),
+        st("Stop on the runway.", Goal::Stopped),
+    ] },
+    Mission { id: "e_heli", cat: Cat::Exam, title: "Helicopter checkride", brief: "Lift off, climb out, come back and set the R44 down gently on the runway.", aircraft: "r44", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 10.0, weather: Some("clear"), cold: false, steps: &[
+        st("Raise the collective (hold Left Shift) and lift into a hover.", Goal::Airborne),
+        st("Ease the cyclic forward and climb to 500 feet above the ground.", Goal::AglAbove(500.0)),
+        st("Come back over the runway and set it down gently.", Goal::LandAt("KHAF")),
+        st("Collective down, settle.", Goal::Stopped),
+    ] },
+    Mission { id: "e_glider", cat: Cat::Exam, title: "Glider checkride", brief: "No engine: from 2,000 feet over the coast, plan the circuit and land on runway 30.", aircraft: "ask21", airport: "KHAF", runway: Some("30"), start: Start::Air { nm: 2.5, bearing: 40.0, ft: 2000.0, kt: 55.0 }, hour: 13.0, weather: Some("fair"), cold: false, steps: &[
+        st("You are released. Keep about 55 knots and plan your way down to the runway.", Goal::Read(8.0)),
+        st("Join the circuit for runway 30 below 1,000 feet.", Goal::AglBelow(1000.0)),
+        st("Airbrakes to hold the glide path, then land on runway 30.", Goal::Landed),
+        st("Stop.", Goal::Stopped),
+    ] },
     Mission { id: "m_golden_gate", cat: Cat::Mission, title: "Golden Gate sightseeing", brief: "Take a passenger up the coast to the Golden Gate Bridge and back to Half Moon Bay.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 17.5, weather: Some("fair"), cold: false, steps: &[
         st("Take off and head north up the coast.", Goal::Airborne),
         st("Fly over the Golden Gate Bridge, below 2,000 feet.", Goal::Reach(37.8199, -122.4783, 0.8)),
@@ -183,6 +200,15 @@ pub static ALL: &[Mission] = &[
 
 pub fn by_id(id: &str) -> Option<&'static Mission> {
     ALL.iter().find(|m| m.id == id)
+}
+
+/// the score a checkride has to reach.
+pub fn pass_mark(m: &Mission) -> u32 {
+    match m.id {
+        "e_heli" | "e_glider" => 60,
+        "e_cpl" => 75,
+        _ => 70,
+    }
 }
 
 /// how a landing went.
@@ -264,9 +290,6 @@ impl Run {
         Self { m, step: 0, since: now, held: 0.0, rating: None, done: false, failed: None, up_for: 0.0, ground: true, vs_air: 0.0, settle: 3.0, wx_was: None }
     }
 
-    pub fn text(&self) -> &'static str {
-        self.m.steps.get(self.step).map_or("", |s| s.text)
-    }
 }
 
 /// a point `nm` out from (lat, lon) on a bearing (deg).
@@ -417,13 +440,6 @@ impl Game {
             let big = self.spec.is_jet();
             let score = Rating::score(fpm, along, off, bank, on_runway, big);
             run.rating = Some(Rating { fpm, along, off, bank, on_runway, score });
-            if run.m.cat == Cat::Landing {
-                let best = self.profile.best.entry(run.m.id.to_string()).or_insert(0);
-                if score > *best {
-                    *best = score;
-                    self.profile.save();
-                }
-            }
         }
         run.ground = p.on_ground;
         if self.crashed {
@@ -447,11 +463,36 @@ impl Game {
                 run.held = 0.0;
                 if run.step >= run.m.steps.len() {
                     run.done = true;
-                    if run.m.cat != Cat::Landing {
+                    let m = run.m;
+                    let first = !self.profile.best.contains_key(m.id);
+                    if m.cat == Cat::Exam {
+                        // a checkride is the landing's score, and has to make the mark.
+                        let s = run.rating.map_or(0, |r| r.score);
+                        if s < pass_mark(m) {
+                            run.done = false;
+                            run.failed = Some(format!("{} {s} / 100, {} {}.", tr_en("The landing scored"), tr_en("the pass mark is"), pass_mark(m)));
+                        } else {
+                            let best = self.profile.best.entry(m.id.to_string()).or_insert(0);
+                            *best = (*best).max(s);
+                            self.mission = Some(run);
+                            self.keep_profile();
+                            self.award(&format!("{}: {}", tr_en("Passed"), tr_en(m.title)), if first { 500 } else { 50 });
+                            return;
+                        }
+                    } else {
                         let s = run.rating.map_or(100, |r| r.score.max(60));
-                        let best = self.profile.best.entry(run.m.id.to_string()).or_insert(0);
+                        let best = self.profile.best.entry(m.id.to_string()).or_insert(0);
                         *best = (*best).max(s);
-                        self.profile.save();
+                        self.mission = Some(run);
+                        self.keep_profile();
+                        let xp = match (m.cat, first) {
+                            (Cat::Tutorial, true) => 300,
+                            (Cat::Mission, true) => 400,
+                            _ => 50,
+                        };
+                        self.award(&format!("{}: {}", tr_en("Complete"), tr_en(m.title)), xp);
+                        self.sweep_badges();
+                        return;
                     }
                 }
             }
@@ -459,97 +500,97 @@ impl Game {
         self.mission = Some(run);
     }
 
-    /// the mission card: its title, the step to do, and the result at the end.
+    /// the mission card: what it is, the steps done and the one to do, and the result at the end.
     pub(crate) fn mission_card(&mut self, ctx: &egui::Context) {
         let Some(run) = self.mission.as_ref() else { return };
         let mut close = false;
         let mut again = false;
-        let (title, cat, step, n, text, done, failed, rating) = (run.m.title, run.m.cat, run.step, run.m.steps.len(), run.text(), run.done, run.failed.clone(), run.rating);
-        egui::Area::new(egui::Id::unique("mission_card")).anchor(egui::Align2::RIGHT_TOP, [-14.0, 170.0]).show(ctx, |ui| {
-            flightui::panel(ui, flightui::glass().inner_margin(14.0), |ui| {
-                ui.set_width(300.0);
-                let what = match cat {
+        let m = run.m;
+        let (step, n, done, failed, rating) = (run.step, m.steps.len(), run.done, run.failed.clone(), run.rating);
+        let top = if self.hud_on() { 170.0 } else { 24.0 };
+        egui::Area::new(egui::Id::unique("mission_card")).anchor(egui::Align2::RIGHT_TOP, [-14.0, top]).show(ctx, |ui| {
+            flightui::panel(ui, flightui::glass().inner_margin(16.0), |ui| {
+                ui.set_width(330.0);
+                let what = match m.cat {
                     Cat::Tutorial => tr_en("TUTORIAL"),
-                    Cat::Landing => tr_en("LANDING CHALLENGE"),
+                    Cat::Exam => tr_en("CHECKRIDE"),
                     Cat::Mission => tr_en("MISSION"),
                 };
                 flightui::tag(ui, what);
-                ui.label(RichText::new(tr_en(title)).font(menu::semibold(16.0)).color(Color32::WHITE));
-                ui.add_space(4.0);
+                ui.label(RichText::new(tr_en(m.title)).font(menu::semibold(17.0)).color(Color32::WHITE));
+                ui.add_space(8.0);
                 if let Some(why) = &failed {
-                    ui.label(RichText::new(format!("{} {why}", tr_en("Failed:"))).font(menu::caption()).color(menu::BAD));
+                    result_line(ui, tr_en("Not passed"), menu::BAD);
+                    ui.add(egui::Label::new(RichText::new(why).font(menu::body()).color(menu::TEXT)).wrap());
                 } else if done {
-                    ui.label(RichText::new(tr_en("Complete")).font(menu::semibold(14.0)).color(flightui::LIT));
+                    result_line(ui, if m.cat == Cat::Exam { tr_en("Passed") } else { tr_en("Complete") }, menu::OK);
                 } else {
+                    // the last steps done, ticked and faint, then the one to do.
+                    for (k, s) in m.steps.iter().enumerate().take(step + 1).skip(step.saturating_sub(2)) {
+                        let now = k == step;
+                        ui.horizontal_top(|ui| {
+                            let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                            let p = ui.painter();
+                            if now {
+                                p.circle_stroke(r.center(), 6.0, egui::Stroke::new(2.0, menu::ACCENT));
+                            } else {
+                                p.circle_filled(r.center(), 6.5, menu::OK.gamma_multiply(0.85));
+                                tick(p, r.center(), 3.6, Color32::from_rgb(10, 30, 16));
+                            }
+                            ui.add(egui::Label::new(RichText::new(tr_en(s.text)).font(if now { menu::medium(14.5) } else { menu::caption() }).color(if now { Color32::WHITE } else { menu::DIM })).wrap());
+                        });
+                        ui.add_space(2.0);
+                    }
+                    ui.add_space(6.0);
                     flightui::meter(ui, step as f32 / n.max(1) as f32, flightui::LIT);
-                    ui.add_space(2.0);
-                    ui.label(RichText::new(format!("{} / {n}", step + 1)).font(menu::caption()).color(flightui::SOFT));
-                    ui.add(egui::Label::new(RichText::new(tr_en(text)).font(menu::medium(14.0)).color(Color32::WHITE)).wrap());
+                    ui.label(RichText::new(format!("{} {} / {n}", tr_en("Step"), step + 1)).font(menu::caption()).color(flightui::SOFT));
                 }
                 if let Some(r) = rating {
-                    ui.add_space(6.0);
-                    ui.label(RichText::new(format!("{} {}  ·  {} / 100", tr_en("Landing"), r.grade(), r.score)).font(menu::semibold(15.0)).color(if r.score >= 75 { flightui::LIT } else { Color32::WHITE }));
-                    let along = if r.on_runway { format!("{:.0} m {}", r.along, tr_en("past the threshold")) } else { tr_en("off the runway").into() };
-                    flightui::note(ui, &format!("{:.0} ft/min  ·  {along}", r.fpm.abs()));
-                    flightui::note(ui, &format!("{:.1} m {}  ·  {:.1}° {}", r.off.abs(), tr_en("off centre"), r.bank.abs(), tr_en("bank")));
-                }
-                if done || failed.is_some() {
-                    ui.add_space(6.0);
+                    ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if flightui::key(ui, tr_en("Again"), false, 90.0, 26.0).clicked() {
+                        ui.label(RichText::new(format!("{}", r.score)).font(menu::bold(30.0)).color(if r.score >= 75 { menu::ACCENT } else { Color32::WHITE }));
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(format!("{} {}", tr_en("Landing"), r.grade())).font(menu::semibold(14.0)).color(Color32::WHITE));
+                            let along = if r.on_runway { format!("{:.0} m {}", r.along, tr_en("past the threshold")) } else { tr_en("off the runway").into() };
+                            flightui::note(ui, &format!("{:.0} ft/min  ·  {along}", r.fpm.abs()));
+                            flightui::note(ui, &format!("{:.1} m {}  ·  {:.1}° {}", r.off.abs(), tr_en("off centre"), r.bank.abs(), tr_en("bank")));
+                        });
+                    });
+                    if m.cat == Cat::Exam {
+                        flightui::note(ui, &format!("{} {}", tr_en("Pass mark"), pass_mark(m)));
+                    }
+                }
+                ui.add_space(10.0);
+                if done || failed.is_some() {
+                    ui.horizontal(|ui| {
+                        if flightui::key(ui, tr_en("Fly again"), false, 110.0, 30.0).clicked() {
                             again = true;
                         }
-                        if flightui::key(ui, tr_en("Close"), false, 90.0, 26.0).clicked() {
+                        if flightui::key(ui, tr_en("Close"), false, 90.0, 30.0).clicked() {
                             close = true;
                         }
                     });
-                } else if flightui::key(ui, tr_en("Abandon"), false, 90.0, 24.0).clicked() {
+                } else if flightui::key(ui, tr_en("Abandon"), false, 100.0, 28.0).clicked() {
                     close = true;
                 }
             });
         });
         if again {
-            let m = run.m;
             self.start_mission(m);
         } else if close {
             self.end_mission();
         }
     }
+}
 
-    /// the pause menu's missions page: tutorials, landing challenges and missions, with the best scores.
-    pub(crate) fn missions_page(&mut self, ui: &mut egui::Ui) -> bool {
-        let mut go: Option<&'static Mission> = None;
-        for (cat, head) in [(Cat::Tutorial, tr_en("TUTORIALS")), (Cat::Landing, tr_en("LANDING CHALLENGES")), (Cat::Mission, tr_en("MISSIONS"))] {
-            ui.label(menu::section_text(head));
-            ui.add_space(4.0);
-            for m in ALL.iter().filter(|m| m.cat == cat) {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(430.0);
-                        let best = self.profile.best.get(m.id).copied();
-                        let name = aircraft::by_key(m.aircraft).map_or(m.aircraft, |s| s.name);
-                        ui.label(RichText::new(tr_en(m.title)).font(menu::label()).color(Color32::WHITE));
-                        let tail = match (cat, best) {
-                            (Cat::Landing, Some(b)) => format!("  ·  {} {b}", tr_en("best")),
-                            (_, Some(_)) => format!("  ·  {}", tr_en("done")),
-                            _ => String::new(),
-                        };
-                        ui.label(RichText::new(format!("{}  ·  {} {}{tail}", tr_en(m.brief), name, m.airport)).font(menu::caption()).color(menu::DIM));
-                    });
-                    if menu::choice(ui, tr_en("Fly"), false, 80.0).clicked() {
-                        go = Some(m);
-                    }
-                });
-                ui.add_space(4.0);
-            }
-            ui.add_space(10.0);
-        }
-        if let Some(m) = go {
-            self.start_mission(m);
-            return true;
-        }
-        false
-    }
+/// a big word for how it ended.
+fn result_line(ui: &mut egui::Ui, text: &str, col: Color32) {
+    ui.label(RichText::new(text.to_uppercase()).font(menu::bold(24.0)).color(col));
+}
+
+/// a tick mark.
+pub fn tick(p: &egui::Painter, c: egui::Pos2, s: f32, col: Color32) {
+    p.add(egui::Shape::line(vec![c + egui::vec2(-s, 0.0), c + egui::vec2(-s * 0.3, s * 0.7), c + egui::vec2(s, -s * 0.6)], egui::Stroke::new(1.8, col)));
 }
 
 #[cfg(test)]
@@ -558,6 +599,7 @@ mod tests {
 
     #[test]
     fn every_mission_starts_somewhere_real_in_a_real_aircraft() {
+        aircraft::register_variants();
         let db = Db::get();
         for m in ALL {
             assert!(db.find(m.airport).is_some(), "{}: {}", m.id, m.airport);

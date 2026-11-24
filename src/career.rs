@@ -1,23 +1,20 @@
-//! the career: a pilot who starts as a student with a little money at a home
-//! airport and works up. licences come from the tutorials, hours and
-//! reputation (private, instrument, commercial, airline transport) and type
-//! ratings are bought as training; each opens more aircraft and more jobs.
-//! the job board at the airport the pilot is at offers real airports in
-//! range of the aircraft: passengers, cargo, ferry flights, aerial photo
-//! flights and air displays, with a deadline. a job pays by how it went (on
-//! time, the landing, the controllers' word on it, no damage) less the fuel,
-//! the landing fee and the rental, and moves the pilot to where it ended.
+//! the career: a student pilot with a little money at a home airport works
+//! up to airline captain and company owner. the loop: earn a licence with
+//! lessons and a checkride, take jobs from the board at the airport you are
+//! at, fly them, and get a debrief that pays by how it went; reputation in
+//! each kind of work opens better paid jobs, money buys aircraft and hires
+//! pilots who earn while you are away. the screens are in career_ui.rs.
 //! saved as career.json beside the settings. the economy is a game's.
 
 use crate::airports::{Apt, Db};
-use crate::missions::Rating;
-use crate::{aircraft, flightui, geo, menu, profile, tr_en, Game};
-use egui::{pos2, vec2, Color32, Rect, RichText, Sense, Stroke};
+use crate::flightlog::Landing;
+use crate::{aircraft, geo, profile, tr_en, Game};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// a licence or a type rating.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Hash)]
+/// a licence or a rating.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Hash, PartialOrd, Ord)]
 pub enum Lic {
     Ppl,
     Ir,
@@ -28,9 +25,33 @@ pub enum Lic {
     Sst,
     Display,
     Recon,
+    Heli,
+    Glider,
 }
 
-pub const LICS: [Lic; 9] = [Lic::Ppl, Lic::Ir, Lic::Cpl, Lic::Atpl, Lic::BizJet, Lic::Airliner, Lic::Sst, Lic::Display, Lic::Recon];
+/// in the order the training page shows them.
+pub const LICS: [Lic; 11] = [Lic::Ppl, Lic::Glider, Lic::Heli, Lic::Ir, Lic::Cpl, Lic::BizJet, Lic::Atpl, Lic::Airliner, Lic::Display, Lic::Sst, Lic::Recon];
+
+/// what a licence needs.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Req {
+    /// a tutorial flown (missions.rs).
+    Lesson(&'static str),
+    /// a checkride passed (missions.rs).
+    Exam(&'static str),
+    /// a mission flown (missions.rs).
+    Mission(&'static str),
+    /// a landing challenge passed at a score (challenge.rs).
+    Challenge(&'static str, u32),
+    Holds(Lic),
+    /// hours in the logbook.
+    Hours(f64),
+    Jobs(u32),
+    Level(u32),
+    Rep(f64),
+    /// paid when the licence is taken.
+    Fee(f64),
+}
 
 impl Lic {
     pub fn name(self) -> &'static str {
@@ -44,38 +65,68 @@ impl Lic {
             Lic::Sst => "Concorde type rating",
             Lic::Display => "Air display team",
             Lic::Recon => "Strategic reconnaissance",
+            Lic::Heli => "Helicopter pilot",
+            Lic::Glider => "Glider pilot",
         }
     }
 
-    /// what it takes, in words.
-    pub fn needs(self) -> &'static str {
+    pub fn short(self) -> &'static str {
         match self {
-            Lic::Ppl => "Tutorials 1, 2 and 3 (first flight, landing, engine start).",
-            Lic::Ir => "Private pilot, tutorials 4 and 6 (radio navigation, autopilot and ILS), 10 hours.",
-            Lic::Cpl => "Private pilot, 25 hours and 10 jobs done.",
-            Lic::Atpl => "Commercial pilot, instrument rating, 100 hours and 1,500 reputation.",
-            Lic::BizJet => "Commercial pilot and instrument rating; training costs $150,000.",
-            Lic::Airliner => "Airline transport pilot; training costs $500,000.",
-            Lic::Sst => "Boeing 747 type rating and 3,000 reputation; training costs $1,000,000.",
-            Lic::Display => "Commercial pilot and 800 reputation; training costs $250,000.",
-            Lic::Recon => "Air display team and 4,000 reputation.",
+            Lic::Ppl => "PPL",
+            Lic::Ir => "IR",
+            Lic::Cpl => "CPL",
+            Lic::Atpl => "ATPL",
+            Lic::BizJet => "G650",
+            Lic::Airliner => "B747",
+            Lic::Sst => "CONC",
+            Lic::Display => "DISP",
+            Lic::Recon => "SR71",
+            Lic::Heli => "HELI",
+            Lic::Glider => "GLID",
         }
     }
 
-    /// training fee ($), none for the ones earned by flying.
+    /// what it opens, in a line.
+    pub fn opens(self) -> &'static str {
+        match self {
+            Lic::Ppl => "Light aircraft: ferry flights, sightseeing tours and aerial photography.",
+            Lic::Ir => "Flying in cloud, and air ambulance work.",
+            Lic::Cpl => "Paid passengers and cargo, and skydiving drops.",
+            Lic::Atpl => "Command of airliners: the way to the type ratings.",
+            Lic::BizJet => "The Gulfstream G650: executive charters, long range cargo and medical flights.",
+            Lic::Airliner => "The Boeing 747: airline passengers and freight.",
+            Lic::Sst => "Concorde: supersonic airline service.",
+            Lic::Display => "Fighters at air shows.",
+            Lic::Recon => "The SR-71 at the edge of space.",
+            Lic::Heli => "The R44: search and rescue, tours and hospital transfers.",
+            Lic::Glider => "The ASK 21: soaring tasks between turn points.",
+        }
+    }
+
+    pub fn reqs(self) -> &'static [Req] {
+        use Req::*;
+        match self {
+            Lic::Ppl => &[Lesson("t1"), Lesson("t2"), Lesson("t3"), Exam("e_ppl")],
+            Lic::Ir => &[Holds(Lic::Ppl), Lesson("t4"), Lesson("t6"), Hours(5.0), Exam("e_ir")],
+            Lic::Cpl => &[Holds(Lic::Ppl), Hours(15.0), Jobs(6), Level(5), Exam("e_cpl")],
+            Lic::Atpl => &[Holds(Lic::Cpl), Holds(Lic::Ir), Hours(60.0), Level(15), Rep(1500.0), Challenge("rain", 60)],
+            Lic::BizJet => &[Holds(Lic::Cpl), Holds(Lic::Ir), Lesson("t6"), Fee(150_000.0)],
+            Lic::Airliner => &[Holds(Lic::Atpl), Challenge("jumbo", 60), Fee(500_000.0)],
+            Lic::Sst => &[Holds(Lic::Airliner), Rep(3000.0), Mission("m_mach2"), Fee(1_000_000.0)],
+            Lic::Display => &[Holds(Lic::Cpl), Level(12), Rep(800.0), Fee(250_000.0)],
+            Lic::Recon => &[Holds(Lic::Display), Level(25), Rep(4000.0), Mission("m_blackbird")],
+            Lic::Heli => &[Level(3), Exam("e_heli"), Fee(20_000.0)],
+            Lic::Glider => &[Exam("e_glider"), Fee(1_500.0)],
+        }
+    }
+
     pub fn fee(self) -> f64 {
-        match self {
-            Lic::BizJet => 150_000.0,
-            Lic::Airliner => 500_000.0,
-            Lic::Sst => 1_000_000.0,
-            Lic::Display => 250_000.0,
-            _ => 0.0,
-        }
+        self.reqs().iter().map(|r| if let Req::Fee(f) = r { *f } else { 0.0 }).sum()
     }
 }
 
 /// what kind of aircraft a type is, as the career goes.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum Class {
     Light,
     BizJet,
@@ -83,18 +134,33 @@ pub enum Class {
     Sst,
     Fighter,
     Recon,
+    Heli,
+    Glider,
     None,
 }
 
+pub const CLASSES: [Class; 8] = [Class::Light, Class::Heli, Class::Glider, Class::BizJet, Class::Airliner, Class::Sst, Class::Fighter, Class::Recon];
+
 pub fn class_of(spec: &aircraft::Spec) -> Class {
-    let body = spec.origin.map(|o| o.body).unwrap_or(spec.keys.first().copied().unwrap_or(""));
+    let key = spec.keys.first().copied().unwrap_or("");
+    let body = spec.origin.map(|o| o.body).unwrap_or(key);
+    if spec.rocket().is_some() || spec.floats {
+        return Class::None;
+    }
+    if spec.rotor.is_some() {
+        return Class::Heli;
+    }
+    match key {
+        "ask21" => return Class::Glider,
+        "c172" | "dr400" | "bonanza" => return Class::Light,
+        _ => {}
+    }
     match spec.id {
-        _ if spec.rocket().is_some() => Class::None,
-        0 | 8 => Class::Light,
+        0 | 8 | 10 => Class::Light,
         9 => Class::BizJet,
         1 => Class::Airliner,
         6 => Class::Sst,
-        2 | 3 | 4 => Class::Fighter,
+        2..=4 => Class::Fighter,
         7 => Class::Recon,
         _ if body.contains("747") => Class::Airliner,
         _ if spec.is_jet() && spec.mass > 100_000.0 => Class::Airliner,
@@ -104,6 +170,20 @@ pub fn class_of(spec: &aircraft::Spec) -> Class {
 }
 
 impl Class {
+    pub fn name(self) -> &'static str {
+        match self {
+            Class::Light => "Light aircraft",
+            Class::BizJet => "Business jet",
+            Class::Airliner => "Airliner",
+            Class::Sst => "Supersonic airliner",
+            Class::Fighter => "Fighter",
+            Class::Recon => "Reconnaissance",
+            Class::Heli => "Helicopter",
+            Class::Glider => "Glider",
+            Class::None => "Not in the career",
+        }
+    }
+
     pub fn licence(self) -> Option<Lic> {
         match self {
             Class::Light => Some(Lic::Ppl),
@@ -112,15 +192,18 @@ impl Class {
             Class::Sst => Some(Lic::Sst),
             Class::Fighter => Some(Lic::Display),
             Class::Recon => Some(Lic::Recon),
+            Class::Heli => Some(Lic::Heli),
+            Class::Glider => Some(Lic::Glider),
             Class::None => None,
         }
     }
 
-    /// rental by the hour ($), a buying price (none: not for sale), and the
-    /// fuel price ($ a kg).
+    /// rental by the hour ($).
     pub fn rent(self) -> f64 {
         match self {
             Class::Light => 160.0,
+            Class::Heli => 420.0,
+            Class::Glider => 60.0,
             Class::BizJet => 3_200.0,
             Class::Airliner => 16_000.0,
             Class::Sst => 28_000.0,
@@ -130,28 +213,32 @@ impl Class {
         }
     }
 
-    pub fn price(self) -> Option<f64> {
+    pub fn fuel_price(self) -> f64 {
+        if matches!(self, Class::Light | Class::Heli) { 2.1 } else { 0.95 }
+    }
+
+    pub fn cruise_kt(self) -> f64 {
         match self {
-            Class::Light => Some(70_000.0),
-            Class::BizJet => Some(9_000_000.0),
-            Class::Airliner => Some(30_000_000.0),
-            Class::Sst => Some(45_000_000.0),
-            _ => None,
+            Class::Light => 110.0,
+            Class::Heli => 100.0,
+            Class::Glider => 55.0,
+            Class::Sst => 1150.0,
+            Class::Recon => 1600.0,
+            Class::Fighter => 420.0,
+            _ => 460.0,
         }
     }
 
-    pub fn fuel_price(self) -> f64 {
-        if self == Class::Light { 2.1 } else { 0.95 }
-    }
-
-    /// how far its jobs go (nm), the shortest runway it takes (ft) and whether it must be paved.
+    /// how far its jobs go (nm), the shortest runway it takes (ft), paved only.
     fn reach(self) -> (f64, f64, f64, bool) {
         match self {
-            Class::Light => (25.0, 220.0, 1_800.0, false),
+            Class::Light => (20.0, 220.0, 1_800.0, false),
+            Class::Heli => (10.0, 120.0, 0.0, false),
+            Class::Glider => (6.0, 30.0, 1_500.0, false),
             Class::BizJet => (250.0, 2_600.0, 5_000.0, true),
             Class::Airliner => (500.0, 4_500.0, 8_500.0, true),
             Class::Sst => (1_500.0, 3_400.0, 10_500.0, true),
-            Class::Fighter => (60.0, 400.0, 7_000.0, true),
+            Class::Fighter => (40.0, 400.0, 7_000.0, true),
             Class::Recon => (400.0, 1_800.0, 9_000.0, true),
             Class::None => (0.0, 0.0, 0.0, true),
         }
@@ -161,6 +248,8 @@ impl Class {
     fn rates(self) -> (f64, f64) {
         match self {
             Class::Light => (6.0, 180.0),
+            Class::Heli => (14.0, 450.0),
+            Class::Glider => (8.0, 120.0),
             Class::BizJet => (24.0, 4_000.0),
             Class::Airliner => (95.0, 25_000.0),
             Class::Sst => (210.0, 60_000.0),
@@ -169,29 +258,171 @@ impl Class {
             Class::None => (0.0, 0.0),
         }
     }
+
+    /// what a hired pilot earns the company in an hour with one (before wages).
+    pub fn hourly(self) -> f64 {
+        self.rent() * 0.55
+    }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+/// the buying price of a type (none: not for sale).
+pub fn price_of(spec: &aircraft::Spec) -> Option<f64> {
+    let key = spec.keys.first().copied().unwrap_or("");
+    Some(match key {
+        "c172" => 95_000.0,
+        "dr400" => 80_000.0,
+        "bonanza" => 380_000.0,
+        "r44" => 340_000.0,
+        "ask21" => 95_000.0,
+        _ => match class_of(spec) {
+            Class::Light => 120_000.0,
+            Class::BizJet => 9_000_000.0,
+            Class::Airliner => 30_000_000.0,
+            Class::Sst => 45_000_000.0,
+            Class::Heli => 350_000.0,
+            Class::Glider => 95_000.0,
+            _ => return None,
+        },
+    })
+}
+
+/// the types a career can fly: built in, and the helicopter and glider.
+pub fn career_types() -> Vec<&'static aircraft::Spec> {
+    aircraft::list().into_iter().filter(|s| s.origin.is_none() && class_of(s) != Class::None).collect()
+}
+
+/// the kinds of work.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Hash, PartialOrd, Ord)]
 pub enum Kind {
+    Ferry,
+    Tour,
+    Photo,
+    Skydive,
     Passengers,
     Cargo,
-    Ferry,
-    Photo,
     Medical,
+    Rescue,
+    Soaring,
+    Charter,
+    Airline,
     Display,
+    Recon,
 }
+
+pub const KINDS: [Kind; 13] = [Kind::Ferry, Kind::Tour, Kind::Photo, Kind::Skydive, Kind::Passengers, Kind::Cargo, Kind::Medical, Kind::Rescue, Kind::Soaring, Kind::Charter, Kind::Airline, Kind::Display, Kind::Recon];
 
 impl Kind {
     pub fn name(self) -> &'static str {
         match self {
+            Kind::Ferry => "Ferry flight",
+            Kind::Tour => "Sightseeing tour",
+            Kind::Photo => "Aerial photography",
+            Kind::Skydive => "Skydiving drop",
             Kind::Passengers => "Passengers",
             Kind::Cargo => "Cargo",
-            Kind::Ferry => "Ferry flight",
-            Kind::Photo => "Aerial photography",
-            Kind::Medical => "Medical transfer",
+            Kind::Medical => "Air ambulance",
+            Kind::Rescue => "Search and rescue",
+            Kind::Soaring => "Soaring task",
+            Kind::Charter => "Executive charter",
+            Kind::Airline => "Airline service",
             Kind::Display => "Air display",
+            Kind::Recon => "Reconnaissance",
         }
     }
+
+    pub fn blurb(self) -> &'static str {
+        match self {
+            Kind::Ferry => "Take an empty aircraft to where its owner wants it.",
+            Kind::Tour => "Show passengers a landmark from the air and bring them home.",
+            Kind::Photo => "Fly low over a site for the camera and come back.",
+            Kind::Skydive => "Climb over the field with jumpers aboard, let them go and land.",
+            Kind::Passengers => "Fly paying passengers to another airport, smoothly.",
+            Kind::Cargo => "Carry freight to another airport on time.",
+            Kind::Medical => "A patient on board: get there quickly and gently.",
+            Kind::Rescue => "Find the casualty, hover low beside them, and fly them out.",
+            Kind::Soaring => "Glide out to a turn point and back without an engine.",
+            Kind::Charter => "Business travellers who pay for comfort and punctuality.",
+            Kind::Airline => "A scheduled service with a full cabin.",
+            Kind::Display => "A low pass along the crowd line at an air show.",
+            Kind::Recon => "Photograph a target from the edge of space.",
+        }
+    }
+
+    /// the licence the work needs, as well as the rating for the aircraft.
+    pub fn lic(self) -> Lic {
+        match self {
+            Kind::Ferry | Kind::Tour | Kind::Photo => Lic::Ppl,
+            Kind::Skydive | Kind::Passengers | Kind::Cargo => Lic::Cpl,
+            Kind::Medical => Lic::Ir,
+            Kind::Rescue => Lic::Heli,
+            Kind::Soaring => Lic::Glider,
+            Kind::Charter => Lic::BizJet,
+            Kind::Airline => Lic::Airliner,
+            Kind::Display => Lic::Display,
+            Kind::Recon => Lic::Recon,
+        }
+    }
+
+    pub fn classes(self) -> &'static [Class] {
+        match self {
+            Kind::Ferry => &[Class::Light, Class::Heli, Class::BizJet],
+            Kind::Tour => &[Class::Light, Class::Heli],
+            Kind::Photo => &[Class::Light, Class::Heli],
+            Kind::Skydive => &[Class::Light],
+            Kind::Passengers => &[Class::Light],
+            Kind::Cargo => &[Class::Light, Class::BizJet, Class::Airliner],
+            Kind::Medical => &[Class::Light, Class::Heli, Class::BizJet],
+            Kind::Rescue => &[Class::Heli],
+            Kind::Soaring => &[Class::Glider],
+            Kind::Charter => &[Class::BizJet],
+            Kind::Airline => &[Class::Airliner, Class::Sst],
+            Kind::Display => &[Class::Fighter],
+            Kind::Recon => &[Class::Recon],
+        }
+    }
+
+    /// the colour of its tag.
+    pub fn colour(self) -> egui::Color32 {
+        use egui::Color32 as C;
+        match self {
+            Kind::Ferry => C::from_rgb(150, 164, 184),
+            Kind::Tour => C::from_rgb(86, 204, 186),
+            Kind::Photo => C::from_rgb(178, 140, 255),
+            Kind::Skydive => C::from_rgb(255, 150, 70),
+            Kind::Passengers => C::from_rgb(110, 170, 255),
+            Kind::Cargo => C::from_rgb(214, 170, 96),
+            Kind::Medical => C::from_rgb(255, 100, 110),
+            Kind::Rescue => C::from_rgb(255, 120, 60),
+            Kind::Soaring => C::from_rgb(150, 220, 120),
+            Kind::Charter => C::from_rgb(245, 197, 24),
+            Kind::Airline => C::from_rgb(90, 150, 255),
+            Kind::Display => C::from_rgb(255, 120, 200),
+            Kind::Recon => C::from_rgb(160, 120, 220),
+        }
+    }
+
+    /// passengers aboard care how it feels.
+    pub fn carries_people(self) -> bool {
+        matches!(self, Kind::Tour | Kind::Passengers | Kind::Medical | Kind::Charter | Kind::Airline | Kind::Rescue | Kind::Skydive)
+    }
+
+    /// comes back to where it started.
+    pub fn round_trip(self) -> bool {
+        matches!(self, Kind::Tour | Kind::Photo | Kind::Skydive | Kind::Soaring | Kind::Display | Kind::Recon)
+    }
+}
+
+/// reputation tiers in each kind of work.
+pub const TIERS: [(f64, &str); 5] = [(0.0, "Newcomer"), (150.0, "Known"), (450.0, "Trusted"), (1000.0, "Renowned"), (2000.0, "Elite")];
+
+/// the tier for a reputation, and how far to the next (0..1).
+pub fn tier(rep: f64) -> (usize, f32) {
+    let i = TIERS.iter().rposition(|t| rep >= t.0).unwrap_or(0);
+    let frac = match TIERS.get(i + 1) {
+        Some(n) => ((rep - TIERS[i].0) / (n.0 - TIERS[i].0)) as f32,
+        None => 1.0,
+    };
+    (i, frac.clamp(0.0, 1.0))
 }
 
 /// a job on the board.
@@ -201,7 +432,7 @@ pub struct Job {
     pub kind: Kind,
     pub from: String,
     pub to: String,
-    /// a point to pass over on the way (photo flights, displays): lat, lon.
+    /// a point to pass over on the way (tours, photos, drops, rescues): lat, lon.
     pub via: Option<(f64, f64)>,
     pub dist_nm: f64,
     pub payload_kg: f64,
@@ -211,6 +442,18 @@ pub struct Job {
     pub limit_s: f64,
     /// the aircraft class it is for.
     pub class: String,
+    /// 1 to 3: longer, harder and better paid.
+    #[serde(default = "one")]
+    pub tier: u8,
+    #[serde(default)]
+    pub client: String,
+    /// what the point on the way is.
+    #[serde(default)]
+    pub via_name: String,
+}
+
+fn one() -> u8 {
+    1
 }
 
 /// a sale or a cost, for the statement.
@@ -221,12 +464,77 @@ pub struct Entry {
     pub amount: f64,
 }
 
+/// a pilot working for the company.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Hire {
+    pub name: String,
+    /// 1 to 5.
+    pub skill: u8,
+    /// the owned aircraft they fly (its key).
+    pub plane: Option<String>,
+    pub hired: u64,
+    /// what they have earned the company, all told.
+    #[serde(default)]
+    pub earned: f64,
+}
+
+/// how a job came out.
+#[derive(Clone, Debug)]
+pub struct Debrief {
+    pub ok: bool,
+    pub stars: u8,
+    /// what was marked: the name, out of 100, a word on it.
+    pub marks: Vec<(String, u32, String)>,
+    pub lines: Vec<(String, f64)>,
+    pub rep: f64,
+    pub xp: u64,
+    pub note: String,
+    pub kind: Kind,
+    pub title: String,
+}
+
+impl Debrief {
+    pub fn net(&self) -> f64 {
+        self.lines.iter().map(|l| l.1).sum()
+    }
+}
+
+/// what the career screen is showing.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Tab {
+    #[default]
+    Home,
+    Jobs,
+    Training,
+    Fleet,
+    Company,
+    Finances,
+}
+
+/// the screen's own state, not saved.
+#[derive(Clone, Debug, Default)]
+pub struct View {
+    pub tab: Tab,
+    /// the job picked on the board, and the one being briefed.
+    pub sel: Option<u64>,
+    pub brief: Option<Job>,
+    /// the aircraft picked in the briefing (its key).
+    pub brief_plane: Option<String>,
+    pub filter: Option<Kind>,
+    pub move_to: String,
+    /// a word after an action.
+    pub note: Option<(String, bool)>,
+    /// the debrief of the last job, shown on return.
+    pub debrief: Option<Debrief>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Career {
     pub started: bool,
     pub name: String,
     pub base: String,
     pub money: f64,
+    /// all the reputation; by kind of work in `rep_by`.
     pub rep: f64,
     pub hours: f64,
     pub jobs_done: u32,
@@ -240,15 +548,37 @@ pub struct Career {
     pub active: Option<Job>,
     pub ledger: Vec<Entry>,
     pub next_id: u64,
+    #[serde(default)]
+    pub rep_by: BTreeMap<Kind, f64>,
+    /// wear on owned aircraft by key, 0 new to 1 worn out.
+    #[serde(default)]
+    pub wear: BTreeMap<String, f64>,
+    #[serde(default)]
+    pub hires: Vec<Hire>,
+    /// unix seconds the company's earnings were last counted.
+    #[serde(default)]
+    pub accrued: u64,
+    /// the stars of the jobs flown, newest last.
+    #[serde(default)]
+    pub stars: Vec<u8>,
+    #[serde(skip)]
+    pub view: View,
 }
 
 impl Default for Career {
     fn default() -> Self {
-        Self { started: false, name: String::new(), base: "KHAF".into(), money: 15_000.0, rep: 0.0, hours: 0.0, jobs_done: 0, lics: Vec::new(), owned: Vec::new(), board: Vec::new(), board_for: String::new(), refresh: 0, active: None, ledger: Vec::new(), next_id: 1 }
+        Self { started: false, name: String::new(), base: "KHAF".into(), money: 15_000.0, rep: 0.0, hours: 0.0, jobs_done: 0, lics: Vec::new(), owned: Vec::new(), board: Vec::new(), board_for: String::new(), refresh: 0, active: None, ledger: Vec::new(), next_id: 1, rep_by: BTreeMap::new(), wear: BTreeMap::new(), hires: Vec::new(), accrued: 0, stars: Vec::new(), view: View::default() }
     }
 }
 
 fn path() -> Option<PathBuf> {
+    // scripted runs (shots, recordings, benchmarks) read the career but never write it.
+    static SCRIPTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let scripted = *SCRIPTED.get_or_init(|| std::env::args().any(|a| matches!(a.as_str(), "--headless" | "--shot" | "--record" | "--bench")));
+    dirs::config_dir().map(|d| d.join("fablegame").join("career.json")).filter(|_| !scripted)
+}
+
+fn load_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("fablegame").join("career.json"))
 }
 
@@ -266,6 +596,19 @@ pub fn money(v: f64) -> String {
     format!("{}${out}", if v < 0.0 { "-" } else { "" })
 }
 
+/// $1.2M, $45k: short, for chips.
+pub fn money_short(v: f64) -> String {
+    let a = v.abs();
+    let sign = if v < 0.0 { "-" } else { "" };
+    if a >= 1e6 {
+        format!("{sign}${:.1}M", a / 1e6)
+    } else if a >= 1e4 {
+        format!("{sign}${:.0}k", a / 1e3)
+    } else {
+        money(v)
+    }
+}
+
 struct Rng(u64);
 impl Rng {
     fn f(&mut self) -> f64 {
@@ -274,15 +617,50 @@ impl Rng {
         self.0 ^= self.0 << 17;
         (self.0 >> 11) as f64 / (1u64 << 53) as f64
     }
+
+    fn pick<T: Copy>(&mut self, v: &[T]) -> T {
+        v[(self.f() * v.len() as f64) as usize % v.len()]
+    }
 }
 
 fn longest_ft(a: &Apt) -> (f64, bool) {
     a.rwys.iter().map(|r| (r.len as f64, r.paved)).fold((0.0, false), |m, r| if r.0 > m.0 { r } else { m })
 }
 
+/// a point `nm` out from (lat, lon) on a bearing (deg).
+fn offset(lat: f64, lon: f64, nm: f64, bearing: f64) -> (f64, f64) {
+    let d = nm * 1852.0 / geo::R;
+    let (p1, l1, b) = (lat.to_radians(), lon.to_radians(), bearing.to_radians());
+    let p2 = (p1.sin() * d.cos() + p1.cos() * d.sin() * b.cos()).asin();
+    let l2 = l1 + (b.sin() * d.sin() * p1.cos()).atan2(d.cos() - p1.sin() * p2.sin());
+    (p2.to_degrees(), l2.to_degrees())
+}
+
+pub fn nm_between(a: (f64, f64), b: (f64, f64)) -> f64 {
+    crate::flightplan::dist(a, b) / 1852.0
+}
+
+const CLIENTS: &[&str] = &["Coastal Air Charter", "Bluebird Aviation", "Summit Medical", "Skyline Tours", "Northwind Freight", "Harbour Air Taxi", "Valley Skydivers", "Meridian Survey", "Silverline Executive", "Atlas Cargo", "Horizon Airways", "Redline Rescue", "Thermal Soaring Club", "Aurora Air Shows", "Crown Logistics", "Pioneer Flying Club"];
+const NAMES: &[&str] = &["Maya Chen", "Luca Moretti", "Amara Okafor", "Jonas Berg", "Priya Nair", "Diego Alvarez", "Hana Sato", "Owen Price", "Leila Haddad", "Tomás Silva", "Ingrid Larsen", "Kwame Mensah", "Sofia Rossi", "Arjun Mehta", "Elif Kaya", "Noah Fischer"];
+
+/// a hired pilot's wage an hour, by their skill.
+pub fn wage(skill: u8) -> f64 {
+    18.0 + 12.0 * skill as f64
+}
+
+/// what signing a pilot costs.
+pub fn signing_fee(skill: u8) -> f64 {
+    2_500.0 * skill as f64
+}
+
 impl Career {
     pub fn load() -> Career {
-        path().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        let mut c: Career = load_path().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        // a board from before jobs had clients and tiers is made again.
+        if c.board.iter().any(|j| j.client.is_empty()) {
+            c.board.clear();
+        }
+        c
     }
 
     pub fn save(&self) {
@@ -302,37 +680,21 @@ impl Career {
         self.lics.contains(&l)
     }
 
-    fn pay(&mut self, what: impl Into<String>, amount: f64) {
+    /// the highest of the main licences, for the pilot's title.
+    pub fn title(&self) -> &'static str {
+        [Lic::Atpl, Lic::Cpl, Lic::Ppl].into_iter().find(|l| self.has(*l)).map_or("Student pilot", |l| l.name())
+    }
+
+    pub fn pay(&mut self, what: impl Into<String>, amount: f64) {
         self.money += amount;
         self.ledger.push(Entry { unix: profile::now_unix(), what: what.into(), amount });
-        if self.ledger.len() > 200 {
+        if self.ledger.len() > 300 {
             self.ledger.remove(0);
         }
     }
 
-    /// whether a licence can be had now (the training done, the hours, the reputation).
-    pub fn can_get(&self, l: Lic, best: &std::collections::HashMap<String, u32>) -> bool {
-        let done = |id: &str| best.contains_key(id);
-        !self.has(l)
-            && match l {
-                Lic::Ppl => done("t1") && done("t2") && done("t3"),
-                Lic::Ir => self.has(Lic::Ppl) && done("t4") && done("t6") && self.hours >= 10.0,
-                Lic::Cpl => self.has(Lic::Ppl) && self.hours >= 25.0 && self.jobs_done >= 10,
-                Lic::Atpl => self.has(Lic::Cpl) && self.has(Lic::Ir) && self.hours >= 100.0 && self.rep >= 1500.0,
-                Lic::BizJet => self.has(Lic::Cpl) && self.has(Lic::Ir),
-                Lic::Airliner => self.has(Lic::Atpl),
-                Lic::Sst => self.has(Lic::Airliner) && self.rep >= 3000.0,
-                Lic::Display => self.has(Lic::Cpl) && self.rep >= 800.0,
-                Lic::Recon => self.has(Lic::Display) && self.rep >= 4000.0,
-            }
-            && self.money >= l.fee()
-    }
-
-    pub fn get(&mut self, l: Lic) {
-        if l.fee() > 0.0 {
-            self.pay(format!("{} training", l.name()), -l.fee());
-        }
-        self.lics.push(l);
+    pub fn rep_of(&self, k: Kind) -> f64 {
+        self.rep_by.get(&k).copied().unwrap_or(0.0)
     }
 
     /// may fly this class.
@@ -340,81 +702,252 @@ impl Career {
         c.licence().is_some_and(|l| self.has(l))
     }
 
-    /// a fresh board of jobs out of the base for the classes the pilot is rated on.
+    /// may take this job: the licence for the work, the rating for the aircraft, the reputation for its tier.
+    pub fn can_take(&self, j: &Job) -> Result<(), String> {
+        let c = class_parse(&j.class);
+        if !self.has(j.kind.lic()) {
+            return Err(format!("{} {}", tr_en("Needs:"), tr_en(j.kind.lic().name())));
+        }
+        if !self.rated(c) {
+            return Err(format!("{} {}", tr_en("Needs:"), c.licence().map_or("", |l| tr_en(l.name()))));
+        }
+        let (t, _) = tier(self.rep_of(j.kind));
+        if (j.tier as usize) > t + 1 {
+            return Err(format!("{} {} {}", tr_en("Needs"), tr_en(TIERS[j.tier as usize - 1].1), tr_en("reputation")));
+        }
+        Ok(())
+    }
+
+    /// a fresh board of jobs out of the base: the work the pilot does, and some just out of reach.
     pub fn make_board(&mut self) {
         let db = Db::get();
         let Some(bi) = db.find(&self.base) else { return };
         let base = &db.apts[bi as usize];
-        let mut rng = Rng((bi as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ((self.refresh as u64 + 1) * 0x2545_F491_4F6C_DD1D) ^ self.jobs_done as u64);
-        let mut classes: Vec<Class> = [Class::Light, Class::BizJet, Class::Airliner, Class::Sst, Class::Fighter, Class::Recon].into_iter().filter(|c| self.rated(*c)).collect();
-        // a student sees what the private licence opens up.
-        if classes.is_empty() {
-            classes.push(Class::Light);
-        }
+        let seed = (bi as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ (self.refresh as u64 + 1).wrapping_mul(0x2545_F491_4F6C_DD1D) ^ ((self.jobs_done as u64) << 7);
+        let mut rng = Rng(seed | 1);
+        let rated: Vec<Class> = CLASSES.into_iter().filter(|c| self.rated(*c)).collect();
         let mut board = Vec::new();
-        for c in &classes {
-            let (lo, hi, rwy_ft, paved) = c.reach();
-            let mut cands: Vec<(u32, f64)> = db.apts.iter().enumerate().filter(|(i, a)| {
-                if *i as u32 == bi || a.rwys.is_empty() {
-                    return false;
-                }
-                let (len, pv) = longest_ft(a);
-                len >= rwy_ft && (pv || !paved) && (*c == Class::Light || a.kind >= 1)
-            }).map(|(i, a)| (i as u32, crate::flightplan::dist((base.lat, base.lon), (a.lat, a.lon)) / 1852.0)).filter(|(_, d)| *d >= lo && *d <= hi).collect();
-            if cands.is_empty() {
+        for kind in KINDS {
+            // the work for an aircraft the pilot flies, or the first steps for a student.
+            let classes: Vec<Class> = kind.classes().iter().copied().filter(|c| rated.contains(c) || (rated.is_empty() && *c == Class::Light)).collect();
+            if classes.is_empty() {
                 continue;
             }
-            cands.sort_by(|a, b| a.1.total_cmp(&b.1));
-            let n = if classes.len() > 2 { 3 } else { 5 };
-            let kinds: &[Kind] = match c {
-                Class::Light => &[Kind::Passengers, Kind::Cargo, Kind::Ferry, Kind::Photo, Kind::Medical],
-                Class::BizJet => &[Kind::Passengers, Kind::Medical, Kind::Cargo, Kind::Ferry],
-                Class::Airliner | Class::Sst => &[Kind::Passengers, Kind::Cargo],
-                Class::Fighter => &[Kind::Display],
-                Class::Recon => &[Kind::Photo],
-                Class::None => &[],
-            };
-            let spec = aircraft::BUILTIN.iter().copied().find(|s| class_of(s) == *c);
-            let max_payload = spec.map_or(500.0, |s| s.payload[1]);
-            for _ in 0..n {
-                let (ai, dist) = cands[(rng.f() * cands.len() as f64) as usize % cands.len()];
-                let kind = kinds[(rng.f() * kinds.len() as f64) as usize % kinds.len()];
-                let dest = &db.apts[ai as usize];
-                let (rate, start) = c.rates();
-                let (payload, pax) = match kind {
-                    Kind::Passengers => {
-                        let pax = ((max_payload * (0.3 + 0.6 * rng.f())) / 90.0).max(1.0).floor();
-                        (pax * 90.0, pax as u32)
-                    }
-                    Kind::Cargo => ((max_payload * (0.35 + 0.6 * rng.f())).round(), 0),
-                    Kind::Medical => (180.0_f64.min(max_payload), 1),
-                    _ => (0.0, 0),
+            let n = if self.has(kind.lic()) { 3 } else { 1 };
+            for k in 0..n {
+                let c = rng.pick(&classes);
+                let t: u8 = match k {
+                    0 => 1,
+                    1 => 1 + (rng.f() < 0.5) as u8,
+                    _ => 2 + (rng.f() < 0.4) as u8,
                 };
-                // a photo flight or a display goes over a point and comes back to land.
-                let (to, via, d) = match kind {
-                    Kind::Photo | Kind::Display => {
-                        let b = rng.f() * std::f64::consts::TAU;
-                        let r = (lo * 0.5 + rng.f() * (hi - lo) * 0.3) * 1852.0 / geo::R;
-                        let lat = base.lat + r.to_degrees() * b.cos();
-                        let lon = base.lon + r.to_degrees() * b.sin() / base.lat.to_radians().cos().max(0.2);
-                        let d = 2.0 * crate::flightplan::dist((base.lat, base.lon), (lat, lon)) / 1852.0;
-                        let via = if kind == Kind::Display { (dest.lat, dest.lon) } else { (lat, lon) };
-                        let d = if kind == Kind::Display { 2.0 * dist } else { d };
-                        (base.ident.clone(), Some(via), d)
-                    }
-                    _ => (dest.ident.clone(), None, dist),
-                };
-                let urgency = if kind == Kind::Medical { 1.6 } else { 1.0 };
-                let pay = ((start + rate * d * (0.85 + 0.3 * rng.f())) * urgency / 10.0).round() * 10.0;
-                let cruise_kt = match c { Class::Light => 110.0, Class::Sst => 1150.0, Class::Recon => 1600.0, Class::Fighter => 420.0, _ => 460.0 };
-                let limit_s = (d / cruise_kt * 3600.0 * if kind == Kind::Medical { 1.3 } else { 1.7 }) + 1800.0;
-                board.push(Job { id: self.next_id, kind, from: base.ident.clone(), to, via, dist_nm: d, payload_kg: payload, pax, pay, limit_s, class: format!("{c:?}") });
-                self.next_id += 1;
+                if let Some(j) = self.make_job(&mut rng, base, bi, kind, c, t) {
+                    board.push(j);
+                }
             }
         }
-        board.sort_by(|a, b| a.pay.total_cmp(&b.pay));
+        board.sort_by(|a, b| (a.kind, a.tier).cmp(&(b.kind, b.tier)).then(a.pay.total_cmp(&b.pay)));
         self.board = board;
         self.board_for = self.base.clone();
+    }
+
+    fn make_job(&mut self, rng: &mut Rng, base: &Apt, bi: u32, kind: Kind, c: Class, t: u8) -> Option<Job> {
+        let db = Db::get();
+        let (lo, hi, rwy_ft, paved) = c.reach();
+        // a tier's range: the first stays near, the third goes far.
+        let span = hi - lo;
+        let (lo_t, hi_t) = match t {
+            1 => (lo, lo + span * 0.4),
+            2 => (lo + span * 0.25, lo + span * 0.75),
+            _ => (lo + span * 0.5, hi),
+        };
+        let spec = aircraft::list().into_iter().find(|s| class_of(s) == c);
+        let max_payload = spec.map_or(500.0, |s| s.payload[1]);
+        let (payload, pax) = match kind {
+            Kind::Passengers | Kind::Charter | Kind::Airline | Kind::Tour => {
+                let per = 95.0;
+                let pax = ((max_payload * (0.3 + 0.6 * rng.f())) / per).clamp(1.0, 420.0).floor();
+                (pax * per, pax as u32)
+            }
+            Kind::Skydive => {
+                let pax = (max_payload / 95.0).floor().clamp(1.0, 3.0);
+                (pax * 95.0, pax as u32)
+            }
+            Kind::Cargo => ((max_payload * (0.35 + 0.6 * rng.f())).round(), 0),
+            Kind::Medical | Kind::Rescue => (180.0_f64.min(max_payload), 1),
+            _ => (0.0, 0),
+        };
+        let client = rng.pick(CLIENTS).to_string();
+        if kind == Kind::Display {
+            return self.display_job(rng, base, bi, c, t, client);
+        }
+        let bearing = rng.f() * 360.0;
+        let (to, via, via_name, dist) = if kind.round_trip() || kind == Kind::Rescue {
+            let r = if kind == Kind::Skydive { 0.0 } else { lo_t * 0.5 + rng.f() * (hi_t - lo_t) * 0.5 };
+            let city = if kind == Kind::Tour {
+                // a city near the base is the sight.
+                crate::menu::CITIES.iter().map(|c| (c, nm_between((base.lat, base.lon), (c.1, c.2)))).filter(|(_, d)| *d > 4.0 && *d < hi_t.max(40.0)).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(c, _)| c)
+            } else {
+                None
+            };
+            let (lat, lon) = match city {
+                Some(c) => (c.1, c.2),
+                None if kind == Kind::Skydive => (base.lat, base.lon),
+                None => offset(base.lat, base.lon, r.max(4.0), bearing),
+            };
+            let name = match kind {
+                Kind::Tour => city.map_or_else(|| tr_en("the coast").to_string(), |c| c.0.to_string()),
+                Kind::Skydive => tr_en("the drop zone over the field").to_string(),
+                Kind::Rescue => tr_en("the casualty").to_string(),
+                Kind::Soaring => tr_en("the turn point").to_string(),
+                Kind::Recon => tr_en("the target").to_string(),
+                _ => {
+                    let nearest = db.near(lat, lon, 40_000.0).into_iter().min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| db.apts[i as usize].city.clone()).filter(|s| !s.is_empty());
+                    nearest.map_or_else(|| tr_en("the survey site").to_string(), |c| format!("{} {c}", tr_en("the site near")))
+                }
+            };
+            let out = nm_between((base.lat, base.lon), (lat, lon));
+            // a rescue flies the casualty to the nearest larger airport, else home.
+            let to = if kind == Kind::Rescue {
+                db.near(lat, lon, 60_000.0).into_iter().filter(|(i, _)| *i != bi && db.apts[*i as usize].kind >= 1).min_by(|a, b| a.1.total_cmp(&b.1)).map_or(base.ident.clone(), |(i, _)| db.apts[i as usize].ident.clone())
+            } else {
+                base.ident.clone()
+            };
+            let back = db.find(&to).map_or(out, |i| nm_between((lat, lon), (db.apts[i as usize].lat, db.apts[i as usize].lon)));
+            (to, Some((lat, lon)), name, (out + back).max(8.0))
+        } else {
+            let mut cands: Vec<(u32, f64)> = db
+                .apts
+                .iter()
+                .enumerate()
+                .filter(|(i, a)| {
+                    if *i as u32 == bi || a.rwys.is_empty() {
+                        return false;
+                    }
+                    let (len, pv) = longest_ft(a);
+                    len >= rwy_ft && (pv || !paved) && (matches!(c, Class::Light | Class::Heli) || a.kind >= 1)
+                })
+                .map(|(i, a)| (i as u32, nm_between((base.lat, base.lon), (a.lat, a.lon))))
+                .filter(|(_, d)| *d >= lo_t && *d <= hi_t)
+                .collect();
+            if cands.is_empty() {
+                return None;
+            }
+            cands.sort_by(|a, b| a.1.total_cmp(&b.1));
+            let (ai, d) = rng.pick(&cands);
+            (db.apts[ai as usize].ident.clone(), None, String::new(), d)
+        };
+        let (rate, start) = c.rates();
+        let urgency = match kind {
+            Kind::Medical | Kind::Rescue => 1.6,
+            Kind::Charter => 1.3,
+            Kind::Skydive => 1.2,
+            _ => 1.0,
+        };
+        let tier_k = [1.0, 1.5, 2.2][(t as usize - 1).min(2)];
+        let dist = if kind == Kind::Skydive { 15.0 } else { dist };
+        let pay = ((start + rate * dist * (0.85 + 0.3 * rng.f())) * urgency * tier_k / 10.0).round() * 10.0;
+        let slack = match kind {
+            Kind::Medical | Kind::Rescue => 1.3,
+            Kind::Skydive => 2.5,
+            _ => 1.7 - 0.15 * (t as f64 - 1.0),
+        };
+        let limit_s = dist / c.cruise_kt() * 3600.0 * slack + if kind == Kind::Skydive { 1800.0 } else { 1200.0 };
+        let id = self.next_id;
+        self.next_id += 1;
+        Some(Job { id, kind, from: base.ident.clone(), to, via, dist_nm: dist, payload_kg: payload, pax, pay, limit_s, class: format!("{c:?}"), tier: t, client, via_name })
+    }
+
+    /// an air show at another airport: a low pass over it and back.
+    fn display_job(&mut self, rng: &mut Rng, base: &Apt, bi: u32, c: Class, t: u8, client: String) -> Option<Job> {
+        let db = Db::get();
+        let (lo, hi, _, _) = c.reach();
+        let cands: Vec<(u32, f64)> = db
+            .near(base.lat, base.lon, hi * 1852.0)
+            .into_iter()
+            .filter(|(i, _)| *i != bi && db.apts[*i as usize].kind >= 1)
+            .map(|(i, _)| (i, nm_between((base.lat, base.lon), (db.apts[i as usize].lat, db.apts[i as usize].lon))))
+            .filter(|(_, d)| *d >= lo * 0.5)
+            .collect();
+        if cands.is_empty() {
+            return None;
+        }
+        let (ai, d) = rng.pick(&cands);
+        let a = &db.apts[ai as usize];
+        let (rate, start) = c.rates();
+        let pay = ((start + rate * d * 2.0) * [1.0, 1.5, 2.2][(t as usize - 1).min(2)] / 10.0).round() * 10.0;
+        let id = self.next_id;
+        self.next_id += 1;
+        Some(Job { id, kind: Kind::Display, from: base.ident.clone(), to: base.ident.clone(), via: Some((a.lat, a.lon)), dist_nm: d * 2.0, payload_kg: 0.0, pax: 0, pay, limit_s: d * 2.0 / c.cruise_kt() * 3600.0 * 1.8 + 1200.0, class: format!("{c:?}"), tier: t, client, via_name: format!("{} {}", a.ident, a.name) })
+    }
+
+    /// counts the company's earnings since last time (up to two days of them).
+    pub fn accrue(&mut self) {
+        let now = profile::now_unix();
+        if self.accrued == 0 {
+            self.accrued = now;
+            return;
+        }
+        let hours = (now.saturating_sub(self.accrued) as f64 / 3600.0).min(48.0);
+        if hours < 0.25 {
+            return;
+        }
+        self.accrued = now;
+        let mut net = 0.0;
+        let mut flown = 0;
+        for h in &mut self.hires {
+            // they fly a third of the time, and are paid for it.
+            let earn = h.plane.as_ref().and_then(|k| aircraft::by_key(k)).map_or(0.0, |s| class_of(s).hourly() * hours * 0.33 * (0.75 + 0.1 * h.skill as f64));
+            let cost = wage(h.skill) * hours * 0.33;
+            if earn > 0.0 {
+                flown += 1;
+            }
+            h.earned += earn - cost;
+            net += earn - cost;
+        }
+        if !self.hires.is_empty() && net.abs() >= 1.0 {
+            self.pay(format!("{} ({} {}, {:.0} h)", tr_en("Company flying"), flown, tr_en("pilots"), hours), net.round());
+        }
+    }
+
+    /// three pilots looking for work, the same until the board is refreshed.
+    pub fn candidates(&self) -> Vec<Hire> {
+        let seed = 0xA076_1D64_78BD_642F ^ (self.refresh as u64 + 7).wrapping_mul(0x9E37_79B9) ^ self.hires.len() as u64;
+        let mut rng = Rng(seed | 1);
+        let mut out: Vec<Hire> = Vec::new();
+        for _ in 0..12 {
+            if out.len() == 3 {
+                break;
+            }
+            let name = rng.pick(NAMES).to_string();
+            let skill = 1 + (rng.f() * 4.99) as u8;
+            if !self.hires.iter().any(|h| h.name == name) && !out.iter().any(|h| h.name == name) {
+                out.push(Hire { name, skill, plane: None, hired: 0, earned: 0.0 });
+            }
+        }
+        out
+    }
+
+    /// the owned aircraft nobody else is flying.
+    pub fn free_planes(&self) -> Vec<String> {
+        self.owned.iter().filter(|k| !self.hires.iter().any(|h| h.plane.as_ref() == Some(*k))).cloned().collect()
+    }
+
+    pub fn condition(&self, key: &str) -> f64 {
+        1.0 - self.wear.get(key).copied().unwrap_or(0.0)
+    }
+}
+
+pub fn class_parse(s: &str) -> Class {
+    match s {
+        "BizJet" => Class::BizJet,
+        "Airliner" => Class::Airliner,
+        "Sst" => Class::Sst,
+        "Fighter" => Class::Fighter,
+        "Recon" => Class::Recon,
+        "Heli" => Class::Heli,
+        "Glider" => Class::Glider,
+        _ => Class::Light,
     }
 }
 
@@ -426,57 +959,85 @@ pub struct Flight {
     pub t0: f64,
     pub fuel0: f64,
     pub violations0: u32,
-    /// it went over the point on the way.
+    /// it went over the point on the way (or held the hover long enough).
     pub via_done: bool,
+    pub hover_t: f64,
     pub airborne: bool,
-    up_for: f64,
-    vs_air: f64,
-    pub rating: Option<Rating>,
+    pub landing: Option<Landing>,
     pub max_g: f64,
+    pub max_bank: f64,
+    pub max_sink: f64,
     still: f64,
-    pub result: Option<Result>,
+    pub done: bool,
 }
 
-/// how a job came out.
-#[derive(Clone, Debug)]
-pub struct Result {
-    pub ok: bool,
-    pub lines: Vec<(String, f64)>,
-    pub rep: f64,
-    pub note: String,
+impl Flight {
+    /// a job not yet flown, for the briefing's list of objectives.
+    pub fn preview(job: Job) -> Flight {
+        let via_done = job.via.is_none();
+        Flight { job, spec_key: String::new(), rented: true, t0: 0.0, fuel0: 0.0, violations0: 0, via_done, hover_t: 0.0, airborne: false, landing: None, max_g: 1.0, max_bank: 0.0, max_sink: 0.0, still: 0.0, done: false }
+    }
 }
 
-fn class_parse(s: &str) -> Class {
-    match s {
-        "BizJet" => Class::BizJet,
-        "Airliner" => Class::Airliner,
-        "Sst" => Class::Sst,
-        "Fighter" => Class::Fighter,
-        "Recon" => Class::Recon,
-        _ => Class::Light,
+/// the objectives of a job, for the card: the words, done.
+pub fn objectives(f: &Flight) -> Vec<(String, bool)> {
+    let j = &f.job;
+    let mut v = vec![(tr_en("Take off").to_string(), f.airborne || f.landing.is_some())];
+    if j.via.is_some() {
+        let what = match j.kind {
+            Kind::Tour => format!("{} {}", tr_en("Fly the passengers over"), j.via_name),
+            Kind::Photo => format!("{} {}", tr_en("Photograph from below 3,000 ft:"), j.via_name),
+            Kind::Skydive => tr_en("Climb to 7,500 ft above the field and drop the jumpers").to_string(),
+            Kind::Rescue => tr_en("Find the casualty and hover below 300 ft beside them for 10 s").to_string(),
+            Kind::Soaring => tr_en("Round the turn point").to_string(),
+            Kind::Display => format!("{} {}", tr_en("Low pass below 1,000 ft over"), j.via_name),
+            Kind::Recon => tr_en("Over the target above 60,000 ft").to_string(),
+            _ => format!("{} {}", tr_en("Pass over"), j.via_name),
+        };
+        v.push((what, f.via_done));
+    }
+    v.push((format!("{} {}", tr_en("Land at"), j.to), f.landing.is_some()));
+    v.push((tr_en("Stop and park").to_string(), f.done));
+    v
+}
+
+/// a mark out of 100 from how far over a limit something went: full marks at `ok`, none at `bad`.
+fn mark(v: f64, ok: f64, bad: f64) -> u32 {
+    (100.0 * (1.0 - ((v - ok) / (bad - ok)).clamp(0.0, 1.0))).round() as u32
+}
+
+/// stars from the marks' average.
+pub fn stars_of(avg: f64) -> u8 {
+    match avg {
+        a if a >= 92.0 => 5,
+        a if a >= 80.0 => 4,
+        a if a >= 62.0 => 3,
+        a if a >= 40.0 => 2,
+        _ => 1,
     }
 }
 
 impl Game {
-    /// the aircraft the career flies a job's class in: one owned, else the built-in one.
-    fn career_spec(&self, c: Class) -> Option<&'static aircraft::Spec> {
-        let owned = self.career.owned.iter().filter_map(|k| aircraft::by_key(k)).find(|s| class_of(s) == c);
-        owned.or_else(|| aircraft::BUILTIN.iter().copied().find(|s| class_of(s) == c))
+    /// the aircraft the career flies a job's class in: one owned and free, else one to rent.
+    pub(crate) fn career_spec(&self, c: Class) -> Option<&'static aircraft::Spec> {
+        let owned = self.career.free_planes().iter().filter_map(|k| aircraft::by_key(k)).find(|s| class_of(s) == c);
+        owned.or_else(|| career_types().into_iter().find(|s| class_of(s) == c))
     }
 
     /// takes a job: off to the base with the aircraft loaded and the route set.
-    pub(crate) fn fly_job(&mut self, job: Job) {
+    pub(crate) fn fly_job(&mut self, job: Job, plane: Option<&str>) {
         let c = class_parse(&job.class);
-        let Some(spec) = self.career_spec(c) else { return };
+        let spec = plane.and_then(aircraft::by_key).filter(|s| class_of(s) == c).or_else(|| self.career_spec(c));
+        let Some(spec) = spec else { return };
         let db = Db::get();
         let Some(bi) = db.find(&job.from) else { return };
         self.set_aircraft(spec);
         self.menu.aircraft = aircraft::index_of(spec);
-        // the load, and fuel for the trip with an hour (a light aircraft 45 min) to spare.
+        // the load, and fuel for the trip with 45 minutes (an hour in a jet) to spare.
         let most = spec.payload[1].max(1.0);
         self.menu.payload = Some((job.payload_kg + 85.0).min(most) / most);
-        let kt = if c == Class::Light { 110.0 } else { 450.0 };
-        let need = spec.fuel_flow[1] * 0.7 * (job.dist_nm / kt + if c == Class::Light { 0.75 } else { 1.0 }) * 3600.0;
+        let reserve = if spec.is_jet() { 1.0 } else { 0.75 };
+        let need = spec.fuel_flow[1] * 0.7 * (job.dist_nm / c.cruise_kt() + reserve) * 3600.0;
         self.menu.fuel = (need / spec.fuel_kg.max(1.0)).clamp(0.25, 1.0);
         self.menu.cold = false;
         self.stand_start = true;
@@ -486,447 +1047,285 @@ impl Game {
         self.plan.clear();
         let a = &db.apts[bi as usize];
         let route = match job.via {
-            Some((lat, lon)) => format!("{lat:.5},{lon:.5} {}", job.to),
-            None => job.to.clone(),
+            Some((lat, lon)) if job.kind != Kind::Skydive => format!("{lat:.5},{lon:.5} {}", job.to),
+            _ => job.to.clone(),
         };
         let _ = self.plan.add_route(&route, Some((a.lat, a.lon)));
-        self.plan.cruise_ft = match c { Class::Light => 4_500.0, Class::Sst => 55_000.0, Class::Recon => 75_000.0, Class::Fighter => 15_000.0, _ => 35_000.0_f64 }.min(5_000.0 + job.dist_nm * 150.0);
+        self.plan.cruise_ft = match c {
+            Class::Light | Class::Heli | Class::Glider => 4_500.0,
+            Class::Sst => 55_000.0,
+            Class::Recon => 75_000.0,
+            Class::Fighter => 15_000.0,
+            _ => 35_000.0_f64,
+        }
+        .min(5_000.0 + job.dist_nm * 150.0);
         self.plan.begin((a.lat, a.lon));
-        let owned = self.career.owned.iter().any(|k| spec.keys.contains(&k.as_str()));
-        self.career_flight = Some(Flight { job: job.clone(), spec_key: spec.keys.first().copied().unwrap_or("").into(), rented: !owned, t0: self.time, fuel0: spec.fuel_kg * self.menu.fuel, violations0: 0, via_done: job.via.is_none(), airborne: false, up_for: 0.0, vs_air: 0.0, rating: None, max_g: 1.0, still: 0.0, result: None });
+        let key = spec.keys.first().copied().unwrap_or("").to_string();
+        let owned = self.career.owned.contains(&key);
+        self.career_flight = Some(Flight { job: job.clone(), spec_key: key, rented: !owned, t0: self.time, fuel0: spec.fuel_kg * self.menu.fuel, violations0: 0, via_done: job.via.is_none(), hover_t: 0.0, airborne: false, landing: None, max_g: 1.0, max_bank: 0.0, max_sink: 0.0, still: 0.0, done: false });
         self.career.active = Some(job);
+        self.career.view.brief = None;
+        self.career.view.debrief = None;
         self.career.save();
     }
 
-    /// once a step of a job: over the point, the landing, the stop at the other end.
+    /// a graded touchdown from the flight log: the one at the destination counts.
+    pub(crate) fn career_landed(&mut self, l: &Landing) {
+        let Some(f) = self.career_flight.as_mut() else { return };
+        if f.done || f.landing.is_some() || !f.airborne || !f.via_done {
+            return;
+        }
+        let db = Db::get();
+        let (la, lo, _) = geo::pos_to_lla(self.plane.pos);
+        let near = db.find(&f.job.to).map(|i| &db.apts[i as usize]).is_some_and(|a| nm_between((la.to_degrees(), lo.to_degrees()), (a.lat, a.lon)) < 3.0);
+        if l.airport.as_deref() == Some(f.job.to.as_str()) || near {
+            f.landing = Some(l.clone());
+        }
+    }
+
+    /// once a step of a job: the objectives, the comfort, the stop at the end.
     pub(crate) fn career_step(&mut self, dt: f64) {
         let Some(mut f) = self.career_flight.take() else { return };
-        if f.result.is_some() {
+        if f.done {
             self.career_flight = Some(f);
             return;
         }
         let p = &self.plane;
-        let (la, lo, _) = geo::pos_to_lla(p.pos);
+        let (la, lo, h) = geo::pos_to_lla(p.pos);
         let (lat, lon) = (la.to_degrees(), lo.to_degrees());
+        let agl_ft = self.world.ground(la, lo).map_or(h, |g| h - g.h) * 3.28084;
+        let (_, _, u) = geo::enu(p.pos);
         if !p.on_ground {
-            f.up_for += dt;
-            f.vs_air = p.vel.dot(p.pos.normalize());
-            if f.up_for > 5.0 {
+            if agl_ft > 50.0 {
                 f.airborne = true;
             }
             f.max_g = f.max_g.max(p.g_load.abs());
+            f.max_bank = f.max_bank.max((p.rot * glam::DVec3::X).dot(u).clamp(-1.0, 1.0).asin().to_degrees().abs());
+            f.max_sink = f.max_sink.max(-p.vel.dot(u) * 196.85);
         }
-        if let Some((vl, vo)) = f.job.via {
-            if crate::flightplan::dist((lat, lon), (vl, vo)) / 1852.0 < 1.5 {
-                f.via_done = true;
+        if let (Some((vl, vo)), false) = (f.job.via, f.via_done) {
+            let d = nm_between((lat, lon), (vl, vo));
+            let gs_kt = (p.vel - u * p.vel.dot(u)).length() * 1.943_84;
+            f.via_done = match f.job.kind {
+                Kind::Photo => d < 1.5 && agl_ft < 3000.0 && !p.on_ground,
+                Kind::Skydive => d < 2.5 && agl_ft >= 7_500.0,
+                Kind::Display => d < 1.0 && agl_ft < 1000.0 && !p.on_ground,
+                Kind::Recon => d < 5.0 && h * 3.28084 >= 60_000.0,
+                Kind::Rescue => {
+                    f.hover_t = if d < 0.3 && agl_ft < 300.0 && gs_kt < 15.0 { f.hover_t + dt } else { 0.0 };
+                    f.hover_t >= 10.0
+                }
+                _ => d < 1.5 && !p.on_ground,
+            };
+            if f.via_done {
+                self.status = match f.job.kind {
+                    Kind::Skydive => tr_en("Jumpers away! Head back and land.").to_string(),
+                    Kind::Rescue => tr_en("Casualty aboard. Fly them to the hospital airport.").to_string(),
+                    _ => format!("{}: {}", tr_en("Objective done"), f.job.via_name),
+                };
+                self.status_until = self.real + 6.0;
             }
         }
-        let db = Db::get();
-        let at_dest = db.find(&f.job.to).map(|i| &db.apts[i as usize]).is_some_and(|a| crate::flightplan::dist((lat, lon), (a.lat, a.lon)) < 5_000.0);
-        // the touchdown at the other end, rated as the challenges are.
-        if p.on_ground && f.airborne && f.rating.is_none() && at_dest && f.via_done {
-            let fpm = f.vs_air * 196.85;
-            let (_, _, u) = geo::enu(p.pos);
-            let bank = (p.rot * glam::DVec3::X).dot(u).asin().to_degrees();
-            let on_rwy = self.world.airfield_near(p.pos, 6_000.0).is_some_and(|fl| fl.geo.on_runway(fl.geo.local(p.pos), 3.0).is_some());
-            let score = Rating::score(fpm, 300.0, 0.0, bank, on_rwy, self.spec.is_jet());
-            f.rating = Some(Rating { fpm, along: 0.0, off: 0.0, bank, on_runway: on_rwy, score });
-        }
-        if p.on_ground {
-            f.up_for = 0.0;
-        }
         f.still = if p.on_ground && p.vel.length() < 0.5 { f.still + dt } else { 0.0 };
-        let crashed = self.crashed;
-        let done = f.rating.is_some() && f.still > 8.0;
-        if crashed || done {
-            let r = self.settle_job(&f, crashed);
-            f.result = Some(r);
+        if self.crashed || (f.landing.is_some() && f.still > 6.0) {
+            let d = self.settle_job(&f, self.crashed);
+            f.done = true;
+            self.career.view.debrief = Some(d);
         }
         self.career_flight = Some(f);
     }
 
-    /// pays out a job, or charges for it gone wrong.
-    fn settle_job(&mut self, f: &Flight, crashed: bool) -> Result {
+    /// marks, pays out and files a job, or charges for it gone wrong.
+    fn settle_job(&mut self, f: &Flight, crashed: bool) -> Debrief {
         let c = class_parse(&f.job.class);
+        let j = &f.job;
+        let title = match j.kind {
+            k if k.round_trip() => format!("{}  ·  {}", tr_en(k.name()), j.via_name),
+            k => format!("{}  ·  {} → {}", tr_en(k.name()), j.from, j.to),
+        };
         let mut lines: Vec<(String, f64)> = Vec::new();
         let hours = ((self.time - f.t0) / 3600.0).max(0.0);
         let fuel_used = (f.fuel0 - self.plane.fuel).max(0.0);
         let fuel_cost = fuel_used * c.fuel_price();
         let rent = if f.rented { c.rent() * hours.max(0.25) } else { 0.0 };
         let violations = self.atc.violations.saturating_sub(f.violations0);
-        let mut rep;
-        let note;
         if crashed {
-            let repair = c.price().unwrap_or(c.rent() * 200.0) * 0.15;
-            lines.push((tr_en("Damage to the aircraft").into(), -repair));
-            lines.push((tr_en("Fuel").into(), -fuel_cost));
-            rep = -120.0;
-            note = tr_en("The aircraft was lost. The job is failed.").into();
-        } else {
-            let late = hours * 3600.0 > f.job.limit_s;
-            let landing = f.rating.map_or(50, |r| r.score) as f64;
-            let comfort = if f.max_g > 2.2 && f.job.kind == Kind::Passengers { 0.85 } else { 1.0 };
-            let quality = ((0.75 + landing / 400.0) * comfort * if late { 0.5 } else { 1.0 } * if violations > 0 { 0.85 } else { 1.0 }).clamp(0.3, 1.25);
-            lines.push((format!("{}: {}", tr_en(f.job.kind.name()), f.job.to), f.job.pay));
-            if (quality - 1.0).abs() > 0.005 {
-                lines.push((tr_en("Quality (landing, timing, comfort, ATC)").into(), f.job.pay * (quality - 1.0)));
-            }
-            lines.push((tr_en("Fuel").into(), -fuel_cost));
-            if rent > 0.0 {
-                lines.push((format!("{} {:.1} h", tr_en("Rental"), hours), -rent));
-            }
-            let fee = match c { Class::Light => 15.0, Class::BizJet => 350.0, Class::Fighter | Class::Recon => 0.0, _ => 2_500.0 };
-            if fee > 0.0 {
-                lines.push((tr_en("Landing fee").into(), -fee));
-            }
-            rep = 20.0 + landing * 0.5 + f.job.dist_nm * 0.05 - violations as f64 * 15.0 - if late { 25.0 } else { 0.0 };
-            note = if late { tr_en("Late: the client paid half.").into() } else if violations > 0 { tr_en("ATC reported a pilot deviation.").into() } else { tr_en("Delivered.").into() };
-            self.career.jobs_done += 1;
-            self.career.base = f.job.to.clone();
+            let repair = aircraft::by_key(&f.spec_key).and_then(price_of).unwrap_or(c.rent() * 200.0) * 0.15;
+            lines.push((tr_en("Damage to the aircraft").into(), -repair.round()));
+            lines.push((tr_en("Fuel").into(), -fuel_cost.round()));
+            let rep = -60.0 * j.tier as f64;
+            let net: f64 = lines.iter().map(|l| l.1).sum();
+            self.career.pay(format!("{} {} {} ({})", tr_en("Failed:"), tr_en(j.kind.name()), j.to, f.spec_key.to_uppercase()), net);
+            let k = self.career.rep_of(j.kind);
+            self.career.rep_by.insert(j.kind, (k + rep).max(0.0));
+            self.career.rep = (self.career.rep + rep).max(0.0);
+            self.career.active = None;
+            self.career.board.clear();
+            self.career.save();
+            return Debrief { ok: false, stars: 0, marks: Vec::new(), lines, rep, xp: 0, note: tr_en("The aircraft was lost. The job is failed.").into(), kind: j.kind, title };
         }
-        rep = rep.round();
-        let total: f64 = lines.iter().map(|l| l.1).sum();
-        self.career.pay(format!("{} {} to {} ({})", tr_en(f.job.kind.name()), f.job.from, f.job.to, f.spec_key.to_uppercase()), total);
+        // the marks.
+        let mut marks: Vec<(String, u32, String)> = Vec::new();
+        let landing = f.landing.as_ref();
+        let lm = landing.map_or(40, |l| l.score);
+        marks.push((tr_en("Landing").into(), lm, landing.map_or_else(|| tr_en("not seen").to_string(), |l| format!("{}  ·  {:.0} fpm", l.grade.text(), l.sink_fpm))));
+        let late = hours * 3600.0 - j.limit_s;
+        let tm = if late <= 0.0 { 100 } else { mark(late, 0.0, j.limit_s) };
+        marks.push((tr_en("Timing").into(), tm, if late <= 0.0 { format!("{} {}", profile::hhmm(-late), tr_en("to spare")) } else { format!("{} {}", profile::hhmm(late), tr_en("late")) }));
+        if j.kind.carries_people() {
+            let g = mark(f.max_g, 1.6, 2.6);
+            let b = mark(f.max_bank, 35.0, 65.0);
+            let s = mark(f.max_sink, 1_800.0, 4_000.0);
+            marks.push((tr_en("Passenger comfort").into(), g.min(b).min(s), format!("{:.1} g  ·  {:.0}° {}  ·  {:.0} fpm", f.max_g, f.max_bank, tr_en("bank"), f.max_sink)));
+        }
+        let pm = 100u32.saturating_sub(violations * 25);
+        marks.push((tr_en("Procedures").into(), pm, if violations == 0 { tr_en("no deviations").to_string() } else { format!("{violations} {}", tr_en("ATC deviations")) }));
+        let key = f.spec_key.clone();
+        let cond = if f.rented { 1.0 } else { self.career.condition(&key) };
+        let care = if landing.is_some_and(|l| l.grade >= crate::flightlog::Grade::Hard) { 55 } else { 100 };
+        marks.push((tr_en("Aircraft care").into(), care, if care < 100 { tr_en("a hard landing").to_string() } else { format!("{:.0}% {}", cond * 100.0, tr_en("condition")) }));
+        let avg = marks.iter().map(|m| m.1 as f64).sum::<f64>() / marks.len() as f64;
+        let stars = stars_of(avg);
+        // the money.
+        let quality = 0.55 + 0.14 * stars as f64;
+        lines.push((format!("{}  ·  {}", tr_en(j.kind.name()), j.client), j.pay));
+        if (quality - 1.0).abs() > 0.005 {
+            lines.push((format!("{} ({}★)", tr_en("Client rating"), stars), (j.pay * (quality - 1.0)).round()));
+        }
+        lines.push((tr_en("Fuel").into(), -fuel_cost.round()));
+        if rent > 0.0 {
+            lines.push((format!("{} {:.1} h", tr_en("Rental"), hours), -rent.round()));
+        }
+        let fee = match c {
+            Class::Light | Class::Glider => 15.0,
+            Class::Heli => 30.0,
+            Class::BizJet => 350.0,
+            Class::Fighter | Class::Recon => 0.0,
+            _ => 2_500.0,
+        };
+        if fee > 0.0 && !j.kind.round_trip() {
+            lines.push((tr_en("Landing fee").into(), -fee));
+        }
+        // an owned aircraft wears: an hour's use, and more for a hard landing.
+        if !f.rented {
+            let w = 0.008 * hours.max(0.2) + if care < 100 { 0.04 } else { 0.0 };
+            let e = self.career.wear.entry(key.clone()).or_insert(0.0);
+            *e = (*e + w).min(1.0);
+        }
+        let rep = ((8.0 + 14.0 * stars as f64) * j.tier as f64 - violations as f64 * 10.0).round();
+        let xp = ((80.0 + j.dist_nm.min(800.0) * 0.6 + 30.0 * stars as f64) * (1.0 + 0.25 * (j.tier as f64 - 1.0))) as u64;
+        let net: f64 = lines.iter().map(|l| l.1).sum();
+        self.career.pay(format!("{} {} → {} ({})", tr_en(j.kind.name()), j.from, j.to, key.to_uppercase()), net);
+        *self.career.rep_by.entry(j.kind).or_default() += rep.max(0.0);
         self.career.rep = (self.career.rep + rep).max(0.0);
         self.career.hours += hours;
+        self.career.jobs_done += 1;
+        self.career.stars.push(stars);
+        if self.career.stars.len() > 200 {
+            self.career.stars.remove(0);
+        }
+        self.career.base = j.to.clone();
         self.career.active = None;
         self.career.board.clear();
         self.career.save();
-        Result { ok: !crashed, lines, rep, note }
+        let note = match stars {
+            5 => tr_en("Outstanding: the client asks for you by name."),
+            4 => tr_en("A very good job."),
+            3 => tr_en("Job done."),
+            2 => tr_en("The client was not impressed."),
+            _ => tr_en("The client will think twice."),
+        };
+        self.award(&format!("{}: {}", tr_en("Job"), tr_en(j.kind.name())), xp);
+        self.unlock("first_job");
+        if stars == 5 {
+            self.unlock("flawless");
+        }
+        self.sweep_badges();
+        Debrief { ok: true, stars, marks, lines, rep, xp, note: note.into(), kind: j.kind, title }
     }
 
-    /// the job card in flight: where to, how far, the time left; the pay at the end.
-    pub(crate) fn job_card(&mut self, ctx: &egui::Context) {
-        let Some(f) = self.career_flight.as_ref() else { return };
-        let mut close = false;
-        let mut abandon = false;
-        let db = Db::get();
-        let (la, lo, _) = geo::pos_to_lla(self.plane.pos);
-        let dest = db.find(&f.job.to).map(|i| &db.apts[i as usize]);
-        let (target, label) = match (f.job.via, f.via_done) {
-            (Some(v), false) => (Some(v), tr_en("the point to pass over")),
-            _ => (dest.map(|a| (a.lat, a.lon)), dest.map_or("", |a| a.name.as_str())),
-        };
-        let left_nm = target.map(|t| crate::flightplan::dist((la.to_degrees(), lo.to_degrees()), t) / 1852.0);
-        let left_s = f.job.limit_s - (self.time - f.t0);
-        egui::Area::new(egui::Id::unique("job_card")).anchor(egui::Align2::RIGHT_TOP, [-14.0, 170.0]).show(ctx, |ui| {
-            flightui::panel(ui, flightui::glass().inner_margin(14.0), |ui| {
-                ui.set_width(300.0);
-                flightui::tag(ui, &format!("{}  ·  {}", tr_en("CAREER"), tr_en(f.job.kind.name()).to_uppercase()));
-                ui.label(RichText::new(format!("{} → {}", f.job.from, f.job.to)).font(menu::semibold(16.0)).color(Color32::WHITE));
-                match &f.result {
-                    None => {
-                        if let Some(d) = left_nm {
-                            flightui::note(ui, &format!("{d:.0} nm {} {label}", tr_en("to")));
-                        }
-                        let m = (left_s / 60.0).floor();
-                        let col = if left_s < 0.0 { menu::BAD } else { flightui::SOFT };
-                        ui.label(RichText::new(if left_s >= 0.0 { format!("{} {}", profile::hhmm(left_s), tr_en("left")) } else { format!("{} {:.0} min", tr_en("late by"), -m) }).font(menu::caption()).color(col));
-                        if f.job.payload_kg > 0.0 {
-                            flightui::note(ui, &format!("{:.0} kg{}", f.job.payload_kg, if f.job.pax > 0 { format!("  ·  {} {}", f.job.pax, tr_en("aboard")) } else { String::new() }));
-                        }
-                        flightui::note(ui, &format!("{} {}", tr_en("pays"), money(f.job.pay)));
-                        if flightui::key(ui, tr_en("Abandon"), false, 90.0, 24.0).clicked() {
-                            abandon = true;
-                        }
-                    }
-                    Some(r) => {
-                        ui.label(RichText::new(&r.note).font(menu::medium(14.0)).color(if r.ok { flightui::LIT } else { menu::BAD }));
-                        for (what, amt) in &r.lines {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(what).font(menu::caption()).color(flightui::SOFT));
-                                menu::at_right(ui, ("job_line", what.as_str()), |ui| {
-                                    ui.label(RichText::new(money(*amt)).font(menu::caption()).color(if *amt < 0.0 { menu::BAD } else { Color32::WHITE }));
-                                });
-                            });
-                        }
-                        let total: f64 = r.lines.iter().map(|l| l.1).sum();
-                        ui.label(RichText::new(format!("{} {}  ·  {} {:+.0}", tr_en("Net"), money(total), tr_en("reputation"), r.rep)).font(menu::semibold(14.0)).color(Color32::WHITE));
-                        if let Some(rt) = f.rating {
-                            flightui::note(ui, &format!("{} {}  ·  {:.0} ft/min", tr_en("Landing"), rt.grade(), rt.fpm.abs()));
-                        }
-                        if flightui::key(ui, tr_en("Close"), false, 90.0, 26.0).clicked() {
-                            close = true;
-                        }
-                    }
-                }
-            });
-        });
-        if abandon {
-            self.career.rep = (self.career.rep - 20.0).max(0.0);
-            self.career.active = None;
-            self.career.save();
-            self.career_flight = None;
-        } else if close {
-            self.career_flight = None;
+    /// whether a requirement is met, and how far along it is in words.
+    pub(crate) fn req_state(&self, r: Req) -> (bool, String) {
+        let best = &self.profile.best;
+        let hours = crate::profile::totals(&self.logbook.flights).air_s / 3600.0;
+        let lvl = crate::pilot::level(self.profile.xp).n;
+        let title = |id: &str| crate::missions::by_id(id).map_or(id.to_string(), |m| tr_en(m.title).to_string());
+        match r {
+            Req::Lesson(id) => (best.contains_key(id), format!("{} {}", tr_en("Lesson:"), title(id))),
+            Req::Exam(id) => (best.contains_key(id), format!("{} {}", tr_en("Checkride:"), title(id))),
+            Req::Mission(id) => (best.contains_key(id), format!("{} {}", tr_en("Mission:"), title(id))),
+            Req::Challenge(id, min) => {
+                let c = crate::challenge::by_id(id).map(|i| &crate::challenge::ALL[i]);
+                let top = self.challenge_records.top(id).unwrap_or(0);
+                (top >= min, format!("{} {} ({} {min})", tr_en("Landing challenge:"), c.map_or(id, |c| c.name()), tr_en("score")))
+            }
+            Req::Holds(l) => (self.career.has(l), tr_en(l.name()).to_string()),
+            Req::Hours(h) => (hours >= h, format!("{:.1} / {h:.0} {}", hours.min(h), tr_en("hours flown"))),
+            Req::Jobs(n) => (self.career.jobs_done >= n, format!("{} / {n} {}", self.career.jobs_done.min(n), tr_en("jobs done"))),
+            Req::Level(n) => (lvl >= n, format!("{} {n} ({} {lvl})", tr_en("Pilot level"), tr_en("now"))),
+            Req::Rep(v) => (self.career.rep >= v, format!("{:.0} / {v:.0} {}", self.career.rep.min(v), tr_en("reputation"))),
+            Req::Fee(v) => (self.career.money >= v, format!("{} {}", tr_en("Training fee"), money(v))),
         }
     }
 
-    /// the career screen: the pilot, the board, the licences, the hangar, the statement.
-    pub(crate) fn career_screen(&mut self, ctx: &egui::Context) {
-        let screen = ctx.content_rect();
-        let mut back = false;
-        let mut go: Option<Job> = None;
-        egui::Area::new(egui::Id::unique("career_bg")).order(egui::Order::Background).fixed_pos(screen.min).show(ctx, |ui| {
-            ui.painter().rect_filled(screen, 0.0, Color32::from_rgba_premultiplied(4, 6, 10, 215));
-        });
-        if !self.career.started {
-            self.career_start(ctx);
+    /// whether a licence can be had now.
+    pub(crate) fn can_get(&self, l: Lic) -> bool {
+        !self.career.has(l) && l.reqs().iter().all(|r| self.req_state(*r).0)
+    }
+
+    /// takes a licence: the fee paid, and the jobs it opens on the board.
+    pub(crate) fn get_licence(&mut self, l: Lic) {
+        if !self.can_get(l) {
             return;
         }
-        if self.career.board.is_empty() || self.career.board_for != self.career.base {
-            self.career.make_board();
-            self.career.save();
+        if l.fee() > 0.0 {
+            self.career.pay(format!("{} {}", tr_en(l.name()), tr_en("training")), -l.fee());
         }
-        let m = 32.0;
-        let w = (screen.width() - 2.0 * m).min(1280.0);
-        let x0 = screen.center().x - w * 0.5;
-        let best = self.profile.best.clone();
-        egui::Area::new(egui::Id::unique("career")).fixed_pos(pos2(x0, m)).show(ctx, |ui| {
-            ui.set_width(w);
-            ui.horizontal(|ui| {
-                ui.set_min_height(48.0);
-                if menu::choice(ui, &format!("‹   {}", tr_en("Menu")), false, 120.0).clicked() {
-                    back = true;
-                }
-                ui.add_space(18.0);
-                menu::screen_heading(ui, tr_en("Career"));
-                menu::at_right(ui, "career_who", |ui| {
-                    let base = Db::get().find(&self.career.base).map(|i| Db::get().apts[i as usize].name.clone()).unwrap_or_default();
-                    ui.label(RichText::new(format!("{}  ·  {} {}", self.career.name, self.career.base, base)).font(menu::label()).color(menu::DIM));
-                });
-            });
-            ui.add_space(14.0);
-            // the figures.
-            let (r, _) = ui.allocate_exact_size(vec2(w, 92.0), Sense::hover());
-            let p = ui.painter();
-            p.rect_filled(r, menu::R_PANEL, menu::PANEL);
-            p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, menu::LINE_HI), egui::StrokeKind::Inside);
-            p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, menu::ACCENT);
-            let lic = LICS.iter().rev().find(|l| self.career.has(**l) && matches!(l, Lic::Ppl | Lic::Cpl | Lic::Atpl)).map_or(tr_en("Student pilot"), |l| tr_en(l.name()));
-            let figs = [(money(self.career.money), tr_en("money")), (format!("{:.0}", self.career.rep), tr_en("reputation")), (format!("{:.1}", self.career.hours), tr_en("hours")), (self.career.jobs_done.to_string(), tr_en("jobs")), (lic.to_string(), tr_en("licence"))];
-            let step = (r.width() - 40.0) / figs.len() as f32;
-            for (k, (v, l)) in figs.iter().enumerate() {
-                let left = r.left() + 28.0 + step * k as f32;
-                let g = p.layout_no_wrap(v.clone(), menu::bold(if k == 4 { 20.0 } else { 30.0 }), Color32::WHITE);
-                p.galley(pos2(left, r.center().y - g.size().y * 0.5 - 8.0), g.clone(), Color32::WHITE);
-                p.text(pos2(left, r.center().y + g.size().y * 0.5 - 4.0), egui::Align2::LEFT_TOP, *l, menu::caption(), menu::DIM);
-            }
-            ui.add_space(14.0);
-            let rest = (screen.bottom() - ui.cursor().top() - m).max(240.0);
-            ui.horizontal_top(|ui| {
-                ui.spacing_mut().item_spacing.x = 16.0;
-                let left_w = (w * 0.6).floor();
-                ui.allocate_ui_with_layout(vec2(left_w, rest), egui::Layout::top_down(egui::Align::Min), |ui| {
-                    menu::panel().inner_margin(egui::Margin::symmetric(18, 14)).show(ui, |ui| {
-                        ui.set_width(left_w - 36.0);
-                        ui.set_min_height(rest - 28.0);
-                        egui::ScrollArea::vertical().id_salt("career_board").max_height(rest - 40.0).show(ui, |ui| {
-                            if let Some(j) = self.career.active.clone() {
-                                ui.label(menu::section_text(tr_en("YOUR JOB")));
-                                job_row(ui, &j, true);
-                                ui.horizontal(|ui| {
-                                    if menu::choice(ui, tr_en("Fly it"), true, 140.0).clicked() {
-                                        go = Some(j.clone());
-                                    }
-                                    if menu::choice(ui, tr_en("Give it up"), false, 140.0).clicked() {
-                                        self.career.active = None;
-                                        self.career.rep = (self.career.rep - 20.0).max(0.0);
-                                        self.career.save();
-                                    }
-                                });
-                                ui.add_space(12.0);
-                            }
-                            ui.horizontal(|ui| {
-                                ui.label(menu::section_text(tr_en("JOB BOARD")));
-                                menu::at_right(ui, "career_refresh", |ui| {
-                                    if menu::choice(ui, tr_en("New jobs"), false, 120.0).clicked() {
-                                        self.career.refresh += 1;
-                                        self.career.make_board();
-                                        self.career.save();
-                                    }
-                                });
-                            });
-                            if !self.career.has(Lic::Ppl) {
-                                ui.label(RichText::new(tr_en("A student flies the tutorials first: the private licence (right) opens these jobs.")).font(menu::caption()).color(menu::DIM));
-                            }
-                            let board = self.career.board.clone();
-                            for j in &board {
-                                let c = class_parse(&j.class);
-                                let ok = self.career.rated(c) && self.career.active.is_none();
-                                ui.horizontal(|ui| {
-                                    job_row(ui, j, false);
-                                    if menu::choice(ui, tr_en("Take"), false, 80.0).clicked() && ok {
-                                        self.career.active = Some(j.clone());
-                                        self.career.board.retain(|b| b.id != j.id);
-                                        self.career.save();
-                                    }
-                                });
-                            }
-                        });
-                    });
-                });
-                let right_w = w - left_w - 16.0;
-                ui.allocate_ui_with_layout(vec2(right_w, rest), egui::Layout::top_down(egui::Align::Min), |ui| {
-                    menu::panel().inner_margin(egui::Margin::symmetric(18, 14)).show(ui, |ui| {
-                        ui.set_width(right_w - 36.0);
-                        ui.set_min_height(rest - 28.0);
-                        egui::ScrollArea::vertical().id_salt("career_side").max_height(rest - 40.0).show(ui, |ui| {
-                            ui.label(menu::section_text(tr_en("LICENCES AND RATINGS")));
-                            let mut get: Option<Lic> = None;
-                            let mut train: Option<&'static str> = None;
-                            for l in LICS {
-                                let has = self.career.has(l);
-                                let can = self.career.can_get(l, &best);
-                                ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.set_width(right_w - 170.0);
-                                        ui.label(RichText::new(format!("{} {}", if has { "✓" } else { "○" }, tr_en(l.name()))).font(menu::label()).color(if has { menu::ACCENT } else { Color32::WHITE }));
-                                        if !has {
-                                            ui.label(RichText::new(tr_en(l.needs())).font(menu::caption()).color(menu::DIM));
-                                        }
-                                    });
-                                    if !has && can && menu::choice(ui, if l.fee() > 0.0 { tr_en("Train") } else { tr_en("Claim") }, true, 90.0).clicked() {
-                                        get = Some(l);
-                                    }
-                                    if !has && !can && matches!(l, Lic::Ppl | Lic::Ir) {
-                                        let next = ["t1", "t2", "t3", "t4", "t6"].into_iter().find(|t| !best.contains_key(*t) && (l == Lic::Ppl) == ["t1", "t2", "t3"].contains(t));
-                                        if let Some(t) = next {
-                                            if menu::choice(ui, tr_en("Lesson"), false, 90.0).clicked() {
-                                                train = Some(t);
-                                            }
-                                        }
-                                    }
-                                });
-                                ui.add_space(4.0);
-                            }
-                            if let Some(l) = get {
-                                self.career.get(l);
-                                self.career.board.clear();
-                                self.career.save();
-                            }
-                            if let Some(t) = train.and_then(crate::missions::by_id) {
-                                self.start_mission(t);
-                            }
-                            ui.add_space(10.0);
-                            ui.label(menu::section_text(tr_en("HANGAR")));
-                            let mut buy: Option<(&'static aircraft::Spec, f64)> = None;
-                            for s in aircraft::BUILTIN {
-                                let c = class_of(s);
-                                let Some(price) = c.price() else { continue };
-                                let own = self.career.owned.iter().any(|k| s.keys.contains(&k.as_str()));
-                                ui.horizontal(|ui| {
-                                    ui.vertical(|ui| {
-                                        ui.set_width(right_w - 170.0);
-                                        ui.label(RichText::new(s.name).font(menu::label()).color(Color32::WHITE));
-                                        let line = if own { tr_en("Owned: no rental to pay").to_string() } else { format!("{} {}  ·  {} {}/h", tr_en("buy"), money(price), tr_en("rent"), money(c.rent())) };
-                                        ui.label(RichText::new(line).font(menu::caption()).color(menu::DIM));
-                                    });
-                                    if !own && self.career.rated(c) && self.career.money >= price && menu::choice(ui, tr_en("Buy"), false, 90.0).clicked() {
-                                        buy = Some((s, price));
-                                    }
-                                });
-                            }
-                            if let Some((s, price)) = buy {
-                                self.career.pay(format!("{} {}", tr_en("Bought"), s.name), -price);
-                                self.career.owned.push(s.keys.first().copied().unwrap_or("").into());
-                                self.career.save();
-                            }
-                            ui.add_space(10.0);
-                            ui.label(menu::section_text(tr_en("STATEMENT")));
-                            for e in self.career.ledger.iter().rev().take(12) {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new(&e.what).font(menu::caption()).color(menu::DIM));
-                                    menu::at_right(ui, ("ledger", e.unix, e.what.as_str()), |ui| {
-                                        ui.label(RichText::new(money(e.amount)).font(menu::caption()).color(if e.amount < 0.0 { menu::BAD } else { Color32::WHITE }));
-                                    });
-                                });
-                            }
-                            ui.add_space(10.0);
-                            if menu::choice(ui, tr_en("Start a new career"), false, 220.0).clicked() {
-                                self.career = Career::default();
-                                self.career.save();
-                            }
-                        });
-                    });
-                });
-            });
-        });
-        if let Some(j) = go {
-            self.fly_job(j);
-        }
-        if back {
-            self.menu.screen = crate::menu::Screen::Main;
-            self.pad_home = true;
+        self.career.lics.push(l);
+        self.career.board.clear();
+        self.career.save();
+        self.award(&format!("{} {}", tr_en("Licence:"), tr_en(l.name())), 500);
+        match l {
+            Lic::Ppl => self.unlock("ppl"),
+            Lic::Cpl => self.unlock("cpl"),
+            Lic::Atpl => self.unlock("atpl"),
+            _ => {}
         }
     }
 
-    /// a new career: the pilot's name and a home airport.
-    fn career_start(&mut self, ctx: &egui::Context) {
-        let mut start = false;
-        let mut back = false;
-        egui::Area::new(egui::Id::unique("career_new")).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-            menu::panel().inner_margin(28.0).show(ui, |ui| {
-                ui.set_width(560.0);
-                menu::screen_heading(ui, tr_en("A new career"));
-                ui.add_space(8.0);
-                ui.add(egui::Label::new(RichText::new(tr_en("Start as a student pilot with $15,000. Fly the tutorials for your private licence, then take jobs from the board at whatever airport you are at: each pays by how it goes, less the fuel and the rental. Hours and reputation bring the commercial and airline licences; type ratings open the jets.")).font(menu::body()).color(menu::TEXT)).wrap());
-                ui.add_space(12.0);
-                menu::form_row(ui, tr_en("Pilot"), "", |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.career.name).desired_width(260.0).hint_text(tr_en("your name")).font(menu::label()));
-                });
-                menu::form_row(ui, tr_en("Home airport"), "", |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.career.base).desired_width(120.0).hint_text("KHAF").font(menu::label()));
-                    let db = Db::get();
-                    let found = db.find(&self.career.base).map(|i| db.apts[i as usize].name.clone());
-                    ui.label(RichText::new(found.unwrap_or_else(|| tr_en("unknown code").into())).font(menu::caption()).color(menu::DIM));
-                });
-                ui.add_space(14.0);
-                ui.horizontal(|ui| {
-                    if menu::choice(ui, tr_en("Begin"), true, 160.0).clicked() {
-                        start = true;
-                    }
-                    if menu::choice(ui, tr_en("Back"), false, 120.0).clicked() {
-                        back = true;
-                    }
-                });
-            });
-        });
-        if start {
-            let db = Db::get();
-            if let Some(i) = db.find(&self.career.base) {
-                self.career.base = db.apts[i as usize].ident.clone();
-                if self.career.name.trim().is_empty() {
-                    self.career.name = if self.profile.name.is_empty() { "Pilot".into() } else { self.profile.name.clone() };
+    /// the next thing worth doing, for the career's home page: a heading, a line, and what it is.
+    pub(crate) fn next_step(&self) -> (String, String, Next) {
+        if let Some(j) = &self.career.active {
+            return (tr_en("Fly your job").into(), format!("{}  ·  {} → {}", tr_en(j.kind.name()), j.from, j.to), Next::Job);
+        }
+        if !self.career.has(Lic::Ppl) {
+            for r in Lic::Ppl.reqs() {
+                let (ok, what) = self.req_state(*r);
+                if !ok {
+                    let next = match r {
+                        Req::Lesson(id) | Req::Exam(id) => Next::Mission(id),
+                        _ => Next::Training,
+                    };
+                    return (tr_en("Earn your private pilot licence").into(), what, next);
                 }
-                self.career.started = true;
-                let base = self.career.base.clone();
-                self.career.pay(format!("{} {base}", tr_en("Started at")), 0.0);
-                self.career.make_board();
-                self.career.save();
             }
+            return (tr_en("Your private pilot licence is ready").into(), tr_en("Every requirement is met: take it on the Training page.").into(), Next::Training);
         }
-        if back {
-            self.menu.screen = crate::menu::Screen::Main;
+        if let Some(l) = LICS.iter().copied().find(|l| self.can_get(*l)) {
+            return (format!("{} {}", tr_en("Ready:"), tr_en(l.name())), tr_en(l.opens()).into(), Next::Training);
         }
+        let n = self.career.board.iter().filter(|j| self.career.can_take(j).is_ok()).count();
+        (tr_en("Take a job").into(), format!("{n} {} {}", tr_en("jobs open to you at"), self.career.base), Next::Jobs)
     }
 }
 
-/// one job on the board.
-fn job_row(ui: &mut egui::Ui, j: &Job, active: bool) {
-    ui.vertical(|ui| {
-        ui.set_width((ui.available_width() - 100.0).max(200.0));
-        let db = Db::get();
-        let dest = db.find(&j.to).map(|i| db.apts[i as usize].name.clone()).unwrap_or_default();
-        let title = match j.kind {
-            Kind::Photo | Kind::Display => format!("{}  ·  {} {}", tr_en(j.kind.name()), tr_en("from and back to"), j.from),
-            _ => format!("{}  ·  {} → {} {dest}", tr_en(j.kind.name()), j.from, j.to),
-        };
-        ui.label(RichText::new(title).font(menu::label()).color(if active { menu::ACCENT } else { Color32::WHITE }));
-        let load = if j.pax > 0 { format!("{} {}", j.pax, tr_en("passengers")) } else if j.payload_kg > 0.0 { format!("{:.0} kg", j.payload_kg) } else { tr_en("empty").into() };
-        let class = match j.class.as_str() { "BizJet" => "Gulfstream G650", "Airliner" => "Boeing 747", "Sst" => "Concorde", "Fighter" => "Fighter", "Recon" => "SR-71", _ => "Light aircraft" };
-        ui.label(RichText::new(format!("{:.0} nm  ·  {load}  ·  {}  ·  {}  ·  {} {}", j.dist_nm, tr_en(class), money(j.pay), tr_en("within"), profile::hhmm(j.limit_s))).font(menu::caption()).color(menu::DIM));
-    });
+/// where the next step leads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Next {
+    Job,
+    Jobs,
+    Training,
+    Mission(&'static str),
 }
 
 #[cfg(test)]
@@ -935,14 +1334,63 @@ mod tests {
 
     #[test]
     fn a_board_has_jobs_in_reach_and_money_reads_well() {
+        aircraft::register_variants();
         let mut c = Career { started: true, base: "KHAF".into(), lics: vec![Lic::Ppl], ..Default::default() };
         c.make_board();
         assert!(!c.board.is_empty());
         for j in &c.board {
-            assert!(j.pay > 0.0 && j.dist_nm > 0.0, "{j:?}");
+            assert!(j.pay > 0.0 && j.dist_nm > 0.0 && j.limit_s > 0.0, "{j:?}");
+            assert!((1..=3).contains(&j.tier));
         }
+        // a private pilot may take the ferry, tour and photo work, not the commercial work.
+        assert!(c.board.iter().any(|j| j.kind == Kind::Ferry && j.tier == 1 && c.can_take(j).is_ok()));
+        assert!(c.board.iter().filter(|j| j.kind == Kind::Passengers).all(|j| c.can_take(j).is_err()));
         assert_eq!(money(1_234_567.4), "$1,234,567");
         assert_eq!(money(-50.0), "-$50");
-        assert!(!c.can_get(Lic::Ir, &Default::default()));
+        assert_eq!(money_short(2_500_000.0), "$2.5M");
+    }
+
+    #[test]
+    fn reputation_tiers_and_stars() {
+        assert_eq!(tier(0.0).0, 0);
+        assert_eq!(tier(150.0).0, 1);
+        assert_eq!(tier(5000.0), (4, 1.0));
+        assert!((tier(300.0).1 - 0.5).abs() < 1e-6);
+        assert_eq!(stars_of(95.0), 5);
+        assert_eq!(stars_of(70.0), 3);
+        assert_eq!(stars_of(10.0), 1);
+        assert_eq!(mark(1.5, 1.6, 2.6), 100);
+        assert_eq!(mark(2.6, 1.6, 2.6), 0);
+    }
+
+    #[test]
+    fn every_licence_asks_for_real_things() {
+        for l in LICS {
+            for r in l.reqs() {
+                match r {
+                    Req::Lesson(id) | Req::Exam(id) | Req::Mission(id) => assert!(crate::missions::by_id(id).is_some(), "{l:?}: {id}"),
+                    Req::Challenge(id, _) => assert!(crate::challenge::by_id(id).is_some(), "{l:?}: {id}"),
+                    _ => {}
+                }
+            }
+        }
+        // each kind of work has an aircraft that can fly it.
+        aircraft::register_variants();
+        for k in KINDS {
+            assert!(k.classes().iter().any(|c| career_types().iter().any(|s| class_of(s) == *c)), "{k:?}");
+        }
+    }
+
+    #[test]
+    fn hired_pilots_earn_while_away() {
+        aircraft::register_variants();
+        let mut c = Career { owned: vec!["c172".into()], ..Default::default() };
+        c.hires.push(Hire { name: "A".into(), skill: 3, plane: Some("c172".into()), hired: 0, earned: 0.0 });
+        c.accrued = profile::now_unix() - 10 * 3600;
+        let m0 = c.money;
+        c.accrue();
+        assert!(c.money > m0, "{} {}", c.money, m0);
+        assert!(c.free_planes().is_empty());
+        assert_eq!(c.candidates().len(), 3);
     }
 }

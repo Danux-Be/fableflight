@@ -159,6 +159,8 @@ pub enum Screen {
     Logbook,
     /// the career (career.rs).
     Career,
+    /// tutorials, checkrides, landing challenges and missions (activities.rs).
+    Activities,
 }
 
 impl Screen {
@@ -169,8 +171,9 @@ impl Screen {
             "fly" | "globe" | "start" => Screen::Fly,
             "aircraft" | "hangar" | "planes" => Screen::Aircraft,
             "settings" | "options" => Screen::Settings,
-            "logbook" | "profile" | "log" => Screen::Logbook,
+            "logbook" | "profile" | "log" | "pilot" => Screen::Logbook,
             "career" | "jobs" => Screen::Career,
+            "activities" | "challenges" | "tutorials" => Screen::Activities,
             _ => return None,
         })
     }
@@ -895,6 +898,7 @@ impl Page {
         match s.as_str() {
             "pause" | "menu" => return Some(Page::Game),
             "airports" | "places" => return Some(Page::Places),
+            "activities" | "tutorials" => return Some(Page::Missions),
             _ => {}
         }
         Page::INFO.into_iter().chain(Page::PAUSE).find(|p| p.name().to_lowercase().starts_with(&s))

@@ -14,6 +14,10 @@ mod aircraft;
 mod cockpit;
 mod copilot;
 mod career;
+mod career_ui;
+mod activities;
+mod pilot;
+mod widgets;
 mod cars;
 mod crash;
 mod damage;
@@ -438,6 +442,8 @@ struct Args {
     hangar: Option<(hangar_ui::Tab, Option<String>)>,
     /// the start menu's screen to open on (`--menu-screen`)
     menu_screen: Option<menu::Screen>,
+    /// the tab of that screen (`--menu-screen career:jobs`), for screenshots.
+    menu_tab: Option<String>,
     /// a start position was given (--lat, --lon, --place): the globe opens on it
     pos_set: bool,
     /// start at an airport (ICAO or IATA code), on a runway or on approach
@@ -566,6 +572,7 @@ fn parse_args_from(v: &[String]) -> Result<Args, String> {
         settings: None,
         hangar: None,
         menu_screen: None,
+        menu_tab: None,
         pos_set: false,
         airport: None,
         runway: None,
@@ -664,7 +671,9 @@ fn parse_args_from(v: &[String]) -> Result<Args, String> {
             "--menu-screen" => {
                 // the start menu's screen: main (the default), fly (the globe), aircraft, settings
                 let s = req(flag, i)?;
-                a.menu_screen = Some(menu::Screen::parse(s).ok_or_else(|| format!("{flag}: expected main, fly, aircraft or settings, got '{s}'"))?);
+                let (s, tab) = s.split_once(':').map_or((s, None), |(a, b)| (a, Some(b.to_string())));
+                a.menu_screen = Some(menu::Screen::parse(s).ok_or_else(|| format!("{flag}: expected main, fly, aircraft, settings, logbook, career or activities, got '{s}'"))?);
+                a.menu_tab = tab;
                 a.menu.get_or_insert(true);
             }
             "--no-menu" => {
@@ -1371,7 +1380,10 @@ struct Game {
     prefs_simbrief: String,
     /// the pilot's logbook, and the flight being logged (profile.rs).
     profile: profile::Profile,
-    flight_log: Option<profile::Tracker>,
+    /// experience, levels and achievements shown at the top (pilot.rs), and the tabs of the pilot and activities pages.
+    toasts: Vec<(pilot::Toast, f64)>,
+    pilot_tab: usize,
+    activity_tab: usize,
     /// arcade mode (settings.rs): the fun features on
     arcade: bool,
     goto_open: bool,
@@ -1956,7 +1968,7 @@ impl Game {
             minimap: minimap::Minimap::new(&prefs),
             cam_yaw: cy.to_radians(), cam_pitch: cp, cam_dist: cd, cam_mode: args.start_view.unwrap_or(prefs.cam_mode), view_before_tail: 0, cam_pos, cam_dir: -plane.forward(), cam_look: plane.pos, orbit: 0.0, cam_rise: 0.0, cam_clear_t: 0.0, cam_ang: None, cam_hold: 0.0,
             utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, shown_at: 0, dyn_k: 1.0, dyn_ms: 0.0, dyn_seen: 0, dyn_skip: 0, dyn_t: 0.0, gfx_eff: gfx, dynq: dynamic::Dynamic::default(), storms_seen: false, dyn_cli: args.dynamic.is_some(), prev_plane: Mat4::IDENTITY, plane_box, lamps,
-            frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, planner: Default::default(), ap_bar_on: false, ap_alt_seen: (0.0, 0.0), ils_auto: None, prefs_simbrief: prefs.simbrief.clone(), profile: profile::Profile::load(), flight_log: None, arcade: args.arcade || prefs.arcade, goto_open: false, goto_text: String::new(), goto_rx: None,
+            frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, planner: Default::default(), ap_bar_on: false, ap_alt_seen: (0.0, 0.0), ils_auto: None, prefs_simbrief: prefs.simbrief.clone(), profile: profile::Profile::load(), toasts: Vec::new(), pilot_tab: 0, activity_tab: 0, arcade: args.arcade || prefs.arcade, goto_open: false, goto_text: String::new(), goto_rx: None,
             status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, pad_y: false, pad_y_combo: false, pad_held: Vec::new(), pad_note: (String::new(), 0.0), pad_aim: false, pad_live: None, ap: autopilot::Autopilot::default(), ap_off_t: -100.0, ap_script: args.ap_script.clone(), cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
             record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, snow: args.snow.unwrap_or(prefs.snow), info_open: args.weather_panel, radial: Default::default(), info_page: if args.weather_panel { menu::Page::Weather } else { menu::Page::Flight }, pause_open: false, pause_page: menu::Page::Game, flight: None, logbook: flightlog::Logbook::load(), challenge: None, challenge_records: challenge::Records::load(), pending_challenge: args.challenge.as_deref().and_then(challenge::by_id), logbook_saves: !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench"), pause_at: args.pause_menu, radial_at: args.flight_menu, settings_sec: args.settings.unwrap_or(settings_ui::Section::General), settings_find: String::new(), look_sens: prefs.look_sens, invert_look_cockpit: prefs.invert_look_cockpit, invert_look_outside_x: prefs.invert_look_outside_x, invert_look_outside_y: prefs.invert_look_outside_y, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
@@ -2020,6 +2032,29 @@ impl Game {
             mcp_throttle: None,
             throttle_axis: None,
         };
+        g.migrate_logbook();
+        if let Some(t) = args.menu_tab.as_deref().map(str::to_lowercase) {
+            let t = t.as_str();
+            g.career.view.tab = match t {
+                "jobs" | "board" => career::Tab::Jobs,
+                "training" => career::Tab::Training,
+                "fleet" => career::Tab::Fleet,
+                "company" => career::Tab::Company,
+                "finances" => career::Tab::Finances,
+                _ => career::Tab::Home,
+            };
+            g.pilot_tab = match t {
+                "logbook" | "log" => 1,
+                "achievements" | "badges" => 2,
+                _ => 0,
+            };
+            g.activity_tab = match t {
+                "challenges" => 1,
+                "checkrides" | "exams" => 2,
+                "missions" => 3,
+                _ => 0,
+            };
+        }
         if args.mcp {
             match mcp::rpc::serve(args.mcp_port) {
                 Ok(rx) => g.mcp_calls = Some(rx),
@@ -2444,7 +2479,6 @@ impl Game {
 
     fn respawn_at(&mut self, lat: f64, lon: f64, alt: f64, heading: f64, speed: f64) {
         self.end_flight(false);
-        self.log_close(false);
         self.rec.clear();
         self.replay = None;
         self.ground = Default::default();
@@ -3833,65 +3867,6 @@ impl Game {
         self.menu.payload.map(|f| f * most).unwrap_or(usual)
     }
 
-    /// The pause menu's logbook: the totals, the hours on each aircraft, and
-    /// the flights, newest first.
-    fn logbook_page(&mut self, ui: &mut egui::Ui) {
-        use egui::RichText;
-        use flightlog::{hours_text, Outcome};
-        use menu::{ACCENT, DIM, TEXT};
-        let book = &self.logbook;
-        let t = book.totals();
-        let stat = |ui: &mut egui::Ui, value: String, what: &str| {
-            ui.vertical(|ui| {
-                ui.label(RichText::new(value).font(menu::item_title()).color(TEXT));
-                ui.label(RichText::new(what).font(menu::caption()).color(DIM));
-            });
-        };
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 28.0;
-            stat(ui, t.flights.to_string(), t!("log.flights"));
-            stat(ui, hours_text(t.hours * 3600.0), t!("log.hours_in_the_air"));
-            stat(ui, t.landings.to_string(), t!("log.landings"));
-            stat(ui, t.best.map_or("–".into(), |b| format!("{b}/100")), t!("log.best_landing"));
-        });
-        ui.add_space(10.0);
-        if t.flights == 0 {
-            ui.label(RichText::new(t!("log.empty")).font(menu::body()).color(DIM));
-        } else {
-            menu::heading(ui, t!("log.by_aircraft"));
-            for (name, h) in book.hours_by_aircraft().into_iter().take(6) {
-                ui.label(RichText::new(format!("{}  {}", hours_text(h * 3600.0), i18n::tr_en_owned(&name))).font(menu::data()).color(TEXT));
-            }
-            ui.add_space(8.0);
-            menu::heading(ui, t!("log.flights"));
-            egui::Grid::new("logbook").striped(true).spacing([16.0, 6.0]).show(ui, |ui| {
-                for h in [t!("log.date"), t!("log.aircraft"), t!("log.route"), t!("log.time"), t!("log.landings"), t!("log.best"), t!("log.outcome")] {
-                    ui.label(RichText::new(h).font(menu::caption()).color(DIM));
-                }
-                ui.end_row();
-                for f in book.flights.iter().rev().take(300) {
-                    let place = |p: &Option<String>| p.clone().unwrap_or_else(|| "—".into());
-                    ui.label(RichText::new(flightlog::date_text(f.date)).font(menu::data()).color(DIM));
-                    ui.label(RichText::new(i18n::tr_en_owned(&f.aircraft)).color(TEXT));
-                    ui.label(RichText::new(format!("{} → {}", place(&f.from), place(&f.to))).font(menu::data()).color(TEXT));
-                    ui.label(RichText::new(hours_text(f.air_time)).font(menu::data()).color(TEXT));
-                    ui.label(RichText::new(f.landings.len().to_string()).font(menu::data()).color(TEXT));
-                    match f.best_landing() {
-                        Some(l) => ui.label(RichText::new(format!("{} {}", l.grade.text(), l.score)).color(TEXT)).on_hover_text(l.summary()),
-                        None => ui.label(RichText::new("—").color(DIM)),
-                    };
-                    let (text, color) = match f.outcome {
-                        Outcome::Landed => (t!("log.landed"), TEXT),
-                        Outcome::Crashed => (t!("log.crashed"), ACCENT),
-                        Outcome::Unfinished => (t!("log.unfinished"), DIM),
-                    };
-                    ui.label(RichText::new(text).color(color));
-                    ui.end_row();
-                }
-            });
-        }
-    }
-
     /// The pause menu's failures: each one by hand, or one now and then at random.
     fn failures_page(&mut self, ui: &mut egui::Ui) {
         use egui::RichText;
@@ -4110,49 +4085,19 @@ impl Game {
         }
     }
 
-    /// logs the flight being flown: starts it, counts its time, notes landings.
-    fn log_step(&mut self, dt: f64) {
-        // scripted runs (shots, recordings, checks) are not flights.
-        static SCRIPTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *SCRIPTED.get_or_init(|| std::env::args().any(|a| matches!(a.as_str(), "--headless" | "--shot" | "--record" | "--fly-check"))) || self.spec.rocket().is_some() {
+    /// flights kept in profile.json by older versions move to the flight log, once.
+    fn migrate_logbook(&mut self) {
+        let old = self.profile.take_legacy();
+        if old.is_empty() {
             return;
         }
-        let (la, lo, h) = geo::pos_to_lla(self.plane.pos);
-        let at = (la.to_degrees(), lo.to_degrees());
-        let t = self.flight_log.get_or_insert_with(|| profile::Tracker::start(self.spec.name, &Self::place_code(at.0, at.1)));
-        match t.step(dt, self.plane.on_ground, at, h * 3.28084) {
-            profile::Event::Landed => t.entry.to = Self::place_code(at.0, at.1),
-            profile::Event::TookOff | profile::Event::None => {}
-        }
-        if t.save_due() && t.worth_logging() {
-            let e = t.entry.clone();
-            self.profile.record(e);
+        log::info!("logbook: {} older flights moved to the flight log", old.len());
+        self.logbook.flights.splice(0..0, old);
+        self.logbook.flights.sort_by_key(|f| f.date);
+        if self.logbook_saves {
+            self.logbook.save();
             self.profile.save();
         }
-    }
-
-    /// ends the flight in the logbook, if it was one.
-    fn log_close(&mut self, crashed: bool) {
-        let Some(t) = self.flight_log.take() else { return };
-        if !t.worth_logging() {
-            // an open copy saved earlier goes too.
-            if self.profile.log.last().is_some_and(|l| l.open && l.unix == t.entry.unix) {
-                self.profile.log.pop();
-                self.profile.save();
-            }
-            return;
-        }
-        let mut e = t.entry;
-        e.open = false;
-        e.crashed = crashed;
-        if e.to.is_empty() {
-            // never landed: where it ended.
-            let (la, lo, _) = geo::pos_to_lla(self.plane.pos);
-            e.to = if crashed { t!("profile.crashed").to_string() } else { Self::place_code(la.to_degrees(), lo.to_degrees()) };
-        }
-        log::info!("logbook: {} {} to {}, {:.1} h", e.aircraft, e.from, e.to, e.air_s / 3600.0);
-        self.profile.record(e);
-        self.profile.save();
     }
 
     /// sequences the plan and feeds gps.
@@ -5201,7 +5146,7 @@ impl Game {
             Screen::Fly if self.planner.open => self.planner.open = false,
             Screen::Fly => self.menu.screen = Screen::Main,
             Screen::Settings => self.menu.screen = self.menu.set_back,
-            Screen::Logbook | Screen::Career => self.menu.screen = Screen::Main,
+            Screen::Logbook | Screen::Career | Screen::Activities => self.menu.screen = Screen::Main,
         }
         self.pad_home = true;
         self.egui_ctx.memory_mut(|m| {
@@ -5234,7 +5179,6 @@ impl Game {
     /// Back to the globe, looking at where we were.
     fn to_globe(&mut self) {
         self.end_flight(false);
-        self.log_close(false);
         self.end_mission();
         self.career_flight = None;
         self.set_pause_menu(false);
@@ -5258,6 +5202,11 @@ impl Game {
     fn flight_event(&mut self, ev: flightlog::Event) {
         if let flightlog::Event::Landed(l) = &ev {
             self.challenge_landed(l);
+            self.career_landed(l);
+            self.pilot_landed(l);
+        }
+        if let flightlog::Event::TakeOff { .. } = &ev {
+            self.pilot_takeoff();
         }
         if let flightlog::Event::Landed(l) = ev {
             let place = match (&l.airport, &l.on_runway) {
@@ -5304,13 +5253,21 @@ impl Game {
         let Some(a) = self.challenge.as_mut().filter(|a| a.briefed && a.result.is_none()) else { return };
         let c = &challenge::ALL[a.idx];
         let mut r = challenge::judge(c, l);
+        let mut xp = 0;
         if r.fail.is_none() {
+            let first = self.challenge_records.top(c.id).is_none();
             r.best = self.challenge_records.add(c.id, challenge::Record { score: r.score, date: flightlog::now_unix(), aircraft: self.spec.name.into() });
             if self.logbook_saves {
                 self.challenge_records.save();
             }
+            xp = r.score as u64 * 3 + if first { 250 } else if r.best { 100 } else { 0 };
         }
+        let name = c.name();
         a.result = Some(r);
+        if xp > 0 {
+            self.award(&format!("{}: {name}", tr_en("Challenge")), xp);
+            self.sweep_badges();
+        }
     }
 
     /// How the challenge went, over the view: the score, why it failed, the
@@ -5326,22 +5283,30 @@ impl Game {
         let mut list = false;
         let y = if self.hud_on() { flightui::HEADING_TOP + flightui::HEADING_H + 34.0 } else { 40.0 };
         egui::Area::new(egui::Id::unique("challenge_card")).order(egui::Order::Foreground).anchor(Align2::CENTER_TOP, [0.0, y]).show(ctx, |ui| {
-            menu::panel().inner_margin(22.0).show(ui, |ui| {
-                ui.set_width(440.0);
-                ui.label(RichText::new(c.name()).font(menu::caption()).color(DIM));
+            menu::panel().inner_margin(24.0).show(ui, |ui| {
+                ui.set_width(460.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(t!("challenge.challenges").to_uppercase()).font(menu::semibold(12.5)).color(ACCENT));
+                    ui.label(RichText::new(c.name()).font(menu::caption()).color(DIM));
+                });
                 match r.fail {
                     None => {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(t!("challenge.passed")).font(menu::page_title()).color(Color32::WHITE));
-                            ui.label(RichText::new(format!("{}/100", r.score)).font(menu::page_title()).color(ACCENT));
+                            ui.label(RichText::new(r.score.to_string()).font(menu::bold(52.0)).color(ACCENT));
+                            ui.vertical(|ui| {
+                                ui.add_space(8.0);
+                                ui.label(RichText::new(t!("challenge.passed")).font(menu::bold(24.0)).color(Color32::WHITE));
+                                if r.best {
+                                    widgets::chip_ui(ui, &t!("challenge.new_best").to_uppercase(), ACCENT);
+                                } else {
+                                    ui.label(RichText::new("/ 100").font(menu::label()).color(DIM));
+                                }
+                            });
                         });
-                        if r.best {
-                            ui.label(RichText::new(t!("challenge.new_best")).font(menu::label()).color(ACCENT));
-                        }
                     }
                     Some(f) => {
-                        ui.label(RichText::new(t!("challenge.failed")).font(menu::page_title()).color(Color32::WHITE));
-                        ui.label(RichText::new(f.text()).font(menu::label()).color(ACCENT));
+                        ui.label(RichText::new(t!("challenge.failed")).font(menu::bold(30.0)).color(menu::BAD));
+                        ui.label(RichText::new(f.text()).font(menu::label()).color(TEXT));
                     }
                 }
                 ui.add_space(6.0);
@@ -5357,13 +5322,14 @@ impl Game {
                 }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    if ui.button(RichText::new(t!("challenge.try_again")).font(menu::label())).clicked() {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if widgets::action(ui, t!("challenge.try_again"), true, true, 150.0, 38.0).clicked() {
                         *act = Some(PauseAct::Challenge(idx));
                     }
-                    if ui.button(RichText::new(t!("challenge.challenges")).font(menu::label())).clicked() {
+                    if widgets::action(ui, t!("challenge.challenges"), false, true, 170.0, 38.0).clicked() {
                         list = true;
                     }
-                    if ui.button(RichText::new(t!("challenge.fly_on")).font(menu::label())).clicked() {
+                    if widgets::action(ui, t!("challenge.fly_on"), false, true, 110.0, 38.0).clicked() {
                         close = true;
                     }
                 });
@@ -5375,37 +5341,8 @@ impl Game {
         if list {
             self.leave_challenge();
             self.set_pause_menu(true);
-            self.pause_page = menu::Page::Challenges;
-        }
-    }
-
-    /// The pause menu's challenges, each with its place, aircraft, conditions and best score.
-    fn challenges_page(&mut self, ui: &mut egui::Ui, act: &mut Option<PauseAct>) {
-        use egui::RichText;
-        use menu::{ACCENT, DIM, TEXT};
-        ui.label(RichText::new(t!("challenge.intro")).font(menu::caption()).color(DIM));
-        ui.add_space(8.0);
-        for (i, c) in challenge::ALL.iter().enumerate() {
-            menu::panel().inner_margin(12.0).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width((ui.available_width() - 150.0).max(200.0));
-                        ui.label(RichText::new(c.name()).font(menu::item_title()).color(TEXT));
-                        ui.add(egui::Label::new(RichText::new(c.about()).font(menu::caption()).color(TEXT)).wrap());
-                        let plane = aircraft::by_key(c.aircraft).map_or("", |s| s.name);
-                        ui.label(RichText::new(format!("{} {} · {} · {}", c.airport, c.runway, i18n::tr_en(plane), c.conditions())).font(menu::caption()).color(DIM));
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(RichText::new(t!("challenge.fly")).font(menu::label())).clicked() {
-                            *act = Some(PauseAct::Challenge(i));
-                        }
-                        let best = self.challenge_records.top(c.id).map_or("—".to_string(), |b| format!("{b}/100"));
-                        ui.label(RichText::new(best).font(menu::item_title()).color(if self.challenge_records.top(c.id).is_some() { ACCENT } else { DIM }));
-                    });
-                });
-            });
-            ui.add_space(6.0);
+            self.pause_page = menu::Page::Missions;
+            self.activity_tab = 1;
         }
     }
 
@@ -5417,6 +5354,7 @@ impl Game {
             }
         }
         if let Some(f) = self.flight.take().and_then(|t| t.finish(crashed)) {
+            self.pilot_flight_done(&f);
             self.logbook.add(f);
             if self.logbook_saves {
                 self.logbook.save();
@@ -6446,7 +6384,7 @@ impl Game {
         }
         if !in_menu && !self.crashed && dt > 0.0 && self.replay.is_none() {
             self.rec.push(self.time, &self.plane);
-            self.log_step(dt);
+            self.pilot_tick();
             self.atc_step(dt);
             self.ice_notes();
         }
@@ -6697,7 +6635,6 @@ impl Game {
                     }
                     self.crash = Some(crash);
                     self.crashed = true;
-                    self.log_close(true);
                     self.end_flight(true);
                     self.crash_real = self.real;
                     self.orbit = 0.0;
@@ -7790,6 +7727,7 @@ impl Game {
         let out = self.egui_ctx.clone().run_ui(raw, |root| {
             let ctx = &root.ctx().clone();
             self.pad_pass(ctx);
+            self.toasts_ui(ctx);
             // The main menu, the aircraft and the settings screens each take
             // the whole window; the rest of this draws the globe's.
             match self.menu.screen {
@@ -7818,6 +7756,11 @@ impl Game {
                 }
                 menu::Screen::Career => {
                     self.career_screen(ctx);
+                    padui::focus_ring(ctx, menu::ACCENT);
+                    return;
+                }
+                menu::Screen::Activities => {
+                    self.activities_screen(ctx);
                     padui::focus_ring(ctx, menu::ACCENT);
                     return;
                 }
@@ -8593,7 +8536,11 @@ impl Game {
                 self.pad_home_focus(&resume);
             }
             ui.add_space(8.0);
-            for (p, text) in [(Page::Settings, t!("game.settings")), (Page::Missions, tr_en("Tutorials and challenges")), (Page::Flights, tr_en("Flights and replay")), (Page::Controls, t!("game.controls_reference")), (Page::Failures, t!("game.failures_2")), (Page::Logbook, t!("log.logbook")), (Page::Challenges, t!("challenge.challenges"))] {
+            if self.pause_page == Page::Challenges {
+                self.pause_page = Page::Missions;
+                self.activity_tab = 1;
+            }
+            for (p, text) in [(Page::Settings, t!("game.settings")), (Page::Missions, tr_en("Activities")), (Page::Logbook, t!("log.logbook")), (Page::Flights, tr_en("Flights and replay")), (Page::Controls, t!("game.controls_reference")), (Page::Failures, t!("game.failures_2"))] {
                 let b = menu::big_button(ui, text, Hint::None, false, page == p);
                 if b.clicked() {
                     self.pause_page = if page == p && p != Page::Settings { Page::Game } else { p };
@@ -8645,7 +8592,7 @@ impl Game {
                 menu::panel().inner_margin(24.0).show(ui, |ui| {
                     ui.set_width(w - 48.0);
                     ui.set_max_height(h - 48.0);
-                    let title = match self.pause_page { Page::Controls => t!("game.controls_reference"), Page::Flights => tr_en("Flights and replay"), Page::Missions => tr_en("Tutorials and challenges"), Page::Logbook => t!("log.logbook"), Page::Challenges => t!("challenge.challenges"), _ => t!("game.failures_2") };
+                    let title = match self.pause_page { Page::Controls => t!("game.controls_reference"), Page::Flights => tr_en("Flights and replay"), Page::Missions => tr_en("Activities"), Page::Logbook => t!("log.logbook"), _ => t!("game.failures_2") };
                     ui.label(RichText::new(title).font(menu::page_title()).color(Color32::WHITE));
                     ui.add_space(10.0);
                     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
@@ -8654,7 +8601,8 @@ impl Game {
                                 *act = Some(PauseAct::Resume);
                             }
                         } else if self.pause_page == Page::Missions {
-                            if self.missions_page(ui) {
+                            if let Some(p) = self.activities_page(ui) {
+                                self.fly_pick(p);
                                 *act = Some(PauseAct::Resume);
                             }
                         } else if self.pause_page == Page::Controls {
@@ -8663,9 +8611,7 @@ impl Game {
                             }
                             menu::controls_list(ui);
                         } else if self.pause_page == Page::Logbook {
-                            self.logbook_page(ui);
-                        } else if self.pause_page == Page::Challenges {
-                            self.challenges_page(ui, act);
+                            self.logbook_compact(ui);
                         } else {
                             self.failures_page(ui);
                         }
@@ -9050,6 +8996,7 @@ impl Game {
         let out = self.egui_ctx.clone().run_ui(raw, |root| {
             let ctx = &root.ctx().clone();
             self.pad_pass(ctx);
+            self.toasts_ui(ctx);
             use egui::{Align2, Color32, FontId, RichText};
             let pad = padui::active();
             let white = Color32::from_rgba_unmultiplied(255, 255, 255, 235);
@@ -9095,7 +9042,7 @@ impl Game {
             }
             if self.mission.is_some() && self.loading.is_none() {
                 self.mission_card(ctx);
-            } else if self.career_flight.is_some() && self.loading.is_none() {
+            } else if self.career_flight.is_some() && self.loading.is_none() && !self.pause_open {
                 self.job_card(ctx);
             }
             // a ring on each aircraft in range, tags on the nearest that do not overlap.
@@ -9794,7 +9741,6 @@ impl App {
         g.frame();
         if g.quit {
             crashlog::exit(g.quit_why);
-            g.log_close(false);
             g.end_flight(false);
             g.keep_settings(true);
             if !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench") { g.src.google.save(); }
@@ -9993,9 +9939,7 @@ fn our_roll_rate(spec: &'static aircraft::Spec) -> Option<f64> {
 fn fly_check(key: Option<&String>) -> i32 {
     hangar::load_installed();
     custom::load_all();
-    aircraft::register(aircraft::c172::floats::spec());
-    aircraft::register(aircraft::ask21::spec());
-    aircraft::register(aircraft::r44::spec());
+    aircraft::register_variants();
     let Some(spec) = key.and_then(|k| aircraft::by_key(k)) else {
         eprintln!("--fly-check KEY: one of {}", aircraft::list().iter().map(|s| s.keys[0]).collect::<Vec<_>>().join(", "));
         return 1;
@@ -10148,9 +10092,7 @@ fn main() -> anyhow::Result<()> {
     // Downloaded JSBSim aircraft join the list before `--aircraft` is read.
     hangar::load_installed();
     custom::load_all();
-    aircraft::register(aircraft::c172::floats::spec());
-    aircraft::register(aircraft::ask21::spec());
-    aircraft::register(aircraft::r44::spec());
+    aircraft::register_variants();
     let args = parse_args();
     if args.find_storms {
         let cache = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".")).join("fablegame");

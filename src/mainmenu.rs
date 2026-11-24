@@ -26,10 +26,12 @@ enum Tile {
     Again,
     /// the settings' Multiplayer section
     Multiplayer,
-    /// the pilot's logbook.
+    /// the pilot's profile and logbook.
     Logbook,
     /// the career.
     Career,
+    /// tutorials, checkrides, challenges and missions.
+    Activities,
 }
 
 impl Game {
@@ -53,9 +55,9 @@ impl Game {
             let (fw, fh, sw, sh) = (600.0, 450.0, 300.0, 400.0);
             let total = fw + 2.0 * sw + 2.0 * gap;
             let top = 104.0;
-            let k = ((screen.width() - 48.0) / total).min((screen.height() - top - 84.0) / fh).min(1.05).max(0.45);
+            let k = ((screen.width() - 48.0) / total).min((screen.height() - top - 190.0) / fh).min(1.05).max(0.45);
             let (fw, fh, sw, sh, gap) = (fw * k, fh * k, sw * k, sh * k, gap * k);
-            let cy = top + (screen.height() - top - 60.0) * 0.5;
+            let cy = top + (screen.height() - top - 190.0) * 0.5 + 10.0;
             let x0 = screen.center().x - (fw + 2.0 * sw + 2.0 * gap) * 0.5;
             // the tiles rise in as the menu opens.
             let lift = |r: Rect, i: usize| r.translate(vec2(0.0, 26.0 * (1.0 - rise(i))));
@@ -69,7 +71,19 @@ impl Game {
             let mpb = lift(Rect::from_min_size(pos2(set.left(), set.bottom() + gap), vec2(sw, bar_h)), 3);
             let mut pw = p.clone();
             pw.set_opacity(rise(0));
-            wordmark(&pw, pos2(x0, fly.top() - 26.0 * k.max(0.7)), x0 + fw + 2.0 * sw + 2.0 * gap, k);
+            // the pilot, at the right end of the wordmark's line.
+            let right = x0 + fw + 2.0 * sw + 2.0 * gap;
+            let base = fly.top() - 26.0 * k.max(0.7);
+            let chip = Rect::from_min_max(pos2(right - 290.0, base - 58.0), pos2(right, base + 4.0));
+            wordmark(&pw, pos2(x0, base), chip.left() - 20.0, k);
+            let r = ui.interact(chip, ui.scope_id().with("tile_pilot"), Sense::click());
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr_en("Pilot")));
+            let lvl = crate::pilot::level(self.profile.xp);
+            let name = if self.profile.name.trim().is_empty() { tr_en("Pilot").to_string() } else { self.profile.name.clone() };
+            pilot_chip(&pw, chip, &r, &name, lvl);
+            if r.clicked() {
+                press = Some(Tile::Logbook);
+            }
 
             // Tab and the d-pad go left to right: Aircraft, FLY, Settings.
             let r = ui.interact(air, ui.scope_id().with("tile_air"), Sense::click());
@@ -107,23 +121,30 @@ impl Game {
                 press = Some(Tile::Multiplayer);
             }
 
-            let r = ui.interact(lbb, ui.scope_id().with("tile_log"), Sense::click());
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t!("profile.logbook")));
+            let r = ui.interact(lbb, ui.scope_id().with("tile_acts"), Sense::click());
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr_en("Activities")));
             let mut pl = p.clone();
             pl.set_opacity(rise(3));
-            logbook_bar(&pl, lbb, &r, &self.logbook_short());
+            let all = crate::missions::ALL.len() + crate::challenge::ALL.len();
+            let flown = crate::missions::ALL.iter().filter(|m| self.profile.best.contains_key(m.id)).count() + crate::challenge::ALL.iter().filter(|c| self.challenge_records.top(c.id).is_some()).count();
+            activities_bar(&pl, lbb, &r, &format!("{flown} / {all} {}", tr_en("flown")));
             if r.clicked() {
-                press = Some(Tile::Logbook);
+                press = Some(Tile::Activities);
             }
 
             // under fly: the career, then the last start, one press away.
-            let cb = Rect::from_min_size(pos2(fly.left(), fly.bottom() + 14.0 * k), vec2(fly.width(), 46.0));
+            let cb = Rect::from_min_size(pos2(fly.left(), fly.bottom() + 14.0 * k), vec2(fly.width(), 68.0));
             let r = ui.interact(cb, ui.scope_id().with("tile_career"), Sense::click());
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr_en("Career")));
             let mut pc = p.clone();
             pc.set_opacity(rise(3));
-            let status = if self.career.started { format!("{}  ·  {} {:.0}", crate::career::money(self.career.money), tr_en("reputation"), self.career.rep) } else { tr_en("Start as a student pilot").to_string() };
-            career_bar(&pc, cb, &r, &status);
+            let (line, right) = if self.career.started {
+                let (head, _, _) = self.next_step();
+                (head, format!("{}  ·  {}", crate::career::money_short(self.career.money), tr_en(self.career.title())))
+            } else {
+                (tr_en("From student pilot to airline captain and company owner").to_string(), tr_en("New career").to_string())
+            };
+            career_bar(&pc, cb, &r, &line, &right);
             if r.clicked() {
                 press = Some(Tile::Career);
             }
@@ -170,6 +191,7 @@ impl Game {
             Some(Tile::Multiplayer) => self.open_settings(settings_ui::Section::Multiplayer, Screen::Main),
             Some(Tile::Logbook) => self.menu.screen = Screen::Logbook,
             Some(Tile::Career) => self.menu.screen = Screen::Career,
+            Some(Tile::Activities) => self.menu.screen = Screen::Activities,
             Some(Tile::Again) => {
                 // over the globe, which shows it preparing.
                 self.restore_last_start();
@@ -244,37 +266,57 @@ fn mp_bar(p: &Painter, r: Rect, resp: &egui::Response, status: &str, col: Color3
     p.circle_filled(pos2(x - 10.0, r.center().y), 3.5, col);
 }
 
-/// the logbook: a slim bar under the aircraft tile, a book and the hours flown.
-fn logbook_bar(p: &Painter, r: Rect, resp: &egui::Response, hours: &str) {
+/// activities: a slim bar under the aircraft tile, a flag and how many are flown.
+fn activities_bar(p: &Painter, r: Rect, resp: &egui::Response, count: &str) {
     let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
     p.rect_filled(r, menu::R_WIDGET, menu::mix(Color32::from_rgba_premultiplied(12, 16, 22, 226), Color32::from_rgba_premultiplied(26, 32, 42, 238), lit));
     p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, menu::mix(Color32::from_white_alpha(26), ACCENT, lit)), egui::StrokeKind::Inside);
     let ic = menu::mix(TEXT, ACCENT, lit);
-    // an open book.
-    let c = pos2(r.left() + 24.0, r.center().y);
+    // a flag on a pole.
+    let c = pos2(r.left() + 22.0, r.center().y);
     let st = Stroke::new(1.6, ic);
-    p.line(vec![c + vec2(0.0, -6.0), c + vec2(-8.0, -8.0), c + vec2(-8.0, 6.0), c + vec2(0.0, 8.0), c + vec2(8.0, 6.0), c + vec2(8.0, -8.0), c + vec2(0.0, -6.0), c + vec2(0.0, 8.0)], st);
-    p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, t!("profile.logbook"), menu::label(), menu::mix(TEXT, Color32::WHITE, lit));
-    let g = p.layout_no_wrap(hours.to_string(), menu::caption(), DIM);
+    p.line_segment([c + vec2(-5.0, -9.0), c + vec2(-5.0, 9.0)], st);
+    p.line(vec![c + vec2(-5.0, -8.0), c + vec2(7.0, -5.0), c + vec2(-5.0, -1.0)], st);
+    p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, tr_en("Activities"), menu::label(), menu::mix(TEXT, Color32::WHITE, lit));
+    let g = p.layout_no_wrap(count.to_string(), menu::caption(), DIM);
     p.galley(pos2(r.right() - 14.0 - g.size().x, r.center().y - g.size().y * 0.5), g, DIM);
 }
 
-/// the career bar under fly: wings, the word, the money and reputation.
-fn career_bar(p: &Painter, r: Rect, resp: &egui::Response, status: &str) {
+/// the career card under fly: wings, the word, the next step, the money and licence.
+fn career_bar(p: &Painter, r: Rect, resp: &egui::Response, line: &str, right: &str) {
     let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
-    p.rect_filled(r, menu::R_WIDGET, menu::mix(Color32::from_rgba_premultiplied(12, 16, 22, 226), Color32::from_rgba_premultiplied(26, 32, 42, 238), lit));
-    p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, menu::mix(Color32::from_white_alpha(26), ACCENT, lit)), egui::StrokeKind::Inside);
-    let ic = menu::mix(TEXT, ACCENT, lit);
+    p.rect_filled(r, menu::R_PANEL, menu::mix(Color32::from_rgba_premultiplied(18, 17, 10, 230), Color32::from_rgba_premultiplied(34, 31, 14, 240), lit));
+    p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0 + lit, menu::mix(ACCENT.gamma_multiply(0.35), ACCENT, lit)), egui::StrokeKind::Inside);
+    p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, ACCENT);
+    let ic = menu::mix(ACCENT.gamma_multiply(0.85), ACCENT, lit);
     // pilot's wings.
-    let c = pos2(r.left() + 26.0, r.center().y);
-    let st = Stroke::new(1.6, ic);
-    p.circle_stroke(c, 4.0, st);
+    let c = pos2(r.left() + 34.0, r.center().y);
+    let st = Stroke::new(1.8, ic);
+    p.circle_filled(c, 5.5, ic);
     for sx in [-1.0f32, 1.0] {
-        p.line(vec![c + vec2(sx * 5.0, 0.0), c + vec2(sx * 16.0, -5.0), c + vec2(sx * 13.0, 1.0), c + vec2(sx * 5.0, 3.0)], st);
+        p.line(vec![c + vec2(sx * 7.0, -1.0), c + vec2(sx * 21.0, -7.0), c + vec2(sx * 17.0, -1.0), c + vec2(sx * 21.0, 1.0), c + vec2(sx * 15.0, 4.0), c + vec2(sx * 7.0, 3.0)], st);
     }
-    p.text(pos2(r.left() + 50.0, r.center().y), Align2::LEFT_CENTER, tr_en("Career"), menu::label(), menu::mix(TEXT, Color32::WHITE, lit));
-    let g = p.layout_no_wrap(status.to_string(), menu::caption(), DIM);
-    p.galley(pos2(r.right() - 14.0 - g.size().x, r.center().y - g.size().y * 0.5), g, DIM);
+    spaced(p, pos2(r.left() + 66.0, r.center().y - 2.0), Align2::LEFT_BOTTOM, "CAREER", menu::bold(22.0), menu::mix(TEXT, Color32::WHITE, lit), 2.0);
+    let rg = p.layout_no_wrap(right.to_string(), menu::semibold(14.0), ACCENT);
+    let lg = menu::one_line(p, line, menu::label(), menu::mix(DIM, TEXT, lit), r.width() - 66.0 - rg.size().x - 40.0);
+    p.galley(pos2(r.left() + 66.0, r.center().y + 2.0), lg, DIM);
+    p.galley(pos2(r.right() - 18.0 - rg.size().x, r.center().y - rg.size().y * 0.5), rg, ACCENT);
+}
+
+/// the pilot in the top right: the avatar in its level ring, the name, the rank and level.
+fn pilot_chip(p: &Painter, r: Rect, resp: &egui::Response, name: &str, lvl: crate::pilot::Level) {
+    let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
+    if lit > 0.0 {
+        p.rect_filled(r, menu::R_PANEL, Color32::from_white_alpha((10.0 * lit) as u8));
+    }
+    let c = pos2(r.right() - 34.0, r.center().y);
+    crate::widgets::avatar(p, c, 22.0, name, lvl.frac());
+    let x = c.x - 40.0;
+    let g = menu::one_line(p, name, menu::semibold(18.0), Color32::WHITE, 190.0);
+    p.galley(pos2(x - g.size().x, r.center().y - 22.0), g, Color32::WHITE);
+    p.text(pos2(x, r.center().y + 4.0), Align2::RIGHT_CENTER, format!("{} {}  ·  {}", tr_en("Level"), lvl.n, tr_en(crate::pilot::rank(lvl.n))), menu::caption(), menu::mix(DIM, ACCENT, lit));
+    let bar = Rect::from_min_size(pos2(x - 150.0, r.center().y + 16.0), vec2(150.0, 4.0));
+    crate::widgets::meter(p, bar, lvl.frac(), ACCENT);
 }
 
 /// the wordmark at `at`, a hairline running on to `right`.

@@ -30,14 +30,23 @@ pub struct Challenge {
 }
 
 /// From the gentlest to the hardest.
-pub const ALL: [Challenge; 8] = [
+pub const ALL: [Challenge; 17] = [
     Challenge { id: "first", airport: "EBAW", runway: "29", aircraft: "c172", hour: 14.0, wind_kt: 4.0, wind_rel: 10.0, gusts: 0.0, clouds: 0.2, haze: 1.0, rain: 0.0 },
     Challenge { id: "crosswind", airport: "EBBR", runway: "25R", aircraft: "c172", hour: 11.0, wind_kt: 14.0, wind_rel: 80.0, gusts: 0.3, clouds: 0.4, haze: 1.0, rain: 0.0 },
     Challenge { id: "night", airport: "EBAW", runway: "29", aircraft: "dr400", hour: 22.5, wind_kt: 6.0, wind_rel: -20.0, gusts: 0.1, clouds: 0.3, haze: 1.2, rain: 0.0 },
+    Challenge { id: "telluride", airport: "KTEX", runway: "09", aircraft: "c172", hour: 10.0, wind_kt: 8.0, wind_rel: 30.0, gusts: 0.2, clouds: 0.1, haze: 1.0, rain: 0.0 },
+    Challenge { id: "stbarth", airport: "TFFJ", runway: "10", aircraft: "c172", hour: 15.0, wind_kt: 12.0, wind_rel: -15.0, gusts: 0.3, clouds: 0.3, haze: 1.0, rain: 0.0 },
     Challenge { id: "mountain", airport: "LOWI", runway: "26", aircraft: "c172", hour: 12.0, wind_kt: 10.0, wind_rel: 15.0, gusts: 0.4, clouds: 0.3, haze: 1.0, rain: 0.0 },
+    Challenge { id: "courchevel", airport: "LFLJ", runway: "22", aircraft: "dr400", hour: 11.0, wind_kt: 4.0, wind_rel: 0.0, gusts: 0.0, clouds: 0.1, haze: 1.0, rain: 0.0 },
     Challenge { id: "rain", airport: "EHAM", runway: "27", aircraft: "g650", hour: 17.0, wind_kt: 16.0, wind_rel: -35.0, gusts: 0.5, clouds: 0.9, haze: 4.0, rain: 0.7 },
+    Challenge { id: "london_city", airport: "EGLC", runway: "27", aircraft: "g650", hour: 19.0, wind_kt: 10.0, wind_rel: -20.0, gusts: 0.2, clouds: 0.9, haze: 2.0, rain: 0.3 },
     Challenge { id: "short", airport: "TNCS", runway: "12", aircraft: "dr400", hour: 10.0, wind_kt: 12.0, wind_rel: -30.0, gusts: 0.3, clouds: 0.3, haze: 1.0, rain: 0.0 },
+    Challenge { id: "lukla", airport: "VNLK", runway: "06", aircraft: "dr400", hour: 8.0, wind_kt: 6.0, wind_rel: 20.0, gusts: 0.2, clouds: 0.3, haze: 1.0, rain: 0.0 },
     Challenge { id: "jumbo", airport: "KSFO", runway: "28L", aircraft: "747", hour: 16.0, wind_kt: 14.0, wind_rel: 10.0, gusts: 0.2, clouds: 0.2, haze: 1.5, rain: 0.0 },
+    Challenge { id: "maho", airport: "TNCM", runway: "10", aircraft: "747", hour: 13.0, wind_kt: 12.0, wind_rel: -10.0, gusts: 0.2, clouds: 0.3, haze: 1.0, rain: 0.0 },
+    Challenge { id: "gibraltar", airport: "LXGB", runway: "27", aircraft: "g650", hour: 12.0, wind_kt: 20.0, wind_rel: 25.0, gusts: 0.6, clouds: 0.5, haze: 1.0, rain: 0.0 },
+    Challenge { id: "madeira", airport: "LPMA", runway: "05", aircraft: "g650", hour: 17.0, wind_kt: 18.0, wind_rel: 40.0, gusts: 0.6, clouds: 0.5, haze: 1.0, rain: 0.0 },
+    Challenge { id: "queenstown", airport: "NZQN", runway: "23", aircraft: "g650", hour: 15.0, wind_kt: 10.0, wind_rel: 15.0, gusts: 0.4, clouds: 0.3, haze: 1.0, rain: 0.0 },
     Challenge { id: "paro", airport: "VQPR", runway: "15", aircraft: "g650", hour: 9.0, wind_kt: 12.0, wind_rel: 40.0, gusts: 0.5, clouds: 0.4, haze: 1.0, rain: 0.0 },
 ];
 
@@ -233,8 +242,9 @@ mod tests {
             let (i, h) = c.runway().unwrap_or_else(|| panic!("{}: {} {}", c.id, c.airport, c.runway));
             let want = airports::ident_heading(c.runway).unwrap() as f64;
             let off = ((h - want + 540.0).rem_euclid(360.0) - 180.0).abs();
-            // (runway numbers are magnetic: San Francisco's 28L heads 298° true)
-            assert!(off < 25.0, "{}: runway {} heads {h:.0}", c.id, c.runway);
+            // (runway numbers are magnetic: San Francisco's 28L heads 298° true,
+            // and Queenstown's 23 heads 257° with the 24° east variation there)
+            assert!(off < 30.0, "{}: runway {} heads {h:.0}", c.id, c.runway);
             assert_eq!(airports::Db::get().apts[i as usize].ident, c.airport);
             assert!(crate::aircraft::by_key(c.aircraft).is_some(), "{}: {}", c.id, c.aircraft);
             assert!(by_id(c.id).is_some());

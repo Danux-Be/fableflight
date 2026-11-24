@@ -120,6 +120,16 @@ pub fn list() -> Vec<&'static Spec> {
     BUILTIN.iter().copied().chain(EXTRA.read().iter().copied()).collect()
 }
 
+/// the built-in types made from another one: the floatplane, the glider and the helicopter.
+pub fn register_variants() {
+    if by_key("r44").is_some() {
+        return;
+    }
+    register(c172::floats::spec());
+    register(ask21::spec());
+    register(r44::spec());
+}
+
 /// Adds a type (leaked: types live for the whole run), or replaces the one
 /// answering to the same first key.
 pub fn register(spec: Spec) -> &'static Spec {
