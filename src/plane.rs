@@ -2258,6 +2258,36 @@ impl Plane {
                     let pen_n = pen * nrm.dot(upw).max(0.1);
                     let pv = self.vel + self.rot * self.omega.cross(r);
                     let vn = pv.dot(nrm);
+                    // a float on water: buoyant by how deep it sits, the hump of
+                    // the bow wave to get over before it planes on its step, the
+                    // keel against sliding sideways, the water rudders steering.
+                    if water && spec.floats {
+                        if vn < -(leg.fold_vn + 3.0) {
+                            self.lose_gear(gi, "HARD WATER LANDING");
+                            continue;
+                        }
+                        self.on_ground = true;
+                        touching[gi] = true;
+                        self.compress[gi] = pen_n.min(leg.travel);
+                        let nf = (pen_n * leg.k - vn * leg.c).clamp(0.0, leg.nf_max);
+                        let mut fwd = (self.forward() - nrm * self.forward().dot(nrm)).normalize_or_zero();
+                        if leg.steer != 0.0 && pv.length() < 12.0 {
+                            fwd = DQuat::from_axis_angle(nrm, -self.steer_angle() * leg.steer) * fwd;
+                        }
+                        let side = fwd.cross(nrm);
+                        let (vl, vs) = (pv.dot(fwd), pv.dot(side));
+                        let hump = 1.0 + 6.0 * (-((vl.abs() - 8.0) / 4.5).powi(2)).exp();
+                        let f_long = -vl * 55.0 * hump - vl * vl.abs() * 2.5;
+                        let f_side = (-vs * leg.side_k).clamp(-leg.side_mu * nf.max(500.0), leg.side_mu * nf.max(500.0));
+                        let f = nrm * nf + side * f_side + fwd * f_long * (nf / (mass * 9.81 * 0.25)).clamp(0.2, 2.0);
+                        force_w += f;
+                        torque_b += r.cross(self.rot.inverse() * f);
+                        self.wheel_spin[gi] = 0.0;
+                        if pv.length() > 4.0 && self.splashes.len() < 64 {
+                            self.splashes.push((p, pv * 0.5 + nrm * (1.0 + pv.length() * 0.08)));
+                        }
+                        continue;
+                    }
                     // Wheels do nothing in water or against a wall, and a leg driven
                     // in far too hard just goes: the airframe takes the rest.
                     if water || (building.is_some() && pen > 1.0) || pen_n > leg.travel * 4.0 + 0.8 {
@@ -2291,7 +2321,8 @@ impl Plane {
                     let f_side = (-vs * leg.side_k).clamp(-leg.side_mu * nf, leg.side_mu * nf);
                     let brake = if leg.brakes { self.brake_pressure(c, leg.at.x) } else { 0.0 };
                     let mu = leg.roll_mu + (leg.brake_mu - leg.roll_mu) * brake;
-                    let drag = leg.roll_k + (leg.brake_k - leg.roll_k) * brake;
+                    // (a float on land does not roll: it slides, with the keel's friction)
+                    let drag = if spec.floats { leg.roll_k.max(3000.0) } else { leg.roll_k + (leg.brake_k - leg.roll_k) * brake };
                     let f_long = (-vl * drag).clamp(-mu * nf, mu * nf);
                     let f = nrm * nf + side * f_side + fwd * f_long;
                     force_w += f;

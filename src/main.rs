@@ -9599,6 +9599,7 @@ fn our_roll_rate(spec: &'static aircraft::Spec) -> Option<f64> {
 fn fly_check(key: Option<&String>) -> i32 {
     hangar::load_installed();
     custom::load_all();
+    aircraft::register(aircraft::c172::floats::spec());
     let Some(spec) = key.and_then(|k| aircraft::by_key(k)) else {
         eprintln!("--fly-check KEY: one of {}", aircraft::list().iter().map(|s| s.keys[0]).collect::<Vec<_>>().join(", "));
         return 1;
@@ -9751,6 +9752,7 @@ fn main() -> anyhow::Result<()> {
     // Downloaded JSBSim aircraft join the list before `--aircraft` is read.
     hangar::load_installed();
     custom::load_all();
+    aircraft::register(aircraft::c172::floats::spec());
     let args = parse_args();
     if args.find_storms {
         let cache = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".")).join("fablegame");

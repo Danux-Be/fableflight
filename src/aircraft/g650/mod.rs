@@ -838,6 +838,7 @@ pub static SPEC: Spec = Spec {
     cam_dist: 38.0,
     shadow_r: 18.0,
     // (The 747's turbofans' voice for now.)
+    floats: false,
     sound: Sound::Jet,
 };
 

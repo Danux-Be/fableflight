@@ -663,6 +663,8 @@ pub struct Spec {
     /// chase camera distance and the size of its own fine shadow map (m)
     pub cam_dist: f64,
     pub shadow_r: f32,
+    /// floats instead of wheels: its legs are pontoons that ride on water and slide on land
+    pub floats: bool,
     pub sound: Sound,
 }
 
