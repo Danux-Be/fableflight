@@ -804,7 +804,7 @@ impl Game {
                     }
                 });
             } else {
-                tag(ui, tr_en("STATION"));
+                tag(ui, tr_en("Station"));
                 match &tuned {
                     Some(f) => {
                         ui.label(RichText::new(f.name()).font(menu::semibold(17.0)).color(Color32::WHITE));
@@ -830,7 +830,7 @@ impl Game {
         let mut asked: Option<Req> = None;
         if !reqs.is_empty() {
             wide_tile(ui, |ui| {
-                tag(ui, tr_en("CALL"));
+                tag(ui, tr_en("Call"));
                 for r in &reqs {
                     if key(ui, tr_en(r.label()), false, ui.available_width(), 26.0).clicked() {
                         asked = Some(*r);
@@ -841,7 +841,7 @@ impl Game {
         // what was said, the latest at the foot.
         if !self.atc.log.is_empty() {
             wide_tile(ui, |ui| {
-                tag(ui, tr_en("RADIO"));
+                tag(ui, tr_en("Radio"));
                 let n = self.atc.log.len();
                 for l in &self.atc.log[n.saturating_sub(8)..] {
                     let col = match l.who {
@@ -858,7 +858,7 @@ impl Game {
         if near.is_empty() {
             note(ui, tr_en("No stations in range."));
         } else {
-            tag(ui, tr_en("STATIONS IN RANGE"));
+            tag(ui, tr_en("Stations in range"));
             let mut last_apt = u32::MAX;
             for (f, d) in near.iter().take(16) {
                 let a = &Db::get().apts[f.apt as usize];

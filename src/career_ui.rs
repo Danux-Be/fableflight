@@ -342,7 +342,6 @@ impl Game {
         egui::Area::new(egui::Id::unique("career_new")).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             menu::panel().inner_margin(24.0).show(ui, |ui| {
                 ui.set_width(640.0);
-                ui.label(RichText::new(tr_en("CAREER")).font(menu::semibold(13.0)).color(ACCENT));
                 menu::screen_heading(ui, tr_en("From student to captain"));
                 ui.add_space(10.0);
                 ui.add(egui::Label::new(RichText::new(tr_en("Start with $15,000 at a home airport. Fly the lessons and pass a checkride for your private licence, then take jobs from the board wherever you are: each is marked on the landing, the timing, the comfort and the procedures, and paid by its stars. Reputation in each line of work opens better jobs; licences and type ratings open bigger aircraft. Buy your own, then hire pilots to fly them while you are away.")).font(menu::body()).color(TEXT)).wrap());
@@ -870,9 +869,9 @@ impl Game {
                 widgets::line(ui, tr_en("Rent"), &format!("{}/h", money(c.rent())), Color32::WHITE);
                 widgets::line(ui, tr_en("Price"), &price.map_or_else(|| tr_en("Not for sale").to_string(), money), if price.is_some() { ACCENT } else { DIM });
                 ui.add_space(6.0);
-                if let Some(pr) = price {
-                    let can = rated && self.career.money >= pr;
-                    if widgets::action(ui, tr_en("Buy"), true, can, ui.available_width(), 32.0).on_hover_text(if rated { tr_en("No rental to pay, and it can earn for your company.") } else { tr_en("Needs the rating first.") }).clicked() {
+                // a buy button only when it can be bought: rated, and the money there.
+                if let Some(pr) = price.filter(|pr| rated && self.career.money >= *pr) {
+                    if widgets::action(ui, tr_en("Buy"), false, true, ui.available_width(), 32.0).on_hover_text(tr_en("No rental to pay, and it can earn for your company.")).clicked() {
                         act = Some(Act::Buy(key, pr));
                     }
                 }
@@ -887,6 +886,11 @@ impl Game {
         let lw = (w * 0.6).floor();
         let rw = w - lw - 16.0;
         let can_hire = self.career.has(Lic::Cpl) && !self.career.owned.is_empty();
+        // nothing to run yet: one line on what starts it, not a page of zeros.
+        if self.career.hires.is_empty() && !can_hire {
+            card(ui, 0.0, |ui| widgets::empty(ui, tr_en("Your company starts with a commercial pilot licence and an aircraft of your own.")));
+            return None;
+        }
         let hourly: f64 = self.career.hires.iter().map(|hh| hh.plane.as_ref().and_then(|k| aircraft::by_key(k)).map_or(0.0, |s| class_of(s).hourly() * 0.33 * (0.75 + 0.1 * hh.skill as f64)) - career::wage(hh.skill) * 0.33).sum();
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing = vec2(16.0, 14.0);
@@ -956,8 +960,6 @@ impl Game {
                             });
                         });
                     }
-                    ui.add_space(6.0);
-                    menu::hint(ui, tr_en("New candidates come with each new set of jobs."));
                 });
             });
         });
@@ -971,9 +973,10 @@ impl Game {
         let spent: f64 = self.career.ledger.iter().filter(|e| e.amount < 0.0).map(|e| -e.amount).sum();
         widgets::figures(ui, &[(money(self.career.money), tr_en("Balance")), (money(income), tr_en("Income")), (money(spent), tr_en("Spending")), (self.career.jobs_done.to_string(), tr_en("Jobs"))]);
         ui.add_space(14.0);
-        card(ui, h - 120.0, |ui| {
+        // the statement as tall as its lines, starting again a quiet link under it.
+        card(ui, 0.0, |ui| {
             widgets::title(ui, tr_en("STATEMENT"));
-            egui::ScrollArea::vertical().id_salt("career_ledger").max_height(h - 230.0).auto_shrink([false, false]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt("career_ledger").max_height(h - 230.0).auto_shrink([false, true]).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 for (k, e) in self.career.ledger.iter().rev().enumerate() {
                     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
@@ -987,11 +990,11 @@ impl Game {
                     p.text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, money(e.amount), menu::semibold(14.5), if e.amount < 0.0 { BAD } else if e.amount > 0.0 { OK } else { DIM });
                 }
             });
-            ui.add_space(10.0);
-            if widgets::action(ui, tr_en("Start a new career"), false, true, 220.0, 32.0).on_hover_text(tr_en("Money, licences, aircraft and reputation start again. Your pilot level and logbook stay.")).clicked() {
-                act = Some(Act::NewCareer);
-            }
         });
+        ui.add_space(8.0);
+        if flightui::text_link(ui, tr_en("Start a new career")).on_hover_text(tr_en("Money, licences, aircraft and reputation start again. Your pilot level and logbook stay.")).clicked() {
+            act = Some(Act::NewCareer);
+        }
         act
     }
 
@@ -1019,10 +1022,7 @@ impl Game {
         egui::Area::new(egui::Id::unique("brief")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             menu::panel().inner_margin(24.0).show(ui, |ui| {
                 ui.set_width(760.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(tr_en("BRIEFING")).font(menu::semibold(13.0)).color(ACCENT));
-                    chip_ui(ui, &tr_en(j.kind.name()).to_uppercase(), j.kind.colour());
-                });
+                chip_ui(ui, &tr_en(j.kind.name()).to_uppercase(), j.kind.colour());
                 ui.add(egui::Label::new(RichText::new(job_title(&j)).font(menu::bold(28.0)).color(Color32::WHITE)).wrap());
                 ui.label(RichText::new(format!("{}  ·  {}", j.client, tr_en(j.kind.blurb()))).font(menu::label()).color(DIM));
                 ui.add_space(14.0);
@@ -1233,10 +1233,7 @@ fn debrief_window(ctx: &egui::Context, d: &Debrief, in_flight: bool) -> bool {
     egui::Area::new(egui::Id::unique("debrief")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         menu::panel().inner_margin(24.0).show(ui, |ui| {
             ui.set_width(720.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(tr_en("DEBRIEF")).font(menu::semibold(13.0)).color(ACCENT));
-                chip_ui(ui, &tr_en(d.kind.name()).to_uppercase(), d.kind.colour());
-            });
+            chip_ui(ui, &tr_en(d.kind.name()).to_uppercase(), d.kind.colour());
             ui.label(RichText::new(if d.ok { tr_en("Job complete") } else { tr_en("Job failed") }).font(menu::bold(34.0)).color(if d.ok { Color32::WHITE } else { BAD }));
             ui.label(RichText::new(&d.title).font(menu::label()).color(DIM));
             ui.add_space(10.0);

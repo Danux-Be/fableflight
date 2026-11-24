@@ -221,7 +221,7 @@ impl Game {
 
     /// the ground page of the flight panel: pushback, bridge or stairs, fuel and boarding.
     pub(crate) fn ground_page(&mut self, ui: &mut egui::Ui) {
-        use flightui::{cells, key, note, tag, wide_tile, SOFT};
+        use flightui::{cells, key, note, tag, wide_tile};
         let p = &self.plane;
         let stopped = p.on_ground && p.vel.length() < 0.5;
         if !p.on_ground {
@@ -240,7 +240,7 @@ impl Game {
         // a glider launches on a winch cable.
         if self.spec.fuel_kg <= 0.0 && self.spec.rotor.is_none() {
             wide_tile(ui, |ui| {
-                tag(ui, tr_en("WINCH LAUNCH"));
+                tag(ui, tr_en("Winch launch"));
                 note(ui, tr_en("The winch pulls you up to about 1,500 feet and lets go. Hold the nose up gently once airborne."));
                 if key(ui, if self.ground.winch.is_some() { tr_en("Launching") } else { tr_en("Take up slack, all out") }, self.ground.winch.is_some(), ui.available_width(), 26.0).clicked() && stopped && self.ground.winch.is_none() {
                     act = Some("winch");
@@ -248,7 +248,7 @@ impl Game {
             });
         }
         wide_tile(ui, |ui| {
-            tag(ui, tr_en("PUSHBACK"));
+            tag(ui, tr_en("Pushback"));
             match self.ground.push {
                 Some(push) => {
                     note(ui, &format!("{} {:.0} m", tr_en("Pushing back"), push.gone));
@@ -264,7 +264,6 @@ impl Game {
                     });
                 }
                 None => {
-                    note(ui, tr_en("The tug pushes the aircraft back off the stand; set the parking brake when it stops."));
                     if key(ui, tr_en("Request pushback"), false, ui.available_width(), 26.0).clicked() && stopped {
                         act = Some("push");
                     }
@@ -273,7 +272,7 @@ impl Game {
         });
         cells(ui, 2, 96.0, |ui, i| {
             if i == 0 {
-                tag(ui, if big { tr_en("JET BRIDGE") } else { tr_en("STAIRS") });
+                tag(ui, if big { tr_en("Jet bridge") } else { tr_en("Stairs") });
                 if big {
                     let state = if self.ground.bridge >= 1.0 { tr_en("At the door") } else if self.ground.bridge > 0.0 { tr_en("Moving") } else { tr_en("Parked") };
                     note(ui, state);
@@ -285,7 +284,7 @@ impl Game {
                     act = Some("stairs");
                 }
             } else {
-                tag(ui, tr_en("FUEL"));
+                tag(ui, tr_en("Fuel"));
                 let full = self.spec.fuel_kg.max(1.0);
                 note(ui, &format!("{:.0} kg  ·  {:.0} %", self.plane.fuel, self.plane.fuel / full * 100.0));
                 ui.horizontal(|ui| {
@@ -298,7 +297,7 @@ impl Game {
             }
         });
         wide_tile(ui, |ui| {
-            tag(ui, tr_en("BOARDING AND BAGGAGE"));
+            tag(ui, tr_en("Boarding and baggage"));
             note(ui, &format!("{} {:.0} kg  ·  {} {:.0} kg", tr_en("payload"), self.plane.payload, tr_en("most"), self.spec.payload[1]));
             ui.horizontal(|ui| {
                 if key(ui, tr_en("Board"), self.ground.board_to.is_some(), 120.0, 26.0).clicked() {
@@ -312,8 +311,9 @@ impl Game {
                 }
             });
         });
+        // (the buttons only act while it stands still: the one line that says why)
         if !stopped {
-            ui.label(egui::RichText::new(tr_en("Stop the aircraft for the services to come.")).font(crate::menu::caption()).color(SOFT));
+            note(ui, tr_en("Stop the aircraft for the services to come."));
         }
         let Some(a) = act else { return };
         match a {

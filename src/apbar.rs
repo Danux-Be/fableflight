@@ -1,19 +1,18 @@
-//! the autopilot's controls on screen: a strip at the bottom with
-//! the modes and four knobs, as on a mode control panel, and the same knobs
-//! on the autopilot page. each knob is two rings: the inner one turns in
-//! fine steps, the outer one in coarse steps; a press on the middle sets it
-//! to what the aircraft is doing.
+//! the autopilot's controls on screen, laid out as a mode control panel: a
+//! column for each thing it flies (the master, heading, the courses, altitude,
+//! vertical speed and speed). each column has its mode button, green while it
+//! flies, outlined while armed, and under it the value it aims for, set with
+//! minus and plus (held to repeat), the wheel (shift for big steps), or a
+//! click that takes what the aircraft is doing now. the same panel sits at the
+//! bottom of the screen and on the autopilot page.
 
 use crate::autopilot::{self, Lat, Vert};
-use crate::flightui::{self, key};
-use crate::menu;
-use crate::{t, Game};
-use egui::{pos2, vec2, Align2, Color32, Sense, Stroke};
+use crate::flightui;
+use crate::menu::{self, DIM, FAINT, OK, TEXT};
+use crate::{t, tr_en, Game};
+use egui::{pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 
-/// one detent of a knob, radians.
-const DETENT: f32 = 0.2618;
-
-/// what a knob did this frame.
+/// what a value window did this frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Turn {
     pub fine: i32,
@@ -27,63 +26,99 @@ impl Turn {
     }
 }
 
-/// a knob's state between frames: ring angles, turn left over, the ring held.
-#[derive(Clone, Copy, Default)]
-struct KnobState {
-    outer: f32,
-    inner: f32,
-    acc: f32,
-    wheel: f32,
-    ring: u8,
+/// what one value window sets: heading, altitude, vertical speed, speed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Dial {
+    Hdg,
+    Alt,
+    Vs,
+    Spd,
 }
 
-fn wrap(a: f32) -> f32 {
-    (a + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+/// a mode button's light.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lamp {
+    Off,
+    Armed,
+    On,
 }
 
-/// a two ring knob `d` across. clockwise, up and the wheel away all turn it up.
-pub fn knob(ui: &mut egui::Ui, d: f32) -> Turn {
-    let (rect, resp) = ui.allocate_exact_size(vec2(d, d), Sense::click_and_drag());
-    let c = rect.center();
-    let big = d * 0.5;
-    let small = big * 0.6;
-    let id = resp.id;
-    let mut st: KnobState = ui.data(|m| m.get_temp(id)).unwrap_or_default();
-    let mut out = Turn::default();
-    let pointer = ui.input(|i| i.pointer.hover_pos());
-    let near_inner = pointer.is_some_and(|p| (p - c).length() < small * 1.08);
-    let shift = ui.input(|i| i.modifiers.shift);
-    let mut steps = 0;
-    if resp.drag_started() {
-        st.ring = if near_inner { 1 } else { 2 };
-        st.acc = 0.0;
+/// the panel's sizes: a mode button and a value window.
+const KEY_H: f32 = 28.0;
+const VALUE_H: f32 = 32.0;
+const GAP: f32 = 8.0;
+
+/// a mode button `w` wide, green while it flies, outlined while armed.
+fn mode_key(ui: &mut egui::Ui, text: &str, lamp: Lamp, w: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(w, KEY_H), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, lamp == Lamp::On, text));
+    let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
+    let p = ui.painter();
+    let (fill, edge, col) = match lamp {
+        Lamp::On => (OK.gamma_multiply(0.16 + 0.06 * lit), OK, OK),
+        Lamp::Armed => (menu::mix(menu::RAISED, menu::RAISED_HI, lit), Color32::from_white_alpha(150), Color32::WHITE),
+        Lamp::Off => (menu::mix(menu::RAISED, menu::RAISED_HI, lit), menu::mix(menu::LINE_HI, Color32::from_white_alpha(60), lit), menu::mix(DIM, TEXT, lit)),
+    };
+    p.rect_filled(r, menu::R_WIDGET, fill);
+    p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+    p.text(r.center(), Align2::CENTER_CENTER, text, menu::semibold(13.5), col);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// a small minus or plus that steps once when pressed and repeats while held.
+fn stepper(ui: &mut egui::Ui, r: Rect, plus: bool) -> i32 {
+    let resp = ui.interact(r, ui.scope_id().with(("ap step", plus, r.min.x as i32)), Sense::click_and_drag());
+    let lit = menu::ease(ui.ctx(), resp.id, resp.hovered());
+    let p = ui.painter();
+    if lit > 0.0 {
+        p.rect_filled(r.shrink(2.0), menu::R_WIDGET, Color32::from_white_alpha((14.0 * lit) as u8));
     }
-    if resp.dragged() {
-        if let Some(p) = pointer {
-            let prev = p - resp.drag_delta();
-            let mut da = 0.0;
-            // round the middle, or up and down when close to it.
-            if (p - c).length() > big * 0.3 && (prev - c).length() > big * 0.3 {
-                da += wrap((p - c).angle() - (prev - c).angle());
-            }
-            da += -resp.drag_delta().y * 0.022;
-            st.acc += da;
-            while st.acc >= DETENT {
-                st.acc -= DETENT;
-                steps += 1;
-            }
-            while st.acc <= -DETENT {
-                st.acc += DETENT;
-                steps -= 1;
-            }
+    let c = r.center();
+    let st = Stroke::new(1.6, menu::mix(DIM, Color32::WHITE, lit));
+    p.line_segment([c - vec2(4.5, 0.0), c + vec2(4.5, 0.0)], st);
+    if plus {
+        p.line_segment([c - vec2(0.0, 4.5), c + vec2(0.0, 4.5)], st);
+    }
+    // a step on the press, then every 70 ms after 400 ms held.
+    let now = ui.input(|i| i.time);
+    let id = resp.id.with("held");
+    let down = resp.is_pointer_button_down_on();
+    let mut n = 0;
+    match (down, ui.data(|d| d.get_temp::<(f64, f64)>(id))) {
+        (true, None) => {
+            n = 1;
+            ui.data_mut(|d| d.insert_temp(id, (now, now)));
         }
+        (true, Some((since, last))) => {
+            if now - since > 0.4 && now - last > 0.07 {
+                n = 1;
+                ui.data_mut(|d| d.insert_temp(id, (since, now)));
+            }
+            ui.ctx().request_repaint();
+        }
+        (false, Some(_)) => ui.data_mut(|d| d.remove::<(f64, f64)>(id)),
+        (false, None) => {}
     }
-    let coarse_ring = |ring: u8| ring == 2 || shift;
-    if steps != 0 {
-        if coarse_ring(st.ring) { out.coarse += steps } else { out.fine += steps }
+    if plus { n } else { -n }
+}
+
+/// the value window: minus, the value and its unit, plus. the wheel over it
+/// turns it, a click takes the aircraft's own value.
+fn target(ui: &mut egui::Ui, value: &str, unit: &str, w: f32, live: bool) -> Turn {
+    let (r, resp) = ui.allocate_exact_size(vec2(w, VALUE_H), Sense::click());
+    let mut out = Turn::default();
+    let shift = ui.input(|i| i.modifiers.shift);
+    let p = ui.painter().clone();
+    p.rect_filled(r, menu::R_WIDGET, Color32::from_rgba_premultiplied(4, 6, 9, 200));
+    p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, Color32::from_white_alpha(18)), egui::StrokeKind::Inside);
+    let (minus, plus) = (Rect::from_min_size(r.min, vec2(24.0, VALUE_H)), Rect::from_min_size(pos2(r.right() - 24.0, r.top()), vec2(24.0, VALUE_H)));
+    let n = stepper(ui, minus, false) + stepper(ui, plus, true);
+    if n != 0 {
+        if shift { out.coarse += n } else { out.fine += n }
     }
-    if resp.hovered() {
-        // notches of the wheel this frame, from its own events.
+    let mid = Rect::from_min_max(pos2(minus.right(), r.top()), pos2(plus.left(), r.bottom()));
+    let over = resp.hovered() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|q| mid.contains(q));
+    if over {
         let wheel: f32 = ui.input(|i| {
             i.events.iter().filter_map(|e| match e {
                 egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
@@ -94,70 +129,47 @@ pub fn knob(ui: &mut egui::Ui, d: f32) -> Turn {
                 _ => None,
             }).sum()
         });
-        if wheel != 0.0 {
-            st.wheel += wheel;
+        let id = resp.id.with("wheel");
+        let acc = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(0.0) + wheel;
+        let k = acc.trunc() as i32;
+        ui.data_mut(|d| d.insert_temp(id, acc - k as f32));
+        if k != 0 {
+            if shift { out.coarse += k } else { out.fine += k }
         }
-        // the wheel turns this knob, not the page.
+        // the wheel turns the value, not the page.
         ui.ctx().input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
-        let n = st.wheel.trunc() as i32;
-        if n != 0 {
-            st.wheel -= n as f32;
-            if !near_inner || shift { out.coarse += n } else { out.fine += n }
-        }
-    } else {
-        st.wheel = 0.0;
+        p.rect_filled(mid.shrink(2.0), menu::R_WIDGET, Color32::from_white_alpha(8));
     }
-    if resp.clicked() && near_inner {
+    if resp.clicked() && over {
         out.push = true;
     }
-    if !resp.dragged() {
-        st.ring = 0;
+    // the value and its unit, centred together.
+    let col = if live { Color32::WHITE } else { TEXT };
+    let vg = p.layout_no_wrap(value.to_string(), menu::semibold(17.0), col);
+    let ug = p.layout_no_wrap(unit.to_string(), menu::caption(), DIM);
+    let total = vg.size().x + if unit.is_empty() { 0.0 } else { 3.0 + ug.size().x };
+    let x = mid.center().x - total * 0.5;
+    let base = mid.center().y + vg.size().y * 0.5;
+    p.galley(pos2(x, mid.center().y - vg.size().y * 0.5), vg, col);
+    if !unit.is_empty() {
+        p.galley(pos2(x + total - ug.size().x, base - ug.size().y - 1.0), ug, DIM);
     }
-    st.outer += out.coarse as f32 * DETENT;
-    st.inner += out.fine as f32 * DETENT;
-    ui.data_mut(|m| m.insert_temp(id, st));
-
-    // the knob: a shadow, a knurled outer ring, a lighter inner cap with its mark.
-    let p = ui.painter();
-    let lit = menu::ease(ui.ctx(), id, resp.hovered() || resp.dragged());
-    p.circle_filled(c + vec2(0.0, 1.5), big, Color32::from_black_alpha(120));
-    p.circle_filled(c, big, Color32::from_rgb(34, 38, 45));
-    let held_outer = resp.dragged() && st.ring == 2 || (resp.hovered() && !near_inner);
-    let held_inner = resp.dragged() && st.ring == 1 || (resp.hovered() && near_inner);
-    for k in 0..28 {
-        let a = st.outer + k as f32 * std::f32::consts::TAU / 28.0;
-        let dir = egui::Vec2::angled(a);
-        p.line_segment([c + dir * (big * 0.8), c + dir * (big * 0.97)], Stroke::new(1.4, Color32::from_gray(if held_outer { 120 } else { 78 })));
-    }
-    p.circle_stroke(c, big, Stroke::new(1.0, menu::mix(Color32::from_white_alpha(30), menu::ACCENT, if held_outer { lit } else { 0.0 })));
-    p.circle_filled(c, small, Color32::from_rgb(62, 68, 78));
-    for k in 0..18 {
-        let a = st.inner + k as f32 * std::f32::consts::TAU / 18.0;
-        let dir = egui::Vec2::angled(a);
-        p.line_segment([c + dir * (small * 0.78), c + dir * small], Stroke::new(1.2, Color32::from_gray(if held_inner { 150 } else { 104 })));
-    }
-    p.circle_stroke(c, small, Stroke::new(1.0, menu::mix(Color32::from_white_alpha(40), menu::ACCENT, if held_inner { lit } else { 0.0 })));
-    // the mark on the cap, pointing up at rest.
-    let m = egui::Vec2::angled(st.inner - std::f32::consts::FRAC_PI_2);
-    p.line_segment([c + m * (small * 0.25), c + m * (small * 0.7)], Stroke::new(2.0, Color32::WHITE));
-    let resp = resp.on_hover_text(t!("ap.knob_hint"));
-    if resp.hovered() || resp.dragged() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-    }
+    resp.on_hover_text(t!("ap.knob_hint"));
     out
 }
 
-/// what one knob sets: heading, altitude, vertical speed, speed.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Dial {
-    Hdg,
-    Alt,
-    Vs,
-    Spd,
+/// what the panel asked for this frame.
+#[derive(Default)]
+struct Asked {
+    toggle: bool,
+    at: bool,
+    lat: Option<Lat>,
+    vert: Option<Vert>,
+    turns: Vec<(Dial, Turn)>,
 }
 
 impl Game {
-    /// a knob turned: fine and coarse steps, or a push to the aircraft's own value.
+    /// a value window turned: fine and coarse steps, or a push to the aircraft's own value.
     pub(crate) fn ap_turn(&mut self, d: Dial, t: Turn) {
         let s = autopilot::State::of(&self.plane);
         let (f, c) = (t.fine as f64, t.coarse as f64);
@@ -180,129 +192,177 @@ impl Game {
         }
     }
 
-    /// the value a knob sets, as shown.
+    /// the value a window sets, as shown.
     pub(crate) fn dial_text(&self, d: Dial) -> (String, &'static str) {
         match d {
-            Dial::Hdg => (format!("{:03.0}", self.ap.hdg.rem_euclid(360.0)), "°"),
+            Dial::Hdg => (format!("{:03.0}°", self.ap.hdg.rem_euclid(360.0)), ""),
             Dial::Alt => (format!("{:.0}", (self.ap.alt * 3.28084 / 100.0).round() * 100.0), "ft"),
             Dial::Vs => (format!("{:+.0}", (self.ap.vs * 196.85 / 100.0).round() * 100.0), "fpm"),
             Dial::Spd => (format!("{:.0}", self.ap.spd * 1.943_84), "kt"),
         }
     }
 
-    /// the strip at the bottom of the screen, up once picked or engaged.
-    pub(crate) fn ap_bar(&mut self, ctx: &egui::Context) {
-        if !self.ap_bar_on || self.crashed || self.spec.rocket().is_some() || self.info_open {
-            return;
+    /// each mode button's light.
+    fn lamps(&self) -> [Lamp; 8] {
+        let a = &self.ap;
+        let on = |b: bool| if a.on && b { Lamp::On } else { Lamp::Off };
+        let lat_armed = matches!(a.lat, Lat::Nav | Lat::Apr) && !a.nav_cap || a.lat == Lat::Gps && a.gps_trk.is_none();
+        let lat_lamp = |m: Lat| match (a.on, a.lat == m, lat_armed) {
+            (true, true, true) => Lamp::Armed,
+            (true, true, false) => Lamp::On,
+            _ => Lamp::Off,
+        };
+        // the heading flies while a course is armed.
+        let hdg = if a.on && (a.lat == Lat::Hdg || lat_armed) { Lamp::On } else { Lamp::Off };
+        let alt = if a.on && a.vert == Vert::Vs && !a.alt_cap { Lamp::Armed } else { on(a.vert == Vert::Alt || a.vert == Vert::Vs && a.alt_cap) };
+        let vs = on(a.vert == Vert::Vs && !a.alt_cap);
+        [if a.on { Lamp::On } else { Lamp::Off }, hdg, lat_lamp(Lat::Nav), lat_lamp(Lat::Apr), lat_lamp(Lat::Gps), alt, vs, if a.at { Lamp::On } else { Lamp::Off }]
+    }
+
+    /// the panel's columns, `col` wide each, laid left to right in `ui`.
+    fn ap_columns(&mut self, ui: &mut egui::Ui, col: f32) -> Asked {
+        let mut ask = Asked::default();
+        let l = self.lamps();
+        ui.spacing_mut().item_spacing = vec2(GAP, 4.0);
+        // the master, as tall as a column.
+        let (r, resp) = ui.allocate_exact_size(vec2(56.0, KEY_H + 4.0 + VALUE_H), Sense::click());
+        {
+            let lit = menu::ease(ui.ctx(), resp.id, resp.hovered());
+            let p = ui.painter();
+            let on = l[0] == Lamp::On;
+            p.rect_filled(r, menu::R_WIDGET, if on { OK.gamma_multiply(0.18 + 0.06 * lit) } else { menu::mix(menu::RAISED, menu::RAISED_HI, lit) });
+            p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, if on { OK } else { menu::mix(menu::LINE_HI, Color32::from_white_alpha(60), lit) }), egui::StrokeKind::Inside);
+            p.text(r.center() - vec2(0.0, 7.0), Align2::CENTER_CENTER, "AP", menu::semibold(17.0), if on { OK } else { TEXT });
+            p.text(r.center() + vec2(0.0, 12.0), Align2::CENTER_CENTER, if on { t!("menu.on") } else { t!("menu.off") }, menu::caption(), if on { OK } else { FAINT });
         }
-        // nothing set yet: the knobs start from what the aircraft is doing.
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, l[0] == Lamp::On, "AP"));
+        if resp.on_hover_text("F5").on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            ask.toggle = true;
+        }
+        let rule = |ui: &mut egui::Ui| {
+            let x = ui.cursor().left() - GAP * 0.5 - 0.5;
+            let y = ui.cursor().top();
+            ui.painter().vline(x, y..=y + KEY_H + 4.0 + VALUE_H, Stroke::new(1.0, Color32::from_white_alpha(18)));
+        };
+        // heading, then the courses, altitude, vertical speed and speed.
+        let column = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
+            ui.allocate_ui_with_layout(vec2(col, KEY_H + 4.0 + VALUE_H), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                add(ui);
+            });
+        };
+        let live = self.ap.on;
+        let mut hdg_t = Turn::default();
+        rule(ui);
+        column(ui, &mut |ui| {
+            if mode_key(ui, "HDG", l[1], col).on_hover_text("7").clicked() {
+                ask.lat = Some(Lat::Hdg);
+            }
+            let (v, u) = self.dial_text(Dial::Hdg);
+            hdg_t = target(ui, &v, u, col, live);
+        });
+        rule(ui);
+        let course = match &self.radios.nav {
+            Some(s) => format!("{} {}", s.name, s.ident),
+            None if !self.plan.is_empty() => tr_en("Flight plan").to_string(),
+            None => tr_en("No course").to_string(),
+        };
+        let tuned = self.radios.nav.is_some() || !self.plan.is_empty();
+        let wide = col * 1.5;
+        column(ui, &mut |ui| {
+            ui.set_width(wide);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let kw = (wide - 8.0) / 3.0;
+                for (k, m, name, key) in [(2, Lat::Nav, "NAV", "8"), (3, Lat::Apr, "APR", "9"), (4, Lat::Gps, "GPS", "")] {
+                    let r = mode_key(ui, name, l[k], kw);
+                    let r = if key.is_empty() { r.on_hover_text(t!("game.gps_follows_the_flight_plan")) } else { r.on_hover_text(key) };
+                    if r.clicked() {
+                        ask.lat = Some(m);
+                    }
+                }
+            });
+            let (r, _) = ui.allocate_exact_size(vec2(wide, VALUE_H), Sense::hover());
+            let g = menu::one_line(ui.painter(), &course, menu::label(), if tuned { TEXT } else { FAINT }, wide - 8.0);
+            ui.painter().galley(r.center() - g.size() * 0.5, g, TEXT);
+        });
+        let mut rest: [Turn; 3] = Default::default();
+        for (i, (d, name, key, k)) in [(Dial::Alt, "ALT", "0", 5), (Dial::Vs, "VS", "", 6), (Dial::Spd, "A/T", "", 7)].into_iter().enumerate() {
+            rule(ui);
+            column(ui, &mut |ui| {
+                let r = mode_key(ui, name, l[k], col);
+                let r = if d == Dial::Spd { r.on_hover_text(t!("game.autothrottle")) } else if key.is_empty() { r } else { r.on_hover_text(key) };
+                if r.clicked() {
+                    match d {
+                        Dial::Alt => ask.vert = Some(Vert::Alt),
+                        Dial::Vs => ask.vert = Some(Vert::Vs),
+                        _ => ask.at = true,
+                    }
+                }
+                let (v, u) = self.dial_text(d);
+                rest[i] = target(ui, &v, u, col, live || d == Dial::Spd && self.ap.at);
+            });
+        }
+        for (d, t) in [(Dial::Hdg, hdg_t), (Dial::Alt, rest[0]), (Dial::Vs, rest[1]), (Dial::Spd, rest[2])] {
+            if t.any() {
+                ask.turns.push((d, t));
+            }
+        }
+        ask
+    }
+
+    /// does what the panel asked for.
+    fn ap_apply(&mut self, ask: Asked) {
+        for (d, t) in ask.turns {
+            self.ap_turn(d, t);
+        }
+        if ask.at {
+            self.ap_at_toggle();
+        }
+        if ask.toggle {
+            self.ap_toggle();
+        }
+        if let Some(m) = ask.lat {
+            self.ap_lat(m);
+        }
+        if let Some(m) = ask.vert {
+            self.ap_vert(m);
+        }
+    }
+
+    /// nothing set yet: the values start from what the aircraft is doing.
+    fn ap_seed(&mut self) {
         if !self.ap.on && self.ap.alt == 0.0 {
             let s = autopilot::State::of(&self.plane);
             self.ap.sync(&s);
             self.ap.spd = s.ias;
         }
-        let (on, armed) = self.ap.annunciation();
-        let mut lat = None;
-        let mut vert = None;
-        let mut toggle = false;
-        let mut at = false;
-        let mut turns: Vec<(Dial, Turn)> = Vec::new();
+    }
+
+    /// the panel at the bottom of the screen, up once picked or engaged.
+    pub(crate) fn ap_bar(&mut self, ctx: &egui::Context) {
+        if !self.ap_bar_on || self.crashed || self.spec.rocket().is_some() || self.info_open {
+            return;
+        }
+        self.ap_seed();
+        let mut ask = Asked::default();
         let mut close = false;
         let mut page = false;
         egui::Area::new(egui::Id::unique("ap_bar")).anchor(Align2::CENTER_BOTTOM, [0.0, -16.0]).show(ctx, |ui| {
-            let frame = egui::Frame::new().fill(Color32::from_rgba_premultiplied(8, 10, 14, 214)).stroke(Stroke::new(1.0, Color32::from_white_alpha(28))).corner_radius(flightui::R_HUD).inner_margin(egui::Margin::symmetric(12, 8));
-            frame.show(ui, |ui| {
-                // the annunciator: what flies now in green, what waits in white.
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 14.0;
-                    let ap_col = if self.ap.on { Color32::from_rgb(80, 230, 120) } else { Color32::from_gray(120) };
-                    ui.label(egui::RichText::new(if self.ap.on { "AP" } else { "AP OFF" }).font(menu::bold(13.0)).color(ap_col));
-                    if self.ap.on {
-                        for m in &on {
-                            ui.label(egui::RichText::new(m).font(menu::data()).color(Color32::from_rgb(80, 230, 120)));
-                        }
-                        for m in &armed {
-                            ui.label(egui::RichText::new(m).font(menu::data()).color(Color32::WHITE));
-                        }
-                    } else if self.ap.at {
-                        ui.label(egui::RichText::new(format!("SPD {:.0}", self.ap.spd * 1.943_84)).font(menu::data()).color(Color32::from_rgb(80, 230, 120)));
-                    }
-                });
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    // engage and the lateral modes, two rows.
+            flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::same(12)), |ui| {
+                ui.horizontal_top(|ui| {
+                    ask = self.ap_columns(ui, 120.0);
+                    // hide, and the whole autopilot page, stacked at the end.
+                    ui.add_space(4.0);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 4.0;
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            toggle = key(ui, "AP", self.ap.on, 46.0, 24.0).on_hover_text("F5").clicked();
-                            at = key(ui, "AT", self.ap.at, 46.0, 24.0).on_hover_text(t!("game.autothrottle")).clicked();
-                        });
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            for (m, name) in [(Lat::Nav, "NAV"), (Lat::Gps, "GPS"), (Lat::Apr, "APR")] {
-                                if key(ui, name, self.ap.on && self.ap.lat == m, 30.0, 22.0).clicked() {
-                                    lat = Some(m);
-                                }
-                            }
-                        });
-                    });
-                    ui.add_space(6.0);
-                    for (d, name, mode) in [(Dial::Hdg, "HDG", 0), (Dial::Alt, "ALT", 1), (Dial::Vs, "VS", 2), (Dial::Spd, "SPD", 3)] {
-                        let sep = ui.cursor().left() - 6.0;
-                        ui.painter().vline(sep, ui.cursor().top()..=ui.cursor().top() + 52.0, Stroke::new(1.0, Color32::from_white_alpha(22)));
-                        ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 2.0;
-                            let lit = match mode {
-                                0 => self.ap.on && self.ap.lat == Lat::Hdg,
-                                1 => self.ap.on && self.ap.vert == Vert::Alt,
-                                2 => self.ap.on && self.ap.vert == Vert::Vs,
-                                _ => self.ap.at,
-                            };
-                            if key(ui, name, lit, 46.0, 20.0).clicked() {
-                                match mode {
-                                    0 => lat = Some(Lat::Hdg),
-                                    1 => vert = Some(Vert::Alt),
-                                    2 => vert = Some(Vert::Vs),
-                                    _ => at = true,
-                                }
-                            }
-                            let (v, unit) = self.dial_text(d);
-                            let (r, _) = ui.allocate_exact_size(vec2(70.0, 28.0), Sense::hover());
-                            let vr = ui.painter().text(pos2(r.left(), r.center().y), Align2::LEFT_CENTER, v, menu::bold(19.0), Color32::WHITE);
-                            ui.painter().text(pos2(vr.right() + 3.0, vr.bottom() - 3.0), Align2::LEFT_BOTTOM, unit, menu::caption(), flightui::SOFT);
-                        });
-                        let t = knob(ui, 50.0);
-                        if t.any() {
-                            turns.push((d, t));
-                        }
-                        ui.add_space(4.0);
-                    }
-                    // hide, and the whole autopilot page.
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 4.0;
-                        close = key(ui, t!("ap.hide"), false, 46.0, 22.0).clicked();
-                        page = key(ui, t!("ap.more"), false, 46.0, 22.0).clicked();
+                        close = flightui::icon_button(ui, menu::Icon::Close, t!("ap.hide")).clicked();
+                        page = flightui::icon_button(ui, menu::Icon::Autopilot, t!("ap.more")).clicked();
                     });
                 });
             });
         });
-        for (d, t) in turns {
-            self.ap_turn(d, t);
-        }
-        if at {
-            self.ap_at_toggle();
-        }
-        if toggle {
-            self.ap_toggle();
-        }
-        if let Some(m) = lat {
-            self.ap_lat(m);
-        }
-        if let Some(m) = vert {
-            self.ap_vert(m);
-        }
+        self.ap_apply(ask);
         if close {
             self.ap_bar_on = false;
         }
@@ -311,33 +371,17 @@ impl Game {
         }
     }
 
-    /// the four knobs on the autopilot page, each under its value.
-    pub(crate) fn ap_knobs(&mut self, ui: &mut egui::Ui) {
-        let mut turns: Vec<(Dial, Turn)> = Vec::new();
-        let dials = [(Dial::Hdg, "HDG"), (Dial::Alt, "ALT"), (Dial::Vs, "VS"), (Dial::Spd, "SPD")];
-        flightui::cells(ui, 4, 150.0, |ui, i| {
-            let (d, name) = dials[i];
-            flightui::tag(ui, name);
-            let (v, unit) = self.dial_text(d);
-            flightui::big(ui, &v, unit, Color32::WHITE);
-            ui.add_space(6.0);
-            let w = ui.available_width();
-            ui.horizontal(|ui| {
-                ui.add_space(((w - 64.0) * 0.5).max(0.0));
-                let t = knob(ui, 64.0);
-                if t.any() {
-                    turns.push((d, t));
-                }
-            });
-        });
-        for (d, t) in turns {
-            self.ap_turn(d, t);
-        }
-
+    /// the same panel on the autopilot page, as wide as the card.
+    pub(crate) fn ap_page_panel(&mut self, ui: &mut egui::Ui) {
+        self.ap_seed();
+        // the master, the courses (one and a half) and four columns share the width.
+        let col = ((ui.available_width() - 56.0 - GAP * 5.0) / 5.5).floor();
+        let ask = ui.horizontal_top(|ui| self.ap_columns(ui, col)).inner;
+        self.ap_apply(ask);
     }
 
-    /// in ALT, a new altitude set on the knob starts a climb or descent to it
-    /// once the knob has been still a moment; called each step with the autopilot on.
+    /// in ALT, a new altitude set in its window starts a climb or descent to it
+    /// once it has been still a moment; called each step with the autopilot on.
     pub(crate) fn ap_auto_level(&mut self, s: &autopilot::State) {
         if (self.ap.alt - self.ap_alt_seen.0).abs() > 0.5 {
             self.ap_alt_seen = (self.ap.alt, self.real);

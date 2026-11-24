@@ -545,6 +545,20 @@ pub fn toggle(ui: &mut egui::Ui, on: &mut bool, text: impl Into<egui::WidgetText
 // ---- the shared form widgets: every panel builds its rows from these, so
 // buttons, sliders and labels look and line up the same everywhere.
 
+/// a whole number with its thousands set apart by a thin space ("87 000").
+pub fn thousands(v: f64) -> String {
+    let n = v.round() as i64;
+    let d = n.unsigned_abs().to_string();
+    let mut out = String::new();
+    for (i, ch) in d.chars().enumerate() {
+        if i > 0 && (d.len() - i) % 3 == 0 {
+            out.push('\u{2009}');
+        }
+        out.push(ch);
+    }
+    if n < 0 { format!("-{out}") } else { out }
+}
+
 /// `s` as a sentence: a capital first letter and a full stop.
 pub fn sentence(s: &str) -> String {
     let s = s.trim();

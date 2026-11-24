@@ -1421,7 +1421,7 @@ profile.col_to = "To"
 profile.col_dist = "Distance"
 
 # autopilot knobs
-ap.knob_hint = "Inner ring: fine steps; outer ring or Shift: coarse. Drag round or up and down, or use the wheel. Click the middle to set it to what the aircraft is doing."
+ap.knob_hint = "Minus and plus change it (hold to repeat), and so does the wheel over it; Shift takes bigger steps. Click the value to take what the aircraft is doing now."
 ap.show_panel = "Autopilot panel on screen"
 ap.hide = "Hide"
 ap.more = "More"

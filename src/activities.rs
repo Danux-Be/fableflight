@@ -56,14 +56,8 @@ impl Game {
         let mut pick = None;
         let cols = if w > 980.0 { 2 } else { 1 };
         let cw = (w - 14.0 * (cols as f32 - 1.0)) / cols as f32;
-        let blurb = match tab {
-            0 => tr_en("Lessons that walk through a flight a step at a time. The first three lead to the private pilot checkride."),
-            1 => tr_en("Each sets the aircraft, the runway, the wind and the hour. The score is the landing's, less how far from the aiming point you touch down."),
-            2 => tr_en("Exams for the career's licences, marked on the landing. Pass and the licence can be taken in the career."),
-            _ => tr_en("Short flights with a goal: sightseeing, Mach 2, the edge of space."),
-        };
-        menu::hint(ui, blurb);
-        ui.add_space(10.0);
+        // (the tab names the kind; the cards say the rest)
+        ui.add_space(8.0);
         let mut cards: Vec<(String, String, String, Option<(String, Color32)>, Color32, Pick)> = Vec::new();
         if tab == 1 {
             for (i, c) in challenge::ALL.iter().enumerate() {

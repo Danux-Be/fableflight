@@ -1,3 +1,5 @@
+// release builds are a windowed app: no console window of their own on windows.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 mod airframe;
 mod atc;
 mod checklist;
@@ -3886,30 +3888,25 @@ impl Game {
 
     /// The pause menu's failures: each one by hand, or one now and then at random.
     fn failures_page(&mut self, ui: &mut egui::Ui) {
-        use egui::RichText;
-        use menu::{DIM, TEXT};
+        // the same switches and slider as the settings, a repair only when something is broken.
         menu::heading(ui, t!("game.failures"));
-        ui.label(RichText::new(t!("game.they_act_as_the_real")).font(menu::caption()).color(DIM));
         for i in 0..systems::Failures::N {
             let mut on = self.plane.sys.fail.get(i);
-            if ui.checkbox(&mut on, RichText::new(systems::Failures::label(i)).color(TEXT)).changed() {
+            if menu::toggle_row(ui, systems::Failures::label(i), "", &mut on).changed() {
                 self.plane.sys.fail.set(i, on);
             }
         }
-        if ui.button(t!("game.repair_everything")).clicked() {
+        if self.plane.sys.fail.any() && menu::button(ui, t!("game.repair_everything")).clicked() {
             self.plane.sys.fail = systems::Failures::default();
         }
-        ui.add_space(6.0);
+        ui.add_space(16.0);
         menu::heading(ui, t!("game.at_random"));
-        if ui.checkbox(&mut self.fail_random, t!("game.a_failure_now_and_then")).changed() {
+        if menu::toggle_row(ui, t!("game.a_failure_now_and_then"), "", &mut self.fail_random).changed() {
             self.fail_next = None;
         }
-        ui.add_enabled_ui(self.fail_random, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(t!("game.about_every"));
-                ui.add(egui::Slider::new(&mut self.fail_mean, 5.0..=120.0).logarithmic(true).custom_formatter(|v, _| format!("{v:.0} min")));
-            });
-        });
+        if self.fail_random {
+            menu::slider(ui, t!("game.about_every"), "", &mut self.fail_mean, menu::Scale::new(5.0, 120.0).log().step(1.0), |v| format!("{v:.0} min"));
+        }
     }
 
     /// Random failures: one at a time, at intervals drawn around the mean.
@@ -4306,64 +4303,24 @@ impl Game {
 
     /// the autopilot page: its modes as keys, then the four settings it flies to.
     fn autopilot_page(&mut self, ui: &mut egui::Ui) {
-        use autopilot::{Lat, Vert};
-        use flightui::{key, note, tag, wide_tile, GAP, LIT};
+        use flightui::{inst_row, inst_rule, SOFT};
+        // what it flies and what waits, then the panel itself.
         let (on, armed) = self.ap.annunciation();
-        let mut lat = None;
-        let mut vert = None;
-        let mut toggle = false;
-        let mut at = false;
-        wide_tile(ui, |ui| {
-            ui.horizontal(|ui| {
-                tag(ui, t!("game.modes"));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let line = if !self.ap.on {
-                        t!("game.off_f5_turns_it_on").to_string()
-                    } else if armed.is_empty() {
-                        on.join("  ")
-                    } else {
-                        t!("game.armed_2", on.join("  "), armed.join("  "))
-                    };
-                    ui.label(egui::RichText::new(line).font(menu::caption()).color(if self.ap.on { LIT } else { flightui::SOFT }));
-                });
-            });
-            ui.add_space(2.0);
-            let n = 8.0;
-            let w = (ui.available_width() - GAP * (n - 1.0)) / n;
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = GAP;
-                toggle = key(ui, "AP", self.ap.on, w, 40.0).on_hover_text("F5").clicked();
-                let gps_tip = t!("game.gps_follows_the_flight_plan");
-                for (m, name, k) in [(Lat::Hdg, "HDG", "7"), (Lat::Nav, "NAV", "8"), (Lat::Gps, "GPS", gps_tip), (Lat::Apr, "APR", "9")] {
-                    if key(ui, name, self.ap.on && self.ap.lat == m, w, 40.0).on_hover_text(k).clicked() {
-                        lat = Some(m);
-                    }
-                }
-                for (m, name, k) in [(Vert::Alt, "ALT", "0"), (Vert::Vs, "VS", "")] {
-                    let r = key(ui, name, self.ap.on && self.ap.vert == m, w, 40.0);
-                    if (if k.is_empty() { r } else { r.on_hover_text(k) }).clicked() {
-                        vert = Some(m);
-                    }
-                }
-                at = key(ui, "AT", self.ap.at, w, 40.0).on_hover_text(t!("game.autothrottle")).clicked();
-            });
-        });
-        if at {
-            self.ap_at_toggle();
+        let w = ui.available_width();
+        if self.ap.on {
+            inst_row(ui, w, tr_en("Flying"), &on.join("  ·  "), menu::OK, "", 0.0);
+            if !armed.is_empty() {
+                inst_row(ui, w, tr_en("Armed"), &armed.join("  ·  "), egui::Color32::WHITE, "", 0.0);
+            }
+        } else {
+            inst_row(ui, w, tr_en("Flying"), t!("game.off_3"), SOFT, "", 0.0);
         }
-        if toggle {
-            self.ap_toggle();
-        }
-        if let Some(m) = lat {
-            self.ap_lat(m);
-        }
-        if let Some(m) = vert {
-            self.ap_vert(m);
-        }
-        // the four settings, each on a knob.
-        self.ap_knobs(ui);
-        menu::toggle(ui, &mut self.ap_bar_on, t!("ap.show_panel"));
-        note(ui, t!("ap.page_note"));
+        inst_rule(ui);
+        ui.add_space(4.0);
+        self.ap_page_panel(ui);
+        ui.add_space(4.0);
+        inst_rule(ui);
+        menu::toggle_row(ui, t!("ap.show_panel"), "", &mut self.ap_bar_on);
         self.route_tile(ui);
     }
 
@@ -4442,7 +4399,7 @@ impl Game {
         let mut adf_off = false;
         let mut obs_step = 0.0;
         let mut direct = false;
-        cells(ui, 2, 132.0, |ui, i| {
+        cells(ui, 2, 112.0, |ui, i| {
             let off = |ui: &mut egui::Ui| {
                 let mut hit = false;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -4502,10 +4459,7 @@ impl Game {
                             });
                         }
                     }
-                    _ => {
-                        big(ui, "---.--", "MHz", SOFT);
-                        note(ui, t!("game.pick_a_station_below"));
-                    }
+                    _ => big(ui, t!("game.off_6"), "", SOFT),
                 }
             } else {
                 let mut hit = false;
@@ -4525,10 +4479,7 @@ impl Game {
                             None => note(ui, t!("game.no_signal")),
                         }
                     }
-                    None => {
-                        big(ui, "---", "kHz", SOFT);
-                        note(ui, t!("game.pick_a_beacon_below"));
-                    }
+                    None => big(ui, t!("game.off_6"), "", SOFT),
                 }
             }
         });
@@ -8265,11 +8216,11 @@ impl Game {
                             self.plan_section(ui);
                             menu::section(ui, "flight", t!("game.flight"), &flight, false, |ui| {
                                 let kg = self.spec.fuel_kg;
-                                menu::slider(ui, t!("game.fuel"), "", &mut self.menu.fuel, menu::Scale::new(0.05, 1.0).step(0.01), |v| format!("{:.0}%  ·  {:.0} kg", v * 100.0, v * kg as f64));
+                                menu::slider(ui, t!("game.fuel"), "", &mut self.menu.fuel, menu::Scale::new(0.05, 1.0).step(0.01), |v| format!("{} kg", menu::thousands(v * kg as f64)));
                                 let [usual, most, _] = self.spec.payload;
                                 if most > usual {
                                     let mut f = self.menu.payload.unwrap_or(usual / most);
-                                    if menu::slider(ui, t!("game.payload"), "", &mut f, menu::Scale::new(0.15, 1.0).step(0.01), |v| format!("{:.0} kg", v * most as f64)).changed() {
+                                    if menu::slider(ui, t!("game.payload"), "", &mut f, menu::Scale::new(0.15, 1.0).step(0.01), |v| format!("{} kg", menu::thousands(v * most as f64))).changed() {
                                         self.menu.payload = Some(f);
                                     }
                                 }
@@ -8280,8 +8231,11 @@ impl Game {
                                     probe.payload = self.start_payload();
                                     let s = self.spec;
                                     let out = probe.cg_excess() != 0.0;
-                                    let text = t!("game.kg_cg_mac_limits", probe.mass(), probe.cg() * 100.0, s.cg[1] * 100.0, s.cg[2] * 100.0, if out { t!("game.out_of_limits") } else { "" });
-                                    ui.label(RichText::new(text).font(menu::caption()).color(if out { Color32::from_rgb(255, 120, 70) } else { DIM }));
+                                    // the take-off mass and balance as one row; the limits only once it is outside them.
+                                    let cg = if out { format!("CG {:.0}% MAC  ·  {:.0} to {:.0}%", probe.cg() * 100.0, s.cg[1] * 100.0, s.cg[2] * 100.0) } else { format!("CG {:.0}% MAC", probe.cg() * 100.0) };
+                                    menu::form_row(ui, t!("game.mass"), "", |ui| {
+                                        ui.label(RichText::new(format!("{} kg  ·  {cg}", menu::thousands(probe.mass()))).font(menu::label()).color(if out { menu::BAD } else { menu::TEXT }));
+                                    });
                                 }
                                 if ground {
                                     ui.add_space(4.0);
@@ -10038,7 +9992,25 @@ fn fly_check(key: Option<&String>) -> i32 {
     0
 }
 
+/// a windowed build started from a terminal writes to that terminal, unless its output already goes somewhere (the launcher's pipe).
+#[cfg(all(windows, not(debug_assertions)))]
+fn attach_console() {
+    unsafe extern "system" {
+        fn GetStdHandle(which: u32) -> isize;
+        fn AttachConsole(pid: u32) -> i32;
+    }
+    // std_output_handle, attach_parent_process.
+    unsafe {
+        let out = GetStdHandle(-11i32 as u32);
+        if out == 0 || out == -1 {
+            AttachConsole(u32::MAX);
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+    #[cfg(all(windows, not(debug_assertions)))]
+    attach_console();
     if std::env::args().skip(1).any(|a| a == "--version" || a == "-V") {
         println!("fablegame {}", env!("CARGO_PKG_VERSION"));
         return Ok(());

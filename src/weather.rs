@@ -930,9 +930,9 @@ impl Weather {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| crate::menu::switch(ui, on));
             });
             let line = if i == 1 {
-                if self.real_time { t!("weather.the_sun_where_you_are", crate::menu::hhmm(local)) } else { t!("weather.set_by_hand_below").into() }
+                if self.real_time { t!("weather.the_sun_where_you_are", crate::menu::hhmm(local)) } else { String::new() }
             } else if !self.live {
-                t!("weather.set_by_hand_below").into()
+                String::new()
             } else if !self.live_station.is_empty() {
                 t!("weather.from_2", self.live_station)
             } else if self.live_raw.is_empty() {
@@ -940,7 +940,9 @@ impl Weather {
             } else {
                 self.live_raw.clone()
             };
-            note(ui, &line);
+            if !line.is_empty() {
+                note(ui, &line);
+            }
         });
         // the presets as keys across the card.
         let free = !self.live;
@@ -1026,7 +1028,7 @@ impl Weather {
 
     /// The real-weather switch, and the report it flies.
     fn live_switch(&mut self, ui: &mut egui::Ui) {
-        crate::menu::toggle_row(ui, t!("weather.real_weather"), t!("weather.metar_else_open_meteo_radar"), &mut self.live);
+        crate::menu::toggle_row(ui, t!("weather.real_weather"), "", &mut self.live);
         if self.live {
             let text = if self.live_station.is_empty() {
                 if self.live_raw.is_empty() { t!("weather.waiting_for_a_report").to_string() } else { self.live_raw.clone() }
@@ -1057,7 +1059,7 @@ impl Weather {
     /// The start screen's time: local time of day and the date.
     pub fn start_time(ui: &mut egui::Ui, hour: &mut f64, doy: &mut f64, real_time: &mut bool) {
         use crate::menu::{slider, toggle_row, Scale};
-        toggle_row(ui, t!("weather.real_time"), t!("weather.the_sun_where_you_are_2"), real_time);
+        toggle_row(ui, t!("weather.real_time"), "", real_time);
         ui.add_enabled_ui(!*real_time, |ui| {
             ui.add_space(4.0);
             slider(ui, t!("weather.local_time"), "", hour, Scale::new(0.0, 23.99).step(0.25), crate::menu::hhmm);

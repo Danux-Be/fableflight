@@ -280,7 +280,7 @@ impl Game {
                 if std::mem::take(&mut self.planner.top) {
                     area = area.vertical_scroll_offset(0.0);
                 }
-                area.show(ui, |ui| {
+                let out = area.show(ui, |ui| {
                     ui.set_width(ui.available_width() - 10.0);
                     ui.spacing_mut().item_spacing.y = 0.0;
                     if self.planner.simbrief_tab {
@@ -299,6 +299,20 @@ impl Game {
                     }
                     ui.add_space(6.0);
                 });
+                // more below: the cut edge fades into the panel instead of slicing a row in half.
+                let view = out.inner_rect;
+                if out.content_size.y - out.state.offset().y > view.height() + 1.0 {
+                    let band = Rect::from_min_max(pos2(view.left(), view.bottom() - 28.0), view.max);
+                    let mut m = egui::Mesh::default();
+                    let (clear, solid) = (Color32::TRANSPARENT, menu::PANEL);
+                    m.colored_vertex(band.left_top(), clear);
+                    m.colored_vertex(band.right_top(), clear);
+                    m.colored_vertex(band.right_bottom(), solid);
+                    m.colored_vertex(band.left_bottom(), solid);
+                    m.add_triangle(0, 1, 2);
+                    m.add_triangle(0, 2, 3);
+                    ui.painter().add(m);
+                }
                 ui.add_space(12.0);
                 self.planner_foot(ui, start);
             });
@@ -343,7 +357,7 @@ impl Game {
         let mut rw_to = None;
         for from in [true, false] {
             let cur = if from { self.menu.airport } else { self.planner.to };
-            field_label(ui, if from { tr_en("From") } else { tr_en("To") });
+            section_title(ui, if from { tr_en("From") } else { tr_en("To") });
             let pick = self.planner_airport_box(ui, cur, from);
             let rw = cur.and_then(|i| {
                 let now = if from { self.menu.runway.clone() } else { self.planner.arr_rwy.clone() };
@@ -354,7 +368,7 @@ impl Game {
             } else {
                 (pick_to, rw_to) = (pick, rw);
             }
-            ui.add_space(20.0);
+            ui.add_space(16.0);
         }
         if let Some(i) = pick_from {
             self.planner_set_from(i, None);
@@ -471,36 +485,78 @@ impl Game {
         picked
     }
 
-    /// runway ends as buttons, the one most into the wind marked with an arrow.
+    /// the runways as their pairs of ends (10L | 28R), four to a row in cells of
+    /// one width, so the columns line up whatever the airport. the end most into
+    /// the wind carries a small windsock.
     fn planner_runways(&mut self, ui: &mut egui::Ui, apt: u32, cur: Option<&str>) -> Option<String> {
         let ends = route::runway_ends(apt);
         if ends.is_empty() {
             return None;
         }
         let wind = route::into_wind(&ends, self.wx.wind_from).map(|e| e.ident);
-        let mut out = None;
-        ui.add_space(8.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-            for e in &ends {
-                let on = cur == Some(e.ident.as_str());
-                let into = wind.as_deref() == Some(e.ident.as_str());
-                let mut tip = t!("plan.runway_tip", len = format!("{:.0}", e.len), crs = format!("{:03.0}", e.course));
-                if into {
-                    tip = format!("{tip}\n{}", tr_en("Into the wind."));
-                }
-                let resp = menu::choice_sized(ui, &e.ident, on, 54.0, 30.0);
-                if into {
-                    // a small windsock in the corner.
-                    let c = resp.rect.right_top() + vec2(-8.0, 8.0);
-                    let col = if on { ACCENT } else { menu::LINK };
-                    ui.painter().add(egui::Shape::convex_polygon(vec![c + vec2(-4.0, -2.5), c + vec2(3.0, -1.2), c + vec2(3.0, 1.2), c + vec2(-4.0, 2.5)], col, Stroke::NONE));
-                }
-                if resp.on_hover_text(tip).clicked() {
-                    out = Some(e.ident.clone());
-                }
+        let a = &airports::Db::get().apts[apt as usize];
+        let mut pairs: Vec<Vec<&route::RwyEnd>> = Vec::new();
+        for r in &a.rwys {
+            let mut v: Vec<&route::RwyEnd> = r.ident.iter().filter_map(|id| ends.iter().find(|e| e.ident == id.trim())).collect();
+            v.sort_by_key(|e| rwy_num(&e.ident));
+            if !v.is_empty() && !pairs.iter().any(|p| p[0].ident == v[0].ident) {
+                pairs.push(v);
             }
-        });
+        }
+        pairs.sort_by(|x, y| rwy_num(&x[0].ident).cmp(&rwy_num(&y[0].ident)).then(x[0].ident.cmp(&y[0].ident)));
+        let mut out = None;
+        let w = ui.available_width();
+        let cw = ((w - RW_GAP * (RW_COLS as f32 - 1.0)) / RW_COLS as f32).floor();
+        ui.add_space(8.0);
+        for row in pairs.chunks(RW_COLS) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = RW_GAP;
+                for pair in row {
+                    let (cell, _) = ui.allocate_exact_size(vec2(cw, RW_H), Sense::hover());
+                    let ew = cell.width() / pair.len() as f32;
+                    for (k, e) in pair.iter().enumerate() {
+                        let r = Rect::from_min_size(pos2(cell.left() + ew * k as f32, cell.top()), vec2(ew, RW_H));
+                        let resp = ui.interact(r, ui.scope_id().with(("planner rwy", &e.ident)), Sense::click());
+                        let on = cur == Some(e.ident.as_str());
+                        let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
+                        let p = ui.painter();
+                        let round = match (pair.len(), k) {
+                            (1, _) => egui::CornerRadius::same(menu::R_WIDGET),
+                            (_, 0) => egui::CornerRadius { nw: menu::R_WIDGET, sw: menu::R_WIDGET, ne: 0, se: 0 },
+                            _ => egui::CornerRadius { ne: menu::R_WIDGET, se: menu::R_WIDGET, nw: 0, sw: 0 },
+                        };
+                        p.rect_filled(r, round, if on { menu::CHOSEN } else { menu::mix(menu::RAISED, menu::RAISED_HI, lit) });
+                        let col = if on { Color32::WHITE } else { menu::mix(TEXT, Color32::WHITE, lit) };
+                        p.text(r.center(), Align2::CENTER_CENTER, &e.ident, menu::medium(14.5), col);
+                        if wind.as_deref() == Some(e.ident.as_str()) {
+                            let c = r.right_top() + vec2(-9.0, 9.0);
+                            let wc = if on { ACCENT } else { menu::LINK };
+                            p.add(egui::Shape::convex_polygon(vec![c + vec2(-4.0, -2.5), c + vec2(3.0, -1.2), c + vec2(3.0, 1.2), c + vec2(-4.0, 2.5)], wc, Stroke::NONE));
+                        }
+                        let mut tip = t!("plan.runway_tip", len = format!("{:.0}", e.len), crs = format!("{:03.0}", e.course));
+                        if wind.as_deref() == Some(e.ident.as_str()) {
+                            tip = format!("{tip}\n{}", tr_en("Into the wind."));
+                        }
+                        if resp.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                            out = Some(e.ident.clone());
+                        }
+                    }
+                    // one outline round the pair, a hairline between its ends, the chosen end outlined in the accent.
+                    let p = ui.painter();
+                    p.rect_stroke(cell, menu::R_WIDGET, Stroke::new(1.0, menu::LINE_HI), egui::StrokeKind::Inside);
+                    if pair.len() == 2 {
+                        p.vline(cell.left() + ew, (cell.top() + 6.0)..=(cell.bottom() - 6.0), Stroke::new(1.0, Color32::from_white_alpha(24)));
+                    }
+                    for (k, e) in pair.iter().enumerate() {
+                        if cur == Some(e.ident.as_str()) {
+                            let r = Rect::from_min_size(pos2(cell.left() + ew * k as f32, cell.top()), vec2(ew, RW_H));
+                            p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);
+                        }
+                    }
+                }
+            });
+            ui.add_space(RW_GAP);
+        }
         out
     }
 
@@ -514,7 +570,7 @@ impl Game {
             if menu::wide_button(ui, t!("plan.create_flight_plan"), Hint::None, false, true).on_hover_text(t!("plan.create_hint")).clicked() {
                 self.planner_make();
             }
-        } else if link(ui, t!("plan.create_it_again")) {
+        } else if crate::flightui::text_link(ui, t!("plan.create_it_again")).clicked() {
             self.planner_make();
         }
     }
@@ -602,8 +658,10 @@ impl Game {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     ui.set_min_height(32.0);
                     label_col(ui, tag, phase_colour(phase));
+                    let col_w = ((ui.available_width() - 6.0) * 0.5).floor();
                     let Some(apt) = apt else {
-                        ui.label(RichText::new(t!("game.none")).font(menu::label()).color(FAINT));
+                        placeholder(ui, col_w, t!("game.none"));
+                        placeholder(ui, col_w, "");
                         return;
                     };
                     // only the ones that serve the chosen runway.
@@ -615,10 +673,11 @@ impl Game {
                         _ => true,
                     }).collect();
                     if names.is_empty() {
-                        ui.label(RichText::new(t!("game.none")).font(menu::label()).color(FAINT));
+                        placeholder(ui, col_w, t!("game.none"));
+                        placeholder(ui, col_w, "");
                         return;
                     }
-                    let name_w = ((ui.available_width() - 6.0) * 0.5).max(110.0);
+                    let name_w = col_w;
                     let none = t!("game.none");
                     let sel = cur.as_ref().map(|p| navdata::label(kind, &p.name)).unwrap_or_else(|| none.to_string());
                     egui::ComboBox::from_id_salt(("pl_proc", tag)).width(name_w).selected_text(sel).show_ui(ui, |ui| {
@@ -633,13 +692,17 @@ impl Game {
                             }
                         }
                     });
-                    let Some(p) = cur else { return };
+                    let Some(p) = cur else {
+                        placeholder(ui, col_w, "");
+                        return;
+                    };
                     let others = db.other_trans(&apt, kind, &p.name);
                     if others.is_empty() {
+                        placeholder(ui, col_w, "");
                         return;
                     }
                     let none = if phase == Phase::App { t!("game.vectors") } else { t!("game.no_transition") };
-                    egui::ComboBox::from_id_salt(("pl_tr", tag)).width(ui.available_width() - 2.0).selected_text(p.trans.clone().unwrap_or_else(|| none.to_string())).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt(("pl_tr", tag)).width(col_w).selected_text(p.trans.clone().unwrap_or_else(|| none.to_string())).show_ui(ui, |ui| {
                         if ui.selectable_label(p.trans.is_none(), none).clicked() {
                             change = Some((phase, Some(Pick { trans: None, ..p.clone() })));
                         }
@@ -845,10 +908,25 @@ fn label_col(ui: &mut egui::Ui, text: &str, col: Color32) {
     ui.painter().galley(pos2(r.left() + 16.0, r.center().y - g.size().y * 0.5), g, TEXT);
 }
 
-/// a field's name over it.
-fn field_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(RichText::new(text).font(menu::label()).color(DIM));
-    ui.add_space(6.0);
+/// the runway grid: pairs to a row, the gap, a cell's height.
+const RW_COLS: usize = 4;
+const RW_GAP: f32 = 8.0;
+const RW_H: f32 = 32.0;
+
+/// a runway's number, for ordering ("09L" is 9).
+fn rwy_num(id: &str) -> u32 {
+    id.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse().unwrap_or(99)
+}
+
+/// an empty field as wide as a choice beside it, so the procedure rows keep their columns.
+fn placeholder(ui: &mut egui::Ui, w: f32, text: &str) {
+    let h = ui.spacing().interact_size.y.max(24.0);
+    let (r, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    let p = ui.painter();
+    p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, Color32::from_white_alpha(14)), egui::StrokeKind::Inside);
+    if !text.is_empty() {
+        p.text(pos2(r.left() + 8.0, r.center().y), Align2::LEFT_CENTER, text, menu::label(), FAINT);
+    }
 }
 
 /// a cruise level as pilots say it.

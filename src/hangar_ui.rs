@@ -354,7 +354,11 @@ impl crate::Game {
             ui.vertical(|ui| {
                 ui.set_width((w - 260.0).max(200.0));
                 ui.label(RichText::new(spec.name).font(menu::page_title()).color(Color32::WHITE));
-                ui.label(RichText::new(origin_line(spec)).font(menu::body()).color(DIM));
+                // (where it came from, only for one that is not built in)
+                let from = origin_line(spec);
+                if !from.is_empty() {
+                    ui.label(RichText::new(from).font(menu::body()).color(DIM));
+                }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.set_width(240.0);
@@ -413,24 +417,22 @@ impl crate::Game {
             ui.add_space(12.0);
         }
         ui.add_space(18.0);
-        // The numbers, in a row of tiles.
-        let cells = numbers(spec);
-        let cols = if w > 760.0 { 3 } else { 2 };
-        let gap = 10.0;
-        let cw = (w - gap * (cols as f32 - 1.0)) / cols as f32;
-        for row in cells.chunks(cols) {
+        // the numbers as a list in two columns: the name, its value at the right, a hairline under each.
+        let rows = numbers(spec);
+        let gap = 24.0;
+        let cw = ((w - gap) / 2.0).floor();
+        for row in rows.chunks(2) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = gap;
                 for (k, v) in row {
-                    let (r, _) = ui.allocate_exact_size(egui::vec2(cw, 64.0), egui::Sense::hover());
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(cw, 40.0), egui::Sense::hover());
                     let p = ui.painter();
-                    p.rect_filled(r, menu::R_PANEL, menu::SURFACE);
-                    p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, menu::LINE), egui::StrokeKind::Inside);
-                    p.text(r.left_top() + egui::vec2(16.0, 19.0), Align2::LEFT_CENTER, *k, menu::caption(), DIM);
-                    p.text(r.left_top() + egui::vec2(16.0, 43.0), Align2::LEFT_CENTER, v, menu::item_title(), Color32::WHITE);
+                    p.hline(r.x_range(), r.bottom() - 0.5, Stroke::new(1.0, Color32::from_white_alpha(14)));
+                    p.text(egui::pos2(r.left(), r.center().y), Align2::LEFT_CENTER, *k, menu::label(), DIM);
+                    p.text(egui::pos2(r.right(), r.center().y), Align2::RIGHT_CENTER, v, menu::semibold(15.0), Color32::WHITE);
                 }
             });
-            ui.add_space(gap - ui.spacing().item_spacing.y);
+            ui.add_space(-ui.spacing().item_spacing.y);
         }
         if let Some(o) = spec.origin {
             ui.add_space(6.0);
@@ -753,7 +755,7 @@ fn origin_line(spec: &Spec) -> String {
     match spec.origin {
         Some(o) if spec.ext.is_some() => t!("hangar.downloaded_from_flightgears_collection", o.license),
         Some(o) => t!("hangar.from_flightgears_collection_drawn_as", o.body, o.license),
-        None => t!("hangar.built_in").to_string(),
+        None => String::new(),
     }
 }
 

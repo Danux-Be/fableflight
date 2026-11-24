@@ -1375,7 +1375,7 @@ profile.col_to = "À"
 profile.col_dist = "Distance"
 
 # autopilot knobs
-ap.knob_hint = "Anneau intérieur : pas fins ; anneau extérieur ou Maj : pas larges. Faites tourner, glissez vers le haut ou le bas, ou utilisez la molette. Un clic au centre la règle sur ce que fait l'avion."
+ap.knob_hint = "Moins et plus la changent (maintenus, ils répètent), la molette aussi ; Maj fait de grands pas. Un clic sur la valeur prend ce que fait l'avion."
 ap.show_panel = "Panneau du pilote automatique à l'écran"
 ap.hide = "Masquer"
 ap.more = "Plus"

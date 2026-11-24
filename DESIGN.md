@@ -257,6 +257,8 @@ Nearly square: 3px corners on panels, cards, buttons, fields and key caps; squar
 - **Style:** HUD Box fill, square, no border radius, numbers in Barlow SemiBold, live values white, the bug and cautions in yellow and amber.
 - **Tapes:** the speed and altitude tapes carry their tags inside, a head and a foot row (G/S, V/S above; THR, AGL below) on the tape's own fill, never floating over the sky. The readout is one number in one size in a box with a yellow hairline and a notch at the scale, like the heading's; no rolling drum.
 - **Cards in flight:** a title and the one thing to do now, a thin progress bar, a quiet abandon link. 300px wide, top right.
+- **Autopilot panel:** a mode control panel along the bottom: the AP master, then a column each for HDG, the courses (NAV, APR, GPS), ALT, VS and A/T. Each column is its mode button over the value it aims for. A mode button is green while it flies, outlined in white while armed, dim when off. The value window has minus and plus (held to repeat), turns with the wheel (Shift for big steps) and takes the aircraft's own value on a click. No knobs, no separate annunciation line, one face.
+- **Flight menu pages:** never tiles. Columns and rows sit flat on the card, split by hairlines, each part named by a dim label (not spaced capitals) with its value in the 17px value size.
 
 ### Notifications
 - **Achievements and levels:** a compact card in the bottom right (an icon tile, a dim caption, the name), sliding up over 0.35s, held 5s.

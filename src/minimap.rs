@@ -38,7 +38,6 @@ pub struct Minimap {
     pub bottom: f32,
     /// Lowest point of the HUD panel above, which the map must not reach.
     pub top: f32,
-    resize_start: f32,
     /// The full-size map is open (J, or the button on the minimap's corner).
     pub full: bool,
     /// The full-size map's zoom, apart from the minimap's.
@@ -344,6 +343,9 @@ pub(crate) fn distance_label(meters: f64, lang: crate::i18n::Lang) -> String {
     let text = if meters >= 1000.0 { format!("{:.1} km", meters / 1000.0) } else { format!("{meters:.0} m") };
     text.replace('.', lang.text("number.decimal_point"))
 }
+
+/// the furthest out the minimap zooms (about 15 km across a 240 px map).
+const MINI_ZOOM_MIN: u8 = 11;
 
 impl Minimap {
     fn draw_runways(&mut self, world: &crate::world::World, painter: &egui::Painter, view: &View, outline: &Outline, occupied: &mut Vec<egui::Rect>) {
@@ -737,8 +739,8 @@ impl Minimap {
     }
 
     pub fn new(prefs: &crate::settings::Settings) -> Self {
-        Self { visible: prefs.minimap, landing_guidance: prefs.landing_guidance, heading_up: prefs.minimap_heading_up, zoom: prefs.minimap_zoom,
-            size: Vec2::splat(prefs.minimap_size), bottom: 65.0, top: 0.0, resize_start: 0.0, full: false, full_zoom: prefs.minimap_zoom.saturating_sub(2).max(3), full_center: None, full_scroll: 0.0, destination: None,
+        Self { visible: prefs.minimap, landing_guidance: prefs.landing_guidance, heading_up: prefs.minimap_heading_up, zoom: prefs.minimap_zoom.clamp(MINI_ZOOM_MIN, 17),
+            size: Vec2::splat(prefs.minimap_size), bottom: 65.0, top: 0.0, full: false, full_zoom: prefs.minimap_zoom.saturating_sub(2).max(3), full_center: None, full_scroll: 0.0, destination: None,
             plan: prefs.minimap_plan, maps: HashMap::new(), map_pending: Vec::new(), heading: 0.0, scroll: 0.0, tiles: HashMap::new(), pending: Vec::new(), generation: 0, frame: 0, runway_airports: Vec::new(), runway_center: None, runway_reach: 0.0,
             layers: crate::vfrmap::Layers { airports: prefs.map_airports, navaids: prefs.map_navaids }, tuned: Default::default(), trail: Default::default(), hits: Vec::new() }
     }
@@ -842,7 +844,6 @@ impl Minimap {
             ui.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = 6.0;
                 let (rect, response) = ui.allocate_exact_size(Vec2::splat(diameter), egui::Sense::click_and_drag());
-                let (center, radius) = (rect.center(), diameter * 0.5);
                 let outline = Outline::new(rect);
                 let over_disc = response.hover_pos().is_some_and(|p| outline.inside(p));
                 if over_disc {
@@ -854,7 +855,7 @@ impl Minimap {
                     self.scroll += scroll;
                     let steps = (self.scroll / 40.0).trunc() as i32;
                     self.scroll -= steps as f32 * 40.0;
-                    self.zoom = (self.zoom as i32 + steps).clamp(3, 17) as u8;
+                    self.zoom = (self.zoom as i32 + steps).clamp(MINI_ZOOM_MIN as i32, 17) as u8;
                 } else {
                     self.scroll = 0.0;
                 }
@@ -871,10 +872,6 @@ impl Minimap {
                     }
                 }
                 self.paint(ctx, src, &painter, &view, (lat, lon), guide, world, reserved(rect, angle), route);
-                // north on a chip.
-                let north = center + rotate(Vec2::new(0.0, -(radius - 18.0)), angle);
-                painter.circle_filled(north, 11.0, Color32::from_black_alpha(160));
-                painter.text(north, egui::Align2::CENTER_CENTER, "N", crate::menu::semibold(13.0), Color32::WHITE);
                 // The full-size map, from the upper left corner.
                 let expand = ui.interact(egui::Rect::from_center_size(rect.left_top() + Vec2::new(16.0, 16.0), Vec2::splat(24.0)), egui::Id::unique("minimap_full"), egui::Sense::click())
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -883,23 +880,7 @@ impl Minimap {
                 let hot = expand.hovered();
                 painter.rect_filled(expand.rect, crate::menu::R_WIDGET, Color32::from_black_alpha(if hot { 200 } else { 150 }));
                 expand_icon(&painter, expand.rect.center(), if hot { crate::flightui::LIT } else { Color32::from_white_alpha(210) });
-                // Resize handle on the rim, upper right; the lower-left stays anchored.
-                let knob = rect.right_top() + Vec2::new(-12.0, 12.0);
-                let resize = ui.interact(egui::Rect::from_center_size(knob, Vec2::splat(18.0)), egui::Id::unique("minimap_resize"), egui::Sense::drag())
-                    .on_hover_cursor(egui::CursorIcon::ResizeNeSw)
-                    .on_hover_text(crate::t!("minimap.drag_to_resize_the_map"));
-                if resize.drag_started() { self.resize_start = diameter; }
-                if resize.dragged() {
-                    let d = resize.total_drag_delta().unwrap_or_default();
-                    let size = (self.resize_start + (d.x - d.y) * 0.5).clamp(240.0f32.min(limit), limit);
-                    self.size = Vec2::splat(size);
-                }
-                // the resize grip, lit under the pointer.
-                let hot = resize.hovered() || resize.dragged();
-                let col = if hot { crate::flightui::LIT } else { Color32::from_white_alpha(150) };
-                for k in [0.0, 4.5, 9.0] {
-                    painter.line_segment([knob + Vec2::new(-6.0 + k, -6.0), knob + Vec2::new(6.0, 6.0 - k)], Stroke::new(1.4, col));
-                }
+                // (no north chip and no grip on the rim: the size is in the settings)
             });
         });
     }

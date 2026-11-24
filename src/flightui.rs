@@ -31,15 +31,22 @@ pub const CARD_W: f32 = 660.0;
 /// the gap between tiles.
 pub const GAP: f32 = 8.0;
 
-/// a row of `n` equal tiles `h` tall, `add` fills tile `i`.
+/// a row of `n` equal columns `h` tall, `add` fills column `i`. no box round
+/// each: a hairline over the row (but the first) and between the columns.
 pub fn cells(ui: &mut egui::Ui, n: usize, h: f32, mut add: impl FnMut(&mut egui::Ui, usize)) {
     let w = ui.available_width();
+    let first = ui.min_rect().height() < 8.0;
     let (row, resp) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
-    let cw = (w - GAP * (n as f32 - 1.0)) / n as f32;
+    if !first {
+        ui.painter().hline(row.x_range(), row.top() - GAP * 0.5, Stroke::new(1.0, white(0.08)));
+    }
+    let cw = (w - GAP * 2.0 * (n as f32 - 1.0)) / n as f32;
     for i in 0..n {
-        let r = Rect::from_min_size(pos2(row.left() + i as f32 * (cw + GAP), row.top()), vec2(cw, h));
-        tile_bg(ui.painter(), r);
-        let inner = r.shrink(12.0);
+        let r = Rect::from_min_size(pos2(row.left() + i as f32 * (cw + GAP * 2.0), row.top()), vec2(cw, h));
+        if i > 0 {
+            ui.painter().vline(r.left() - GAP, (row.top() + 8.0)..=(row.bottom() - 8.0), Stroke::new(1.0, white(0.08)));
+        }
+        let inner = Rect::from_min_max(pos2(r.left(), r.top() + 8.0), pos2(r.right(), r.bottom() - 8.0));
         let mut c = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)).id_salt(resp.id.with(i)));
         c.set_clip_rect(r.intersect(ui.clip_rect()));
         c.spacing_mut().item_spacing = vec2(6.0, 4.0);
@@ -50,40 +57,32 @@ pub fn cells(ui: &mut egui::Ui, n: usize, h: f32, mut add: impl FnMut(&mut egui:
 
 /// one tile across the card, as tall as what it holds.
 pub fn wide_tile<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    let slot = ui.painter().add(egui::Shape::Noop);
-    let r = egui::Frame::new().inner_margin(egui::Margin::same(12)).show(ui, |ui| {
+    if ui.min_rect().height() >= 8.0 {
+        let y = ui.cursor().top() - GAP * 0.5 + ui.spacing().item_spacing.y * 0.5;
+        ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, white(0.08)));
+    }
+    let r = egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
         add(ui)
     });
-    let rect = r.response.rect;
-    ui.painter().set(slot, egui::Shape::Vec(vec![
-        egui::Shape::rect_filled(rect, R_IN, white(0.045)),
-        egui::Shape::rect_stroke(rect, R_IN, Stroke::new(1.0, white(0.07)), egui::StrokeKind::Inside),
-    ]));
     ui.add_space(GAP - ui.spacing().item_spacing.y);
     r.inner
 }
 
-fn tile_bg(p: &egui::Painter, r: Rect) {
-    p.rect_filled(r, R_IN, white(0.045));
-    p.rect_stroke(r, R_IN, Stroke::new(1.0, white(0.07)), egui::StrokeKind::Inside);
-}
-
-/// a tile's name in spaced capitals.
+/// a part's name, dim, in the label face.
 pub fn tag(ui: &mut egui::Ui, s: &str) {
-    ui.label(tag_text(s));
+    ui.label(RichText::new(s).font(menu::medium(14.0)).color(DIM));
 }
 
-/// a big figure and its unit.
+/// a figure and its unit, in the instrument list's value size.
 pub fn big(ui: &mut egui::Ui, value: &str, unit: &str, col: Color32) {
     let w = ui.available_width();
-    ui.allocate_ui_with_layout(vec2(w, 30.0), egui::Layout::left_to_right(egui::Align::Max), |ui| {
-        ui.spacing_mut().item_spacing.x = 5.0;
-        ui.label(RichText::new(value).font(num_l()).color(col));
+    ui.allocate_ui_with_layout(vec2(w, 24.0), egui::Layout::left_to_right(egui::Align::Max), |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.label(RichText::new(value).font(menu::semibold(17.0)).color(col));
         if !unit.is_empty() {
-            ui.add_space(-1.0);
-            ui.label(RichText::new(unit).font(num_s()).color(SOFT));
+            ui.label(RichText::new(unit).font(menu::caption()).color(SOFT));
         }
     });
 }
@@ -205,6 +204,11 @@ pub fn card_header(ui: &mut egui::Ui, page: Page) -> (Option<Page>, bool, egui::
         ui.painter().set(slot, egui::Shape::galley(pos2(title.left(), title.center().y - g.size().y * 0.5), g, col));
     });
     (to, close, close_resp.expect("close button"))
+}
+
+/// a square icon button with its name on hover (the autopilot panel's hide and page).
+pub fn icon_button(ui: &mut egui::Ui, icon: Icon, hint: &str) -> egui::Response {
+    icon_key(ui, Some(icon), "", false, hint).on_hover_text(hint)
 }
 
 /// a square icon button, yellow when on.
