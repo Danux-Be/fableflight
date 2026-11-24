@@ -1112,13 +1112,14 @@ impl Game {
         };
         let left_nm = target.map(|t| career::nm_between(here, t));
         let left_s = f.job.limit_s - (self.time - f.t0);
-        let top = if self.hud_on() { 170.0 } else { 24.0 };
+        let top = if self.hud_on() { flightui::right_top(ctx) } else { 24.0 };
         let objs = career::objectives(f);
         let job = f.job.clone();
         let hover = f.hover_t;
         egui::Area::new(egui::Id::unique("job_card")).anchor(Align2::RIGHT_TOP, [-14.0, top]).show(ctx, |ui| {
-            flightui::panel(ui, flightui::glass().inner_margin(16.0), |ui| {
-                ui.set_width(330.0);
+            flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(14, 12)), |ui| {
+                ui.set_width(300.0);
+                ui.spacing_mut().item_spacing.y = 4.0;
                 ui.horizontal(|ui| {
                     flightui::tag(ui, &tr_en(job.kind.name()).to_uppercase());
                     menu::at_right(ui, "job_pay", |ui| {
@@ -1126,28 +1127,18 @@ impl Game {
                     });
                 });
                 ui.add(egui::Label::new(RichText::new(job_title(&job)).font(menu::semibold(16.0)).color(Color32::WHITE)).wrap());
-                ui.add_space(8.0);
-                let first_open = objs.iter().position(|o| !o.1);
-                for (k, (what, done)) in objs.iter().enumerate() {
-                    let now = Some(k) == first_open;
-                    ui.horizontal_top(|ui| {
-                        let (r, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
-                        let p = ui.painter();
-                        if *done {
-                            p.circle_filled(r.center(), 6.5, OK.gamma_multiply(0.85));
-                            crate::missions::tick(p, r.center(), 3.6, Color32::from_rgb(10, 30, 16));
-                        } else if now {
-                            p.circle_stroke(r.center(), 6.0, Stroke::new(2.0, ACCENT));
-                        } else {
-                            p.circle_stroke(r.center(), 5.5, Stroke::new(1.2, Color32::from_white_alpha(60)));
-                        }
-                        ui.add(egui::Label::new(RichText::new(what).font(if now { menu::medium(14.0) } else { menu::caption() }).color(if now { Color32::WHITE } else if *done { DIM } else { flightui::SOFT })).wrap());
-                    });
+                ui.add_space(4.0);
+                // only the objective to do now, and a bar for the rest.
+                let done_n = objs.iter().filter(|o| o.1).count();
+                if let Some((what, _)) = objs.iter().find(|o| !o.1) {
+                    ui.add(egui::Label::new(RichText::new(what).font(menu::medium(15.0)).color(Color32::WHITE)).wrap());
+                    ui.add_space(4.0);
                 }
+                flightui::meter(ui, done_n as f32 / objs.len().max(1) as f32, ACCENT);
                 if job.kind == Kind::Rescue && hover > 0.0 {
                     flightui::meter(ui, (hover / 10.0) as f32, ACCENT);
                 }
-                ui.add_space(8.0);
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if let Some(d) = left_nm {
                         ui.label(RichText::new(format!("{d:.1} nm")).font(menu::semibold(15.0)).color(Color32::WHITE));
@@ -1158,11 +1149,12 @@ impl Game {
                     let t = if left_s >= 0.0 { profile::hhmm(left_s) } else { format!("+{}", profile::hhmm(-left_s)) };
                     ui.label(RichText::new(t).font(menu::semibold(15.0)).color(col));
                     ui.label(RichText::new(if left_s >= 0.0 { tr_en("left") } else { tr_en("late") }).font(menu::caption()).color(flightui::SOFT));
+                    menu::at_right(ui, "job_abandon", |ui| {
+                        if flightui::text_link(ui, tr_en("Abandon job")).clicked() {
+                            abandon = true;
+                        }
+                    });
                 });
-                ui.add_space(8.0);
-                if flightui::key(ui, tr_en("Abandon job"), false, 120.0, 28.0).clicked() {
-                    abandon = true;
-                }
             });
         });
         if abandon {

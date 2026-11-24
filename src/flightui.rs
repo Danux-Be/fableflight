@@ -5,6 +5,15 @@ use egui::{pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
 
 // the flight panel's pieces.
 
+/// a quiet word that acts as a button, for what is rarely wanted (abandon).
+pub fn text_link(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let r = ui.add(egui::Button::new(RichText::new(text).font(menu::caption()).color(DIM)).frame(false));
+    if r.hovered() {
+        ui.painter().hline(r.rect.x_range(), r.rect.bottom() - 2.0, Stroke::new(1.0, DIM));
+    }
+    r.on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
 /// a small button as wide as its words, lit when chosen (the menus' look).
 pub fn chip(ui: &mut egui::Ui, text: &str, _mono: bool, on: bool) -> egui::Response {
     menu::choice_sized(ui, text, on, 0.0, 28.0)
@@ -242,7 +251,7 @@ impl Game {
         }
         if !notes.is_empty() {
             // under the heading strip.
-            let y = HEADING_TOP + HEADING_H + 34.0;
+            let y = HEADING_TOP + HEADING_H + 10.0;
             egui::Area::new(egui::Id::unique("notices")).anchor(Align2::CENTER_TOP, [0.0, y]).interactable(false).show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 6.0;
                 ui.vertical_centered(|ui| {
@@ -366,6 +375,33 @@ impl Game {
 
 // the hud sits at the edges in the menus' dark panels and leaves the middle to the world.
 
+/// an overlay's rect from the last frame, if it was up.
+pub fn shown(ctx: &egui::Context, name: &str, order: egui::Order) -> Option<Rect> {
+    let id = egui::Id::unique(name);
+    ctx.memory(|m| if m.areas().visible_last_frame(&egui::LayerId::new(order, id)) { m.area_rect(id) } else { None })
+}
+
+/// how far up from the screen's foot the next overlay at the bottom centre goes,
+/// over the autopilot panel, the alerts, the replay bar and the crash keys.
+pub fn bottom_stack(ctx: &egui::Context, skip: &str) -> f32 {
+    let foot = ctx.content_rect().bottom();
+    let mut lift: f32 = 16.0;
+    for (name, order) in [("ap_bar", egui::Order::Middle), ("hud_alerts", egui::Order::Middle), ("replay_bar", egui::Order::Foreground), ("crash", egui::Order::Middle)] {
+        if name == skip {
+            continue;
+        }
+        if let Some(r) = shown(ctx, name, order) {
+            lift = lift.max(foot - r.top() + 10.0);
+        }
+    }
+    lift
+}
+
+/// the top of the right column: under the flight menu hint while it shows.
+pub fn right_top(ctx: &egui::Context) -> f32 {
+    shown(ctx, "hud_hint", egui::Order::Background).map_or(HEADING_TOP, |r| r.bottom() + 10.0)
+}
+
 /// the heading strip's height, and its gap from the top edge (layout below it uses both).
 pub const HEADING_H: f32 = 46.0;
 pub const HEADING_TOP: f32 = 10.0;
@@ -430,8 +466,6 @@ pub struct HudIn {
     pub alt: f64,
     pub agl: f64,
     pub vs: f64,
-    /// local time (h).
-    pub local: f64,
 }
 
 // the panels.
@@ -544,85 +578,6 @@ fn grouped(v: f32) -> String {
     if n < 0 { format!("-{out}") } else { out }
 }
 
-/// the time of day in words.
-fn period(h: f64) -> &'static str {
-    match h.rem_euclid(24.0) {
-        h if (5.0..11.0).contains(&h) => t!("flight.morning"),
-        h if (11.0..17.0).contains(&h) => t!("flight.afternoon"),
-        h if (17.0..21.0).contains(&h) => t!("flight.evening"),
-        _ => t!("flight.night"),
-    }
-}
-
-/// the conditions card's icons.
-#[derive(Copy, Clone)]
-enum Glyph {
-    Sun,
-    Moon,
-    Cloud,
-    Menu,
-    Thermometer,
-    WindFrom(f32),
-    Sock,
-    Clock,
-}
-
-fn glyph(p: &egui::Painter, g: Glyph, c: egui::Pos2, s: f32, col: Color32) {
-    let st = Stroke::new(if s > 20.0 { 1.8 } else { 1.4 }, col);
-    let u = s * 0.5;
-    let arc = |c: egui::Pos2, r: f32, a0: f32, a1: f32| -> Vec<egui::Pos2> { (0..=20).map(|i| { let a = a0 + (a1 - a0) * i as f32 / 20.0; c + vec2(a.cos(), a.sin()) * r }).collect() };
-    match g {
-        Glyph::Sun => {
-            p.circle_stroke(c, u * 0.4, st);
-            for k in 0..8 {
-                let a = k as f32 / 8.0 * std::f32::consts::TAU;
-                let d = vec2(a.cos(), a.sin());
-                p.line_segment([c + d * u * 0.62, c + d * u * 0.92], st);
-            }
-        }
-        Glyph::Moon => {
-            let mut v = arc(c, u * 0.8, 0.9, 5.4);
-            v.extend(arc(c + vec2(0.35 * u, -0.2 * u), u * 0.62, 4.7, 1.6).into_iter());
-            p.add(egui::Shape::closed_line(v, st));
-        }
-        Glyph::Cloud => menu::icon(p, Icon::Weather, c, s, col),
-        Glyph::Menu => {
-            for k in [-1.0, 0.0, 1.0] {
-                p.line_segment([c + vec2(-u * 0.75, k * u * 0.55), c + vec2(u * 0.75, k * u * 0.55)], st);
-            }
-        }
-        Glyph::Thermometer => {
-            p.circle_stroke(c + vec2(0.0, u * 0.55), u * 0.3, st);
-            p.line_segment([c + vec2(-u * 0.16, u * 0.3), c + vec2(-u * 0.16, -u * 0.8)], st);
-            p.line_segment([c + vec2(u * 0.16, u * 0.3), c + vec2(u * 0.16, -u * 0.8)], st);
-            p.add(egui::Shape::line(arc(c + vec2(0.0, -u * 0.8), u * 0.16, std::f32::consts::PI, std::f32::consts::TAU), st));
-        }
-        Glyph::WindFrom(deg) => {
-            p.circle_stroke(c, u * 0.85, st);
-            // the arrow points where the wind goes.
-            let a = (deg + 180.0).to_radians();
-            let d = vec2(a.sin(), -a.cos());
-            p.line_segment([c - d * u * 0.4, c + d * u * 0.45], st);
-            let side = vec2(-d.y, d.x);
-            p.line_segment([c + d * u * 0.45, c + d * u * 0.1 + side * u * 0.3], st);
-            p.line_segment([c + d * u * 0.45, c + d * u * 0.1 - side * u * 0.3], st);
-        }
-        Glyph::Sock => {
-            p.line_segment([c + vec2(-u * 0.9, -u * 0.8), c + vec2(-u * 0.9, u * 0.9)], st);
-            let pts = vec![c + vec2(-u * 0.9, -u * 0.7), c + vec2(u * 0.9, -u * 0.35), c + vec2(u * 0.9, u * 0.05), c + vec2(-u * 0.9, u * 0.15)];
-            p.add(egui::Shape::closed_line(pts, st));
-            for x in [-0.3, 0.3] {
-                p.line_segment([c + vec2(x * u, -u * 0.55 + x * 0.2 * u), c + vec2(x * u, u * 0.1)], st);
-            }
-        }
-        Glyph::Clock => {
-            p.circle_stroke(c, u * 0.85, st);
-            p.line_segment([c, c + vec2(0.0, -u * 0.5)], st);
-            p.line_segment([c, c + vec2(u * 0.38, u * 0.1)], st);
-        }
-    }
-}
-
 impl Game {
     /// the whole hud.
     pub(crate) fn hud(&mut self, ctx: &egui::Context, h: &HudIn) {
@@ -630,7 +585,7 @@ impl Game {
         // the tapes' centre line, a little above the middle.
         let cy = screen.center().y - 36.0;
         self.heading_strip(ctx, h.hdg as f32);
-        self.conditions_card(ctx, h);
+        self.menu_hint(ctx);
         self.speed_tape(ctx, h, cy);
         self.altitude_tape(ctx, h, cy);
         if self.path_marker {
@@ -640,12 +595,39 @@ impl Game {
         self.minimap.bottom = 14.0;
     }
 
+    /// the flight menu's key, top right for the first seconds of a flight only.
+    fn menu_hint(&self, ctx: &egui::Context) {
+        let id = egui::Id::unique("hud since");
+        let (seen, since) = ctx.data(|d| d.get_temp::<(f64, f64)>(id)).unwrap_or((-10.0, self.real));
+        let since = if self.real - seen > 1.0 { self.real } else { since };
+        ctx.data_mut(|d| d.insert_temp(id, (self.real, since)));
+        let a = (1.0 - ((self.real - since - 9.0) / 1.0).clamp(0.0, 1.0)) as f32;
+        if a <= 0.0 {
+            return;
+        }
+        let key = if padui::active() { crate::padmap::spec_of("flight_panel") } else { "Tab".to_string() };
+        if key.is_empty() {
+            return;
+        }
+        egui::Area::new(egui::Id::unique("hud_hint")).anchor(Align2::RIGHT_TOP, [-14.0, HEADING_TOP]).interactable(false).order(egui::Order::Background).show(ctx, |ui| {
+            ui.multiply_opacity(a);
+            panel(ui, glass().inner_margin(egui::Margin::symmetric(12, 8)), |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    menu::key_cap(ui, &key);
+                    ui.label(RichText::new(crate::tr_en("Flight menu")).font(menu::label()).color(TEXT));
+                });
+            });
+        });
+        ctx.request_repaint();
+    }
+
     fn heading_strip(&self, ctx: &egui::Context, hdg: f32) {
         let screen = ctx.content_rect();
         let w = 540.0;
         let at = pos2(screen.center().x - w * 0.5, screen.top() + HEADING_TOP);
         egui::Area::new(egui::Id::unique("hud_heading")).fixed_pos(at).interactable(false).order(egui::Order::Background).show(ctx, |ui| {
-            let (r, _) = ui.allocate_exact_size(vec2(w, HEADING_H + 26.0), Sense::hover());
+            let (r, _) = ui.allocate_exact_size(vec2(w, HEADING_H), Sense::hover());
             let strip = Rect::from_min_size(r.min, vec2(w, HEADING_H));
             let p = ui.painter();
             panel_rect(p, strip);
@@ -695,80 +677,6 @@ impl Game {
             p.rect_stroke(rb, 0, Stroke::new(1.0, LIT), egui::StrokeKind::Inside);
             p.text(rb.center(), Align2::CENTER_CENTER, format!("{:03.0}°", hdg.rem_euclid(360.0).round() % 360.0), menu::semibold(17.0), Color32::WHITE);
             p.line_segment([pos2(cx, rb.bottom()), pos2(cx, base)], Stroke::new(1.5, LIT));
-            // track, heading and the aircraft under it.
-            let ty = strip.bottom() + 12.0;
-            if moving {
-                paint_tag(p, pos2(strip.left() + 2.0, ty), Align2::LEFT_CENTER, &t!("flight.track_03_0", trk));
-            }
-            paint_tag(p, pos2(cx, ty), Align2::CENTER_CENTER, t!("flight.heading"));
-            paint_tag(p, pos2(strip.right() - 2.0, ty), Align2::RIGHT_CENTER, self.spec.name);
-        });
-    }
-
-    fn conditions_card(&self, ctx: &egui::Context, h: &HudIn) {
-        let wx = &self.wx;
-        let wind_kt = wx.wind * 1.94384;
-        let night = !(6.0..19.5).contains(&h.local.rem_euclid(24.0));
-        let cloudy = wx.clouds > 0.6 || wx.rain > 0.1 || wx.storms > 0.3;
-        let sky = if wx.storms > 0.3 {
-            t!("flight.storms")
-        } else if wx.rain > 0.1 {
-            t!("flight.rain")
-        } else if wx.clouds < 0.15 {
-            t!("flight.clear")
-        } else if wx.clouds < 0.45 {
-            t!("flight.some_cloud")
-        } else if wx.clouds < 0.8 {
-            t!("flight.cloudy")
-        } else {
-            t!("flight.overcast")
-        };
-        let breeze = match wind_kt {
-            w if w < 3.0 => t!("flight.no_wind"),
-            w if w < 11.0 => t!("flight.a_light_breeze"),
-            w if w < 21.0 => t!("flight.a_moderate_breeze"),
-            w if w < 34.0 => t!("flight.a_strong_wind"),
-            _ => t!("flight.a_gale"),
-        };
-        let sub = t!("flight.with", sky, breeze);
-        let oat = 15.0 - 0.0065 * h.alt.clamp(-500.0, 11_000.0);
-        let w = 284.0;
-        egui::Area::new(egui::Id::unique("hud_conditions")).anchor(Align2::RIGHT_TOP, [-14.0, 12.0]).interactable(false).order(egui::Order::Background).show(ctx, |ui| {
-            let (r, _) = ui.allocate_exact_size(vec2(w, 126.0), Sense::hover());
-            let p = ui.painter();
-            panel_rect(p, r);
-            // the head.
-            let hy = r.top() + 19.0;
-            glyph(p, Glyph::Menu, pos2(r.left() + 22.0, hy), 14.0, white(0.75));
-            let hint = if padui::active() {
-                match crate::padmap::spec_of("flight_panel") {
-                    k if k.is_empty() => t!("flight.menu_pause").to_string(),
-                    k => t!("flight.flight_menu", k),
-                }
-            } else {
-                t!("flight.tab_flight_menu").to_string()
-            };
-            paint_tag(p, pos2(r.left() + 38.0, hy), Align2::LEFT_CENTER, &hint);
-            p.hline(r.x_range(), r.top() + 38.0, Stroke::new(1.0, white(0.16)));
-            // the body.
-            let by = r.top() + 70.0;
-            let g = if cloudy { Glyph::Cloud } else if night { Glyph::Moon } else { Glyph::Sun };
-            glyph(p, g, pos2(r.left() + 32.0, by), 32.0, Color32::WHITE);
-            p.text(pos2(r.left() + 62.0, by - 9.0), Align2::LEFT_CENTER, period(h.local), menu::medium(19.0), Color32::WHITE);
-            p.text(pos2(r.left() + 62.0, by + 11.0), Align2::LEFT_CENTER, sub, menu::caption(), white(0.68));
-            glyph(p, Glyph::Thermometer, pos2(r.right() - 20.0, by - 9.0), 16.0, white(0.8));
-            p.text(pos2(r.right() - 32.0, by - 9.0), Align2::RIGHT_CENTER, format!("{oat:.0}°C"), num_s(), Color32::WHITE);
-            // the foot.
-            let fy = r.bottom() - 18.0;
-            let mut x = r.left() + 22.0;
-            glyph(p, Glyph::WindFrom(wx.wind_from as f32), pos2(x, fy), 16.0, white(0.8));
-            x += 14.0;
-            p.text(pos2(x, fy), Align2::LEFT_CENTER, format!("{:03.0}°", wx.wind_from), num_s(), white(0.85));
-            x += 58.0;
-            glyph(p, Glyph::Sock, pos2(x, fy), 15.0, white(0.8));
-            p.text(pos2(x + 14.0, fy), Align2::LEFT_CENTER, t!("flight.0_knots", wind_kt), num_s(), white(0.85));
-            p.text(pos2(r.right() - 16.0, fy), Align2::RIGHT_CENTER, menu::hhmm(h.local), num_s(), white(0.85));
-            glyph(p, Glyph::Clock, pos2(r.right() - 62.0, fy), 16.0, white(0.8));
         });
     }
 
@@ -951,8 +859,8 @@ impl Game {
             return;
         }
         // above the autopilot panel while it is up.
-        let lift = if self.ap_bar_on { ctx.memory(|m| m.area_rect(egui::Id::unique("ap_bar"))).map_or(0.0, |r| r.height() + 10.0) } else { 0.0 };
-        egui::Area::new(egui::Id::unique("hud_alerts")).anchor(Align2::CENTER_BOTTOM, [0.0, -16.0 - lift]).interactable(false).show(ctx, |ui| {
+        let lift = shown(ctx, "ap_bar", egui::Order::Middle).map_or(16.0, |r| ctx.content_rect().bottom() - r.top() + 10.0);
+        egui::Area::new(egui::Id::unique("hud_alerts")).anchor(Align2::CENTER_BOTTOM, [0.0, -lift]).interactable(false).show(ctx, |ui| {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
                 if let Some((text, col)) = guidance {

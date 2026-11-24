@@ -507,46 +507,39 @@ impl Game {
         let mut again = false;
         let m = run.m;
         let (step, n, done, failed, rating) = (run.step, m.steps.len(), run.done, run.failed.clone(), run.rating);
-        let top = if self.hud_on() { 170.0 } else { 24.0 };
+        let top = if self.hud_on() { flightui::right_top(ctx) } else { 24.0 };
         egui::Area::new(egui::Id::unique("mission_card")).anchor(egui::Align2::RIGHT_TOP, [-14.0, top]).show(ctx, |ui| {
-            flightui::panel(ui, flightui::glass().inner_margin(16.0), |ui| {
-                ui.set_width(330.0);
+            flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(14, 12)), |ui| {
+                ui.set_width(300.0);
+                ui.spacing_mut().item_spacing.y = 4.0;
                 let what = match m.cat {
                     Cat::Tutorial => tr_en("TUTORIAL"),
                     Cat::Exam => tr_en("CHECKRIDE"),
                     Cat::Mission => tr_en("MISSION"),
                 };
-                flightui::tag(ui, what);
-                ui.label(RichText::new(tr_en(m.title)).font(menu::semibold(17.0)).color(Color32::WHITE));
-                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    flightui::tag(ui, what);
+                    if !done && failed.is_none() {
+                        menu::at_right(ui, "mission_step", |ui| {
+                            ui.label(RichText::new(format!("{} / {n}", step + 1)).font(menu::data()).color(flightui::SOFT));
+                        });
+                    }
+                });
+                ui.label(RichText::new(tr_en(m.title)).font(menu::semibold(16.0)).color(Color32::WHITE));
+                ui.add_space(4.0);
                 if let Some(why) = &failed {
                     result_line(ui, tr_en("Not passed"), menu::BAD);
                     ui.add(egui::Label::new(RichText::new(why).font(menu::body()).color(menu::TEXT)).wrap());
                 } else if done {
                     result_line(ui, if m.cat == Cat::Exam { tr_en("Passed") } else { tr_en("Complete") }, menu::OK);
-                } else {
-                    // the last steps done, ticked and faint, then the one to do.
-                    for (k, s) in m.steps.iter().enumerate().take(step + 1).skip(step.saturating_sub(2)) {
-                        let now = k == step;
-                        ui.horizontal_top(|ui| {
-                            let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                            let p = ui.painter();
-                            if now {
-                                p.circle_stroke(r.center(), 6.0, egui::Stroke::new(2.0, menu::ACCENT));
-                            } else {
-                                p.circle_filled(r.center(), 6.5, menu::OK.gamma_multiply(0.85));
-                                tick(p, r.center(), 3.6, Color32::from_rgb(10, 30, 16));
-                            }
-                            ui.add(egui::Label::new(RichText::new(tr_en(s.text)).font(if now { menu::medium(14.5) } else { menu::caption() }).color(if now { Color32::WHITE } else { menu::DIM })).wrap());
-                        });
-                        ui.add_space(2.0);
-                    }
+                } else if let Some(s) = m.steps.get(step) {
+                    // only the step to do now.
+                    ui.add(egui::Label::new(RichText::new(tr_en(s.text)).font(menu::medium(15.0)).color(Color32::WHITE)).wrap());
                     ui.add_space(6.0);
                     flightui::meter(ui, step as f32 / n.max(1) as f32, flightui::LIT);
-                    ui.label(RichText::new(format!("{} {} / {n}", tr_en("Step"), step + 1)).font(menu::caption()).color(flightui::SOFT));
                 }
                 if let Some(r) = rating {
-                    ui.add_space(8.0);
+                    ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(format!("{}", r.score)).font(menu::bold(30.0)).color(if r.score >= 75 { menu::ACCENT } else { Color32::WHITE }));
                         ui.vertical(|ui| {
@@ -560,17 +553,17 @@ impl Game {
                         flightui::note(ui, &format!("{} {}", tr_en("Pass mark"), pass_mark(m)));
                     }
                 }
-                ui.add_space(10.0);
+                ui.add_space(6.0);
                 if done || failed.is_some() {
                     ui.horizontal(|ui| {
-                        if flightui::key(ui, tr_en("Fly again"), false, 110.0, 30.0).clicked() {
+                        if flightui::key(ui, tr_en("Try again"), false, 100.0, 28.0).clicked() {
                             again = true;
                         }
-                        if flightui::key(ui, tr_en("Close"), false, 90.0, 30.0).clicked() {
+                        if flightui::key(ui, tr_en("Close"), false, 80.0, 28.0).clicked() {
                             close = true;
                         }
                     });
-                } else if flightui::key(ui, tr_en("Abandon"), false, 100.0, 28.0).clicked() {
+                } else if flightui::text_link(ui, tr_en("Abandon")).clicked() {
                     close = true;
                 }
             });

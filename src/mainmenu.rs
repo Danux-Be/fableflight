@@ -1,5 +1,5 @@
 //! the main menu: the wordmark over the aircraft, fly and settings tiles.
-//! Quit sits small in the bottom left corner. Behind it the renderer draws
+//! fly asks free flight or career. Quit sits small in the bottom left corner. Behind it the renderer draws
 //! space alone (the menu camera looks away from the planet, see `frame`).
 use crate::menu::{self, Screen, ACCENT, DIM, FAINT, TEXT};
 use crate::padui::{self, Hint};
@@ -22,8 +22,8 @@ enum Tile {
     Aircraft,
     Fly,
     Settings,
-    /// back into the air where the last flight started.
-    Again,
+    /// the globe, to start anywhere.
+    Free,
     /// the settings' Multiplayer section
     Multiplayer,
     /// the pilot's profile and logbook.
@@ -43,8 +43,8 @@ impl Game {
         let still = self.still(ctx, spec);
         let mut press: Option<Tile> = None;
         let mut quit = false;
-        let again = self.last_start_label();
         let rise = entrance(ctx);
+        let picking = self.menu.fly_pick;
         egui::Area::new(egui::Id::unique("main_menu")).order(egui::Order::Background).fixed_pos(screen.min).show(ctx, |ui| {
             let p = ui.painter().clone();
             // Darken space towards the foot of the screen, for depth.
@@ -55,9 +55,10 @@ impl Game {
             let (fw, fh, sw, sh) = (600.0, 450.0, 300.0, 400.0);
             let total = fw + 2.0 * sw + 2.0 * gap;
             let top = 104.0;
-            let k = ((screen.width() - 48.0) / total).min((screen.height() - top - 190.0) / fh).min(1.05).max(0.45);
+            let foot = 120.0;
+            let k = ((screen.width() - 48.0) / total).min((screen.height() - top - foot) / fh).min(1.1).max(0.45);
             let (fw, fh, sw, sh, gap) = (fw * k, fh * k, sw * k, sh * k, gap * k);
-            let cy = top + (screen.height() - top - 190.0) * 0.5 + 10.0;
+            let cy = top + (screen.height() - top - foot) * 0.5 + 10.0;
             let x0 = screen.center().x - (fw + 2.0 * sw + 2.0 * gap) * 0.5;
             // the tiles rise in as the menu opens.
             let lift = |r: Rect, i: usize| r.translate(vec2(0.0, 26.0 * (1.0 - rise(i))));
@@ -132,32 +133,51 @@ impl Game {
                 press = Some(Tile::Activities);
             }
 
-            // under fly: the career, then the last start, one press away.
-            let cb = Rect::from_min_size(pos2(fly.left(), fly.bottom() + 14.0 * k), vec2(fly.width(), 68.0));
-            let r = ui.interact(cb, ui.scope_id().with("tile_career"), Sense::click());
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr_en("Career")));
-            let mut pc = p.clone();
-            pc.set_opacity(rise(3));
-            let (line, right) = if self.career.started {
-                let (head, _, _) = self.next_step();
-                (head, format!("{}  ·  {}", crate::career::money_short(self.career.money), tr_en(self.career.title())))
-            } else {
-                (tr_en("From student pilot to airline captain and company owner").to_string(), tr_en("New career").to_string())
-            };
-            career_bar(&pc, cb, &r, &line, &right);
-            if r.clicked() {
-                press = Some(Tile::Career);
-            }
-            if let Some((place, plane)) = &again {
-                let b = Rect::from_min_size(pos2(fly.left(), cb.bottom() + 10.0), vec2(fly.width(), 46.0));
-                let r = ui.interact(b, ui.scope_id().with("again"), Sense::click());
-                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t!("menu.fly_again")));
-                let mut pg = p.clone();
-                pg.set_opacity(rise(3));
-                again_button(&pg, b, &r, place, plane);
+            if picking {
+                // fly: free flight or career, over the dimmed menu.
+                let a = ctx.animate_bool_with_time(egui::Id::unique("fly_pick_fade"), true, 0.18);
+                let fg = egui::Painter::new(ctx.clone(), egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("fly_pick")), screen);
+                fg.rect_filled(screen, 0.0, Color32::from_black_alpha((236.0 * a) as u8));
+                let (cw, ch, cg) = (460.0 * k.max(0.7), 320.0 * k.max(0.7), 24.0 * k.max(0.7));
+                let y0 = screen.center().y - ch * 0.5 + 10.0 * (1.0 - a);
+                let left = Rect::from_min_size(pos2(screen.center().x - cw - cg * 0.5, y0), vec2(cw, ch));
+                let right = Rect::from_min_size(pos2(screen.center().x + cg * 0.5, y0), vec2(cw, ch));
+                let over = egui::Ui::new(ctx.clone(), egui::Id::unique("fly_pick_ui"), egui::UiBuilder::new().layer_id(fg.layer_id()).max_rect(screen));
+                // (the cards go over it, so they take their own clicks)
+                let back = over.interact(screen, egui::Id::unique("pick_back"), Sense::click());
+                let r = over.interact(left, egui::Id::unique("pick_free"), Sense::click());
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr_en("Free flight")));
+                self.pad_home_focus(&r);
+                let mut pf = fg.clone();
+                pf.set_opacity(a);
+                free_card(&pf, left, &r, k, &globe);
                 if r.clicked() {
-                    press = Some(Tile::Again);
+                    press = Some(Tile::Free);
                 }
+                let r = over.interact(right, egui::Id::unique("pick_career"), Sense::click());
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr_en("Career")));
+                let sub = if self.career.started {
+                    format!("{}  ·  {}", crate::career::money_short(self.career.money), tr_en(self.career.title()))
+                } else {
+                    tr_en("Start as a student pilot").to_string()
+                };
+                career_card(&pf, right, &r, k, &sub);
+                if r.clicked() {
+                    press = Some(Tile::Career);
+                }
+                // a click beside the cards, or Esc, goes back.
+                if press.is_none() && (back.clicked() || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))) {
+                    self.menu.fly_pick = false;
+                }
+                let hy = left.bottom() + 40.0;
+                let g = fg.layout_no_wrap(tr_en("Back").to_string(), menu::label(), DIM.gamma_multiply(a));
+                let cap = fg.layout_no_wrap("Esc".to_string(), FontId::monospace(11.5), DIM.gamma_multiply(a));
+                let total = cap.size().x + 14.0 + 8.0 + g.size().x;
+                let x = screen.center().x - total * 0.5;
+                let kr = Rect::from_min_size(pos2(x, hy - 11.0), vec2(cap.size().x + 14.0, 22.0));
+                fg.rect_stroke(kr, menu::R_WIDGET, Stroke::new(1.0, Color32::from_white_alpha((46.0 * a) as u8)), egui::StrokeKind::Inside);
+                fg.galley(kr.center() - cap.size() * 0.5, cap, DIM);
+                fg.galley(pos2(kr.right() + 8.0, hy - g.size().y * 0.5), g, DIM);
             }
 
             // The foot: Quit at the left, the gamepad's buttons (or a word on the keys) in the middle.
@@ -181,8 +201,14 @@ impl Game {
             }
             p.text(pos2(screen.right() - 24.0, foot_y), Align2::RIGHT_CENTER, t!("menu.globe_esri_maxar_earthstar_geographics"), FontId::proportional(11.5), FAINT);
         });
+        // while fly asks, only its two cards answer.
+        let press = if picking { press.filter(|t| matches!(t, Tile::Free | Tile::Career)) } else { press };
         match press {
-            Some(Tile::Fly) => self.menu.screen = Screen::Fly,
+            Some(Tile::Fly) => self.menu.fly_pick = true,
+            Some(Tile::Free) => {
+                self.menu.fly_pick = false;
+                self.menu.screen = Screen::Fly;
+            }
             Some(Tile::Aircraft) => self.open_aircraft(hangar_ui::Tab::Mine, Screen::Main),
             Some(Tile::Settings) => {
                 self.menu.set_back = Screen::Main;
@@ -190,14 +216,11 @@ impl Game {
             }
             Some(Tile::Multiplayer) => self.open_settings(settings_ui::Section::Multiplayer, Screen::Main),
             Some(Tile::Logbook) => self.menu.screen = Screen::Logbook,
-            Some(Tile::Career) => self.menu.screen = Screen::Career,
-            Some(Tile::Activities) => self.menu.screen = Screen::Activities,
-            Some(Tile::Again) => {
-                // over the globe, which shows it preparing.
-                self.restore_last_start();
-                self.menu.screen = Screen::Fly;
-                self.begin();
+            Some(Tile::Career) => {
+                self.menu.fly_pick = false;
+                self.menu.screen = Screen::Career;
             }
+            Some(Tile::Activities) => self.menu.screen = Screen::Activities,
             None => {}
         }
         if press.is_some() {
@@ -226,26 +249,6 @@ fn entrance(ctx: &egui::Context) -> impl Fn(usize) -> f32 {
         let x = ((t - 0.07 * i as f32) / 0.55).clamp(0.0, 1.0);
         1.0 - (1.0 - x).powi(4)
     }
-}
-
-/// the fly again bar under fly.
-fn again_button(p: &Painter, r: Rect, resp: &egui::Response, place: &str, plane: &str) {
-    let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
-    p.rect_filled(r, menu::R_WIDGET, menu::mix(Color32::from_rgba_premultiplied(12, 16, 22, 226), Color32::from_rgba_premultiplied(26, 32, 42, 238), lit));
-    p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, menu::mix(Color32::from_white_alpha(26), ACCENT, lit)), egui::StrokeKind::Inside);
-    // a circular arrow.
-    let c = pos2(r.left() + 24.0, r.center().y);
-    let col = menu::mix(TEXT, ACCENT, lit);
-    let pts: Vec<Pos2> = (0..=18).map(|i| {
-        let a = -0.4 + i as f32 / 18.0 * 4.9;
-        c + vec2(a.cos(), a.sin()) * 7.0
-    }).collect();
-    let end = *pts.last().unwrap();
-    p.line(pts, Stroke::new(1.8, col));
-    p.add(egui::Shape::convex_polygon(vec![end + vec2(3.5, -3.5), end + vec2(4.0, 3.0), end + vec2(-2.5, 1.5)], col, Stroke::NONE));
-    p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, t!("menu.fly_again"), menu::label(), menu::mix(TEXT, Color32::WHITE, lit));
-    let g = p.layout_no_wrap(format!("{place}  ·  {plane}"), menu::caption(), DIM);
-    p.galley(pos2(r.right() - 16.0 - g.size().x, r.center().y - g.size().y * 0.5), g, DIM);
 }
 
 /// Multiplayer: a slim bar under the Settings tile, its two people and
@@ -282,25 +285,68 @@ fn activities_bar(p: &Painter, r: Rect, resp: &egui::Response, count: &str) {
     p.galley(pos2(r.right() - 14.0 - g.size().x, r.center().y - g.size().y * 0.5), g, DIM);
 }
 
-/// the career card under fly: wings, the word, the next step, the money and licence.
-fn career_bar(p: &Painter, r: Rect, resp: &egui::Response, line: &str, right: &str) {
+/// free flight: the globe filling the card, the word over its foot.
+fn free_card(p: &Painter, r: Rect, resp: &egui::Response, k: f32, globe: &egui::TextureHandle) {
     let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
-    p.rect_filled(r, menu::R_PANEL, menu::mix(Color32::from_rgba_premultiplied(18, 17, 10, 230), Color32::from_rgba_premultiplied(34, 31, 14, 240), lit));
-    p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0 + lit, menu::mix(ACCENT.gamma_multiply(0.35), ACCENT, lit)), egui::StrokeKind::Inside);
-    p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, ACCENT);
-    let ic = menu::mix(ACCENT.gamma_multiply(0.85), ACCENT, lit);
-    // pilot's wings.
-    let c = pos2(r.left() + 34.0, r.center().y);
-    let st = Stroke::new(1.8, ic);
-    p.circle_filled(c, 5.5, ic);
+    p.rect_filled(r, menu::R_PANEL, Color32::BLACK);
+    cover(p, r.shrink(1.0), globe, vec2(0.72, 0.42), 1.0 - 0.03 * lit, menu::mix(Color32::from_gray(200), Color32::WHITE, lit));
+    gradient(p, Rect::from_min_max(pos2(r.left(), r.top() + r.height() * 0.4), r.max), Color32::TRANSPARENT, Color32::from_black_alpha(220));
+    tile_frame(p, r, lit, false);
+    card_words(p, r, k, lit, tr_en("Free flight"), tr_en("Any aircraft, anywhere on Earth"));
+}
+
+/// career: pilot's wings on a dark gold card, the word, where the career stands.
+fn career_card(p: &Painter, r: Rect, resp: &egui::Response, k: f32, sub: &str) {
+    let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
+    p.rect_filled(r, menu::R_PANEL, menu::mix(Color32::from_rgb(20, 19, 12), Color32::from_rgb(32, 29, 14), lit));
+    let clip = p.with_clip_rect(r.shrink(1.0));
+    let c = pos2(r.center().x, r.top() + r.height() * 0.36);
+    menu::glow(&clip, c, vec2(r.width() * 0.5, r.height() * 0.4), ACCENT.gamma_multiply(0.06 + 0.05 * lit));
+    wings(p, c, 3.0 * k.max(0.7), menu::mix(ACCENT.gamma_multiply(0.8), ACCENT, lit));
+    tile_frame(p, r, lit, false);
+    card_words(p, r, k, lit, tr_en("Career"), sub);
+}
+
+/// a choice card's word and the line under it, bottom left.
+fn card_words(p: &Painter, r: Rect, k: f32, lit: f32, title: &str, sub: &str) {
+    let x = r.left() + 28.0 * k.max(0.7);
+    let y = r.bottom() - 58.0 * k.max(0.7);
+    spaced(p, pos2(x - 2.0, y), Align2::LEFT_BOTTOM, &title.to_uppercase(), menu::bold(44.0 * k.max(0.7)), menu::mix(Color32::WHITE, ACCENT, lit), 2.5 * k);
+    p.text(pos2(x, y + 10.0), Align2::LEFT_TOP, sub, menu::medium(16.0), menu::mix(TEXT, Color32::WHITE, lit));
+}
+
+/// pilot's wings at `c`, `s` times their small size: a badge and swept feathers each side.
+fn wings(p: &Painter, c: Pos2, s: f32, col: Color32) {
     for sx in [-1.0f32, 1.0] {
-        p.line(vec![c + vec2(sx * 7.0, -1.0), c + vec2(sx * 21.0, -7.0), c + vec2(sx * 17.0, -1.0), c + vec2(sx * 21.0, 1.0), c + vec2(sx * 15.0, 4.0), c + vec2(sx * 7.0, 3.0)], st);
+        for i in 0..4 {
+            let f = i as f32;
+            let y = (-5.0 + f * 3.4) * s;
+            let len = (30.0 - f * 6.5) * s;
+            let x0 = 8.0 * s;
+            let tip = c + vec2(sx * (x0 + len), y - (6.0 - f * 1.2) * s);
+            let root = c + vec2(sx * x0, y);
+            let w = (2.4 - f * 0.3) * s * 0.5;
+            p.add(egui::Shape::convex_polygon(vec![root + vec2(0.0, -w), tip, root + vec2(0.0, w)], col, Stroke::NONE));
+        }
     }
-    spaced(p, pos2(r.left() + 66.0, r.center().y - 2.0), Align2::LEFT_BOTTOM, "CAREER", menu::bold(22.0), menu::mix(TEXT, Color32::WHITE, lit), 2.0);
-    let rg = p.layout_no_wrap(right.to_string(), menu::semibold(14.0), ACCENT);
-    let lg = menu::one_line(p, line, menu::label(), menu::mix(DIM, TEXT, lit), r.width() - 66.0 - rg.size().x - 40.0);
-    p.galley(pos2(r.left() + 66.0, r.center().y + 2.0), lg, DIM);
-    p.galley(pos2(r.right() - 18.0 - rg.size().x, r.center().y - rg.size().y * 0.5), rg, ACCENT);
+    p.circle_filled(c, 7.0 * s, col);
+    p.circle_filled(c, 4.0 * s, Color32::from_rgb(20, 19, 12));
+}
+
+/// a picture filling `r`, cropped to its aspect, pushed in by `zoom` (below 1) toward `focus`.
+fn cover(p: &Painter, r: Rect, tex: &egui::TextureHandle, focus: egui::Vec2, zoom: f32, tint: Color32) {
+    let [iw, ih] = tex.size().map(|v| v as f32);
+    let (ta, ia) = (r.width() / r.height(), iw / ih);
+    let uv = if ia > ta {
+        let f = ta / ia;
+        Rect::from_min_max(pos2(0.5 - f * 0.5, 0.0), pos2(0.5 + f * 0.5, 1.0))
+    } else {
+        let f = ia / ta;
+        Rect::from_min_max(pos2(0.0, 0.5 - f * 0.5), pos2(1.0, 0.5 + f * 0.5))
+    };
+    let at = uv.lerp_inside(focus);
+    let uv = Rect::from_min_max(at + (uv.min - at) * zoom, at + (uv.max - at) * zoom);
+    p.image(tex.id(), r, uv, tint);
 }
 
 /// the pilot in the top right: the avatar in its level ring, the name, the rank and level.
@@ -384,21 +430,9 @@ fn fly_tile(p: &Painter, r: Rect, resp: &egui::Response, k: f32, globe: &egui::T
     let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
     let zoom = p.ctx().animate_bool_with_time(resp.id.with("zoom"), lit > 0.5, 0.9);
     p.rect_filled(r, menu::R_PANEL, Color32::BLACK);
-    // Fill the tile, cropping the picture to its aspect.
-    let [iw, ih] = globe.size().map(|v| v as f32);
-    let (ta, ia) = (r.width() / r.height(), iw / ih);
-    let uv = if ia > ta {
-        let f = ta / ia;
-        Rect::from_min_max(pos2(0.5 - f * 0.5, 0.0), pos2(0.5 + f * 0.5, 1.0))
-    } else {
-        let f = ia / ta;
-        Rect::from_min_max(pos2(0.0, 0.5 - f * 0.5), pos2(1.0, 0.5 + f * 0.5))
-    };
-    // A slow push in toward the planet's lit face on hover (eased).
+    // a slow push in toward the planet's lit face on hover (eased).
     let z = 1.0 - 0.035 * (zoom * zoom * (3.0 - 2.0 * zoom));
-    let at = uv.lerp_inside(vec2(0.72, 0.42));
-    let uv = Rect::from_min_max(at + (uv.min - at) * z, at + (uv.max - at) * z);
-    p.image(globe.id(), r.shrink(1.0), uv, menu::mix(Color32::from_gray(222), Color32::WHITE, lit));
+    cover(p, r.shrink(1.0), globe, vec2(0.72, 0.42), z, menu::mix(Color32::from_gray(222), Color32::WHITE, lit));
     // Shades for the words: across from the left, and up from the foot.
     let inner = r.shrink(1.0);
     hgradient(p, Rect::from_min_max(inner.min, pos2(inner.left() + inner.width() * 0.5, inner.bottom())), Color32::from_black_alpha(130), Color32::TRANSPARENT);
@@ -407,7 +441,7 @@ fn fly_tile(p: &Painter, r: Rect, resp: &egui::Response, k: f32, globe: &egui::T
     let x = r.left() + 32.0 * k;
     let base = r.bottom() - 36.0 * k;
     spaced(p, pos2(x - 3.0, base - 30.0 * k), Align2::LEFT_BOTTOM, t!("menu.fly_2"), menu::bold(112.0 * k.max(0.6)), menu::mix(Color32::WHITE, ACCENT, lit), 5.0 * k);
-    p.text(pos2(x, base - 8.0 * k), Align2::LEFT_CENTER, t!("menu.pick_a_place_on_the"), menu::medium(16.5), Color32::from_rgb(220, 226, 234));
+    p.text(pos2(x, base - 8.0 * k), Align2::LEFT_CENTER, tr_en("Free flight or career"), menu::medium(16.5), Color32::from_rgb(220, 226, 234));
     // its key or button, bottom right, on a key cap
     let hc = Color32::from_white_alpha(190);
     match Hint::of("Enter", "A") {

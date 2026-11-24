@@ -279,7 +279,12 @@ impl Game {
             return;
         }
         let screen = ctx.content_rect();
-        let top = if self.mode == crate::Mode::Fly && self.hud_on() { crate::flightui::HEADING_TOP + crate::flightui::HEADING_H + 30.0 } else { 24.0 };
+        // under the notices at the top centre, if any.
+        let top = if self.mode == crate::Mode::Fly && self.hud_on() {
+            crate::flightui::shown(ctx, "notices", egui::Order::Middle).map_or(crate::flightui::HEADING_TOP + crate::flightui::HEADING_H + 10.0, |r| r.bottom() + 8.0)
+        } else {
+            24.0
+        };
         let toasts = self.toasts.clone();
         egui::Area::new(egui::Id::unique("xp_toasts")).order(egui::Order::Tooltip).fixed_pos(screen.min).interactable(false).show(ctx, |ui| {
             let p = ui.painter();

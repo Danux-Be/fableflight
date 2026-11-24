@@ -913,7 +913,7 @@ impl Game {
         }
     }
 
-    /// the last thing said on the radio, under the heading strip for a few seconds.
+    /// the last thing said on the radio, at the bottom centre for a few seconds.
     pub(crate) fn atc_subtitles(&self, ctx: &egui::Context) {
         if !self.atc.on || self.info_open {
             return;
@@ -931,7 +931,9 @@ impl Game {
             Who::Info => egui::Color32::from_rgb(255, 150, 120),
         };
         let w = (screen.width() * 0.5).clamp(360.0, 760.0);
-        egui::Area::new(egui::Id::unique("atc_sub")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_BOTTOM, [0.0, -150.0]).interactable(false).show(ctx, |ui| {
+        // over whatever else sits at the bottom centre.
+        let lift = flightui::bottom_stack(ctx, "atc_sub");
+        egui::Area::new(egui::Id::unique("atc_sub")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_BOTTOM, [0.0, -lift]).interactable(false).show(ctx, |ui| {
             ui.multiply_opacity(a);
             flightui::panel(ui, flightui::glass().inner_margin(10.0), |ui| {
                 ui.set_max_width(w);
