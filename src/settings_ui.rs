@@ -758,12 +758,16 @@ impl Game {
             // Where it stands, and the one button that changes it.
             let (col, line) = self.mp_line();
             // how many fly, if the relay says, else what connecting does.
-            let about = if in_flight && self.mp_on {
+            let about = if !self.mp_on {
+                t!("settings.connect_to_see_the_other").to_string()
+            } else if in_flight {
                 i18n::plural(self.mp_players.len() as u64, "mp.pilots_nearby")
             } else if let Some(n) = self.mp_flying() {
                 t!("settings.on_the_network_they_are", n)
+            } else if self.mp.as_ref().is_some_and(|m| m.status() == mp::Status::Connected) {
+                t!("settings.this_server_does_not_send").to_string()
             } else {
-                t!("settings.connect_to_see_the_other").to_string()
+                String::new()
             };
             let mut flip = false;
             row(ui, t!("settings.multiplayer_status"), &about, |ui| {
@@ -778,6 +782,7 @@ impl Game {
             });
             if flip {
                 self.mp_on = !self.mp_on;
+                self.mp_held = false;
             }
             row(ui, t!("settings.your_name"), t!("settings.shown_to_the_others_left"), |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.mp_name).desired_width(240.0).font(menu::label()).margin(vec2(10.0, 7.0)).char_limit(mp_proto::NAME_MAX).hint_text(t!("settings.your_name")));
