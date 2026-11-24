@@ -880,10 +880,20 @@ impl Game {
                 if key(ui, if self.atc.on { tr_en("ATC on") } else { tr_en("ATC off") }, self.atc.on, 80.0, 24.0).clicked() {
                     self.atc.on = !self.atc.on;
                 }
+                if key(ui, if self.ai.on { tr_en("AI traffic on") } else { tr_en("AI traffic off") }, self.ai.on, 110.0, 24.0).clicked() {
+                    self.ai.on = !self.ai.on;
+                    if !self.ai.on {
+                        self.live.planes.retain(|p| !p.hex.starts_with("~ai"));
+                        self.live.ai = false;
+                    }
+                }
             });
         });
         if self.atc.violations > 0 {
             note(ui, &format!("{}: {}", tr_en("Pilot deviations this flight"), self.atc.violations));
+        }
+        if self.ai.on {
+            note(ui, &format!("{} {}", self.ai.count(), tr_en("game-managed flights in the area")));
         }
         if let Some(r) = asked {
             let cs = self.callsign();
