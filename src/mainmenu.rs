@@ -28,6 +28,8 @@ enum Tile {
     Multiplayer,
     /// the pilot's logbook.
     Logbook,
+    /// the career.
+    Career,
 }
 
 impl Game {
@@ -114,9 +116,19 @@ impl Game {
                 press = Some(Tile::Logbook);
             }
 
-            // under fly: the last start, one press away.
+            // under fly: the career, then the last start, one press away.
+            let cb = Rect::from_min_size(pos2(fly.left(), fly.bottom() + 14.0 * k), vec2(fly.width(), 46.0));
+            let r = ui.interact(cb, ui.scope_id().with("tile_career"), Sense::click());
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr_en("Career")));
+            let mut pc = p.clone();
+            pc.set_opacity(rise(3));
+            let status = if self.career.started { format!("{}  ·  {} {:.0}", crate::career::money(self.career.money), tr_en("reputation"), self.career.rep) } else { tr_en("Start as a student pilot").to_string() };
+            career_bar(&pc, cb, &r, &status);
+            if r.clicked() {
+                press = Some(Tile::Career);
+            }
             if let Some((place, plane)) = &again {
-                let b = Rect::from_min_size(pos2(fly.left(), fly.bottom() + 14.0 * k), vec2(fly.width(), 46.0));
+                let b = Rect::from_min_size(pos2(fly.left(), cb.bottom() + 10.0), vec2(fly.width(), 46.0));
                 let r = ui.interact(b, ui.scope_id().with("again"), Sense::click());
                 r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t!("menu.fly_again")));
                 let mut pg = p.clone();
@@ -157,6 +169,7 @@ impl Game {
             }
             Some(Tile::Multiplayer) => self.open_settings(settings_ui::Section::Multiplayer, Screen::Main),
             Some(Tile::Logbook) => self.menu.screen = Screen::Logbook,
+            Some(Tile::Career) => self.menu.screen = Screen::Career,
             Some(Tile::Again) => {
                 // over the globe, which shows it preparing.
                 self.restore_last_start();
@@ -243,6 +256,24 @@ fn logbook_bar(p: &Painter, r: Rect, resp: &egui::Response, hours: &str) {
     p.line(vec![c + vec2(0.0, -6.0), c + vec2(-8.0, -8.0), c + vec2(-8.0, 6.0), c + vec2(0.0, 8.0), c + vec2(8.0, 6.0), c + vec2(8.0, -8.0), c + vec2(0.0, -6.0), c + vec2(0.0, 8.0)], st);
     p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, t!("profile.logbook"), menu::label(), menu::mix(TEXT, Color32::WHITE, lit));
     let g = p.layout_no_wrap(hours.to_string(), menu::caption(), DIM);
+    p.galley(pos2(r.right() - 14.0 - g.size().x, r.center().y - g.size().y * 0.5), g, DIM);
+}
+
+/// the career bar under fly: wings, the word, the money and reputation.
+fn career_bar(p: &Painter, r: Rect, resp: &egui::Response, status: &str) {
+    let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
+    p.rect_filled(r, menu::R_WIDGET, menu::mix(Color32::from_rgba_premultiplied(12, 16, 22, 226), Color32::from_rgba_premultiplied(26, 32, 42, 238), lit));
+    p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, menu::mix(Color32::from_white_alpha(26), ACCENT, lit)), egui::StrokeKind::Inside);
+    let ic = menu::mix(TEXT, ACCENT, lit);
+    // pilot's wings.
+    let c = pos2(r.left() + 26.0, r.center().y);
+    let st = Stroke::new(1.6, ic);
+    p.circle_stroke(c, 4.0, st);
+    for sx in [-1.0f32, 1.0] {
+        p.line(vec![c + vec2(sx * 5.0, 0.0), c + vec2(sx * 16.0, -5.0), c + vec2(sx * 13.0, 1.0), c + vec2(sx * 5.0, 3.0)], st);
+    }
+    p.text(pos2(r.left() + 50.0, r.center().y), Align2::LEFT_CENTER, tr_en("Career"), menu::label(), menu::mix(TEXT, Color32::WHITE, lit));
+    let g = p.layout_no_wrap(status.to_string(), menu::caption(), DIM);
     p.galley(pos2(r.right() - 14.0 - g.size().x, r.center().y - g.size().y * 0.5), g, DIM);
 }
 

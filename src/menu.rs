@@ -157,6 +157,8 @@ pub enum Screen {
     Settings,
     /// the pilot's logbook (logbook.rs).
     Logbook,
+    /// the career (career.rs).
+    Career,
 }
 
 impl Screen {
@@ -168,6 +170,7 @@ impl Screen {
             "aircraft" | "hangar" | "planes" => Screen::Aircraft,
             "settings" | "options" => Screen::Settings,
             "logbook" | "profile" | "log" => Screen::Logbook,
+            "career" | "jobs" => Screen::Career,
             _ => return None,
         })
     }

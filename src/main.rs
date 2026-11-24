@@ -12,6 +12,7 @@ mod buildings;
 mod aircraft;
 mod cockpit;
 mod copilot;
+mod career;
 mod cars;
 mod crash;
 mod damage;
@@ -1591,6 +1592,9 @@ struct Game {
     /// a folder of FlightGear aircraft to import, and how the last import went (hangar.rs)
     import_path: String,
     import_note: String,
+    /// the career (career.rs), and the job being flown
+    career: career::Career,
+    career_flight: Option<career::Flight>,
 }
 
 /// The launcher's graphics test (`--bench SECONDS`): after a settling time
@@ -1906,7 +1910,7 @@ impl Game {
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
-            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(),
+            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None,
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
             live: live::Live::new(prefs.live_traffic),
@@ -5072,7 +5076,7 @@ impl Game {
             Screen::Fly if self.planner.open => self.planner.open = false,
             Screen::Fly => self.menu.screen = Screen::Main,
             Screen::Settings => self.menu.screen = self.menu.set_back,
-            Screen::Logbook => self.menu.screen = Screen::Main,
+            Screen::Logbook | Screen::Career => self.menu.screen = Screen::Main,
         }
         self.pad_home = true;
         self.egui_ctx.memory_mut(|m| {
@@ -6120,6 +6124,7 @@ impl Game {
         self.time += dt;
         if !in_menu && dt > 0.0 && self.replay.is_none() {
             self.mission_step(dt);
+            self.career_step(dt);
             if !self.crashed {
                 self.ground_step(dt);
             }
@@ -7467,6 +7472,11 @@ impl Game {
                     padui::focus_ring(ctx, menu::ACCENT);
                     return;
                 }
+                menu::Screen::Career => {
+                    self.career_screen(ctx);
+                    padui::focus_ring(ctx, menu::ACCENT);
+                    return;
+                }
                 menu::Screen::Fly => {}
             }
             use egui::{Align2, Color32, FontId, RichText};
@@ -8732,6 +8742,8 @@ impl Game {
             }
             if self.mission.is_some() && self.loading.is_none() {
                 self.mission_card(ctx);
+            } else if self.career_flight.is_some() && self.loading.is_none() {
+                self.job_card(ctx);
             }
             // a ring on each aircraft in range, tags on the nearest that do not overlap.
             if let (true, Some((vp, cam))) = (self.hud_on() && self.live.enabled(), self.live_view) {
