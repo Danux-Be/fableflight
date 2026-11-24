@@ -20,6 +20,7 @@ use crate::geo;
 use crate::world::{TreeRef, World};
 use glam::{DMat3, DQuat, DVec3, Mat4, Vec3};
 
+mod heli;
 mod rocket;
 
 #[derive(Default, Clone, Copy)]
@@ -1537,6 +1538,9 @@ impl Plane {
             }
             self.prop += dt * self.prop_rate;
             return None;
+        }
+        if let Some(rt) = &spec.rotor {
+            return self.step_rotor(dt, c, world, rt);
         }
         if let Engine::Rocket(rk) = &spec.engine {
             return self.step_rocket(dt, c, world, rk);

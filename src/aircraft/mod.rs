@@ -12,6 +12,7 @@
 #![allow(clippy::approx_constant)]
 pub mod ask21;
 pub mod b747;
+pub mod r44;
 pub mod c172;
 pub mod concorde;
 pub mod dr400;
@@ -665,9 +666,30 @@ pub struct Spec {
     /// chase camera distance and the size of its own fine shadow map (m)
     pub cam_dist: f64,
     pub shadow_r: f32,
+    /// a helicopter's rotors (plane/heli.rs flies it instead of the wing)
+    pub rotor: Option<Rotor>,
     /// floats instead of wheels: its legs are pontoons that ride on water and slide on land
     pub floats: bool,
     pub sound: Sound,
+}
+
+/// A helicopter's rotors (plane/heli.rs).
+#[derive(Clone, Debug)]
+pub struct Rotor {
+    /// main rotor radius (m) and its governed speed (rpm)
+    pub radius: f64,
+    pub rpm: f64,
+    /// the most thrust it gives at sea level, full collective, governed speed (N)
+    pub thrust: f64,
+    /// the main rotor's hub and the tail rotor's, body frame
+    pub hub: DVec3,
+    pub tail: DVec3,
+    /// the fuselage's drag area (m²), the cyclic's authority (rad/s² at full stick), the pedals' torque (N m)
+    pub drag_area: f64,
+    pub cyclic: f64,
+    pub pedal: f64,
+    /// never exceed, true airspeed (m/s)
+    pub vne: f64,
 }
 
 /// A downloaded JSBSim aircraft behind a `Spec`.

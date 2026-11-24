@@ -9603,6 +9603,7 @@ fn fly_check(key: Option<&String>) -> i32 {
     custom::load_all();
     aircraft::register(aircraft::c172::floats::spec());
     aircraft::register(aircraft::ask21::spec());
+    aircraft::register(aircraft::r44::spec());
     let Some(spec) = key.and_then(|k| aircraft::by_key(k)) else {
         eprintln!("--fly-check KEY: one of {}", aircraft::list().iter().map(|s| s.keys[0]).collect::<Vec<_>>().join(", "));
         return 1;
@@ -9757,6 +9758,7 @@ fn main() -> anyhow::Result<()> {
     custom::load_all();
     aircraft::register(aircraft::c172::floats::spec());
     aircraft::register(aircraft::ask21::spec());
+    aircraft::register(aircraft::r44::spec());
     let args = parse_args();
     if args.find_storms {
         let cache = dirs::cache_dir().unwrap_or_else(|| PathBuf::from(".")).join("fablegame");
