@@ -22,12 +22,14 @@ pub enum Lic {
     Atpl,
     BizJet,
     Airliner,
-    Sst,
     Display,
+    Night,
+    Multi,
+    Aero,
 }
 
 /// in the order the training page shows them.
-pub const LICS: [Lic; 8] = [Lic::Ppl, Lic::Ir, Lic::Cpl, Lic::BizJet, Lic::Atpl, Lic::Airliner, Lic::Display, Lic::Sst];
+pub const LICS: [Lic; 10] = [Lic::Ppl, Lic::Night, Lic::Ir, Lic::Multi, Lic::Cpl, Lic::Aero, Lic::BizJet, Lic::Atpl, Lic::Airliner, Lic::Display];
 
 /// what a licence needs.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -36,8 +38,6 @@ pub enum Req {
     Lesson(&'static str),
     /// a checkride passed (missions.rs).
     Exam(&'static str),
-    /// a mission flown (missions.rs).
-    Mission(&'static str),
     /// a landing challenge passed at a score (challenge.rs).
     Challenge(&'static str, u32),
     Holds(Lic),
@@ -59,8 +59,10 @@ impl Lic {
             Lic::Atpl => "Airline transport pilot",
             Lic::BizJet => "Business jet type rating",
             Lic::Airliner => "Boeing 747 type rating",
-            Lic::Sst => "Concorde type rating",
             Lic::Display => "Air display team",
+            Lic::Night => "Night rating",
+            Lic::Multi => "Multi-engine rating",
+            Lic::Aero => "Aerobatic rating",
         }
     }
 
@@ -72,8 +74,10 @@ impl Lic {
             Lic::Atpl => "ATPL",
             Lic::BizJet => "G650",
             Lic::Airliner => "B747",
-            Lic::Sst => "CONC",
             Lic::Display => "DISP",
+            Lic::Night => "NGT",
+            Lic::Multi => "ME",
+            Lic::Aero => "AERO",
         }
     }
 
@@ -86,8 +90,10 @@ impl Lic {
             Lic::Atpl => "Command of airliners: the way to the type ratings.",
             Lic::BizJet => "The Gulfstream G650: executive charters, long range cargo and medical flights.",
             Lic::Airliner => "The Boeing 747: airline passengers and freight.",
-            Lic::Sst => "Concorde: supersonic airline service.",
             Lic::Display => "Fighters at air shows.",
+            Lic::Night => "Flying after dark. Needed for the commercial licence.",
+            Lic::Multi => "More than one engine. Needed for jets and airliners.",
+            Lic::Aero => "Loops and rolls. Needed for the air display team.",
         }
     }
 
@@ -96,12 +102,14 @@ impl Lic {
         match self {
             Lic::Ppl => &[Lesson("t1"), Lesson("t2"), Lesson("t3"), Exam("e_ppl")],
             Lic::Ir => &[Holds(Lic::Ppl), Lesson("t4"), Lesson("t6"), Hours(5.0), Exam("e_ir")],
-            Lic::Cpl => &[Holds(Lic::Ppl), Hours(15.0), Jobs(6), Level(5), Exam("e_cpl")],
-            Lic::Atpl => &[Holds(Lic::Cpl), Holds(Lic::Ir), Hours(60.0), Level(15), Rep(1500.0), Challenge("rain", 60)],
-            Lic::BizJet => &[Holds(Lic::Cpl), Holds(Lic::Ir), Lesson("t6"), Fee(150_000.0)],
+            Lic::Cpl => &[Holds(Lic::Ppl), Holds(Lic::Night), Hours(15.0), Jobs(6), Level(5), Exam("e_cpl")],
+            Lic::Atpl => &[Holds(Lic::Cpl), Holds(Lic::Ir), Holds(Lic::Multi), Hours(60.0), Level(15), Rep(1500.0), Challenge("rain", 60)],
+            Lic::BizJet => &[Holds(Lic::Cpl), Holds(Lic::Ir), Holds(Lic::Multi), Lesson("t6"), Fee(150_000.0)],
             Lic::Airliner => &[Holds(Lic::Atpl), Challenge("jumbo", 60), Fee(500_000.0)],
-            Lic::Sst => &[Holds(Lic::Airliner), Rep(3000.0), Mission("m_mach2"), Fee(1_000_000.0)],
-            Lic::Display => &[Holds(Lic::Cpl), Level(12), Rep(800.0), Fee(250_000.0)],
+            Lic::Display => &[Holds(Lic::Aero), Level(12), Rep(800.0), Fee(250_000.0)],
+            Lic::Night => &[Holds(Lic::Ppl), Hours(3.0), Challenge("night", 60), Fee(1_500.0)],
+            Lic::Multi => &[Holds(Lic::Ppl), Hours(10.0), Level(4), Fee(12_000.0)],
+            Lic::Aero => &[Holds(Lic::Cpl), Level(8), Challenge("short", 60), Fee(6_000.0)],
         }
     }
 
@@ -116,12 +124,11 @@ pub enum Class {
     Light,
     BizJet,
     Airliner,
-    Sst,
     Fighter,
     None,
 }
 
-pub const CLASSES: [Class; 5] = [Class::Light, Class::BizJet, Class::Airliner, Class::Sst, Class::Fighter];
+pub const CLASSES: [Class; 4] = [Class::Light, Class::BizJet, Class::Airliner, Class::Fighter];
 
 pub fn class_of(spec: &aircraft::Spec) -> Class {
     let key = spec.keys.first().copied().unwrap_or("");
@@ -138,7 +145,8 @@ pub fn class_of(spec: &aircraft::Spec) -> Class {
         0 | 8 | 10 => Class::Light,
         9 => Class::BizJet,
         1 => Class::Airliner,
-        6 => Class::Sst,
+        // (concorde and the blackbird are not career aircraft)
+        6 => Class::None,
         2..=4 => Class::Fighter,
         7 => Class::None,
         _ if body.contains("747") => Class::Airliner,
@@ -154,7 +162,6 @@ impl Class {
             Class::Light => "Light aircraft",
             Class::BizJet => "Business jet",
             Class::Airliner => "Airliner",
-            Class::Sst => "Supersonic airliner",
             Class::Fighter => "Fighter",
             Class::None => "Not in the career",
         }
@@ -165,7 +172,6 @@ impl Class {
             Class::Light => Some(Lic::Ppl),
             Class::BizJet => Some(Lic::BizJet),
             Class::Airliner => Some(Lic::Airliner),
-            Class::Sst => Some(Lic::Sst),
             Class::Fighter => Some(Lic::Display),
             Class::None => None,
         }
@@ -177,7 +183,6 @@ impl Class {
             Class::Light => 160.0,
             Class::BizJet => 3_200.0,
             Class::Airliner => 16_000.0,
-            Class::Sst => 28_000.0,
             Class::Fighter => 9_000.0,
             Class::None => 0.0,
         }
@@ -190,7 +195,6 @@ impl Class {
     pub fn cruise_kt(self) -> f64 {
         match self {
             Class::Light => 110.0,
-            Class::Sst => 1150.0,
             Class::Fighter => 420.0,
             _ => 460.0,
         }
@@ -202,7 +206,6 @@ impl Class {
             Class::Light => (20.0, 220.0, 1_800.0, false),
             Class::BizJet => (250.0, 2_600.0, 5_000.0, true),
             Class::Airliner => (500.0, 4_500.0, 8_500.0, true),
-            Class::Sst => (1_500.0, 3_400.0, 10_500.0, true),
             Class::Fighter => (40.0, 400.0, 7_000.0, true),
             Class::None => (0.0, 0.0, 0.0, true),
         }
@@ -214,7 +217,6 @@ impl Class {
             Class::Light => (6.0, 180.0),
             Class::BizJet => (24.0, 4_000.0),
             Class::Airliner => (95.0, 25_000.0),
-            Class::Sst => (210.0, 60_000.0),
             Class::Fighter => (60.0, 12_000.0),
             Class::None => (0.0, 0.0),
         }
@@ -237,7 +239,6 @@ pub fn price_of(spec: &aircraft::Spec) -> Option<f64> {
             Class::Light => 120_000.0,
             Class::BizJet => 9_000_000.0,
             Class::Airliner => 30_000_000.0,
-            Class::Sst => 45_000_000.0,
             _ => return None,
         },
     })
@@ -318,7 +319,7 @@ impl Kind {
             Kind::Cargo => &[Class::Light, Class::BizJet, Class::Airliner],
             Kind::Medical => &[Class::Light, Class::BizJet],
             Kind::Charter => &[Class::BizJet],
-            Kind::Airline => &[Class::Airliner, Class::Sst],
+            Kind::Airline => &[Class::Airliner],
             Kind::Display => &[Class::Fighter],
         }
     }
@@ -460,7 +461,6 @@ pub struct View {
     /// the aircraft picked in the briefing (its key).
     pub brief_plane: Option<String>,
     pub filter: Option<Kind>,
-    pub move_to: String,
     /// a word after an action.
     pub note: Option<(String, bool)>,
     /// the debrief of the last job, shown on return.
@@ -522,9 +522,9 @@ fn path() -> Option<PathBuf> {
 /// taken out of a saved career so the rest of it still loads.
 fn prune(mut v: serde_json::Value) -> serde_json::Value {
     use serde_json::Value;
-    const LIC_GONE: [&str; 3] = ["Heli", "Glider", "Recon"];
+    const LIC_GONE: [&str; 4] = ["Heli", "Glider", "Recon", "Sst"];
     const KIND_GONE: [&str; 3] = ["Rescue", "Soaring", "Recon"];
-    const TYPE_GONE: [&str; 3] = ["r44", "ask21", "c172f"];
+    const TYPE_GONE: [&str; 4] = ["r44", "ask21", "c172f", "concorde"];
     let kind_ok = |j: &Value| !j.get("kind").and_then(Value::as_str).is_some_and(|k| KIND_GONE.contains(&k));
     let Some(o) = v.as_object_mut() else { return v };
     if let Some(Value::Array(a)) = o.get_mut("lics") {
@@ -906,7 +906,6 @@ pub fn class_parse(s: &str) -> Class {
     match s {
         "BizJet" => Class::BizJet,
         "Airliner" => Class::Airliner,
-        "Sst" => Class::Sst,
         "Fighter" => Class::Fighter,
         _ => Class::Light,
     }
@@ -1010,7 +1009,6 @@ impl Game {
         let _ = self.plan.add_route(&route, Some((a.lat, a.lon)));
         self.plan.cruise_ft = match c {
             Class::Light => 4_500.0,
-            Class::Sst => 55_000.0,
             Class::Fighter => 15_000.0,
             _ => 35_000.0_f64,
         }
@@ -1200,7 +1198,7 @@ impl Game {
         let title = |id: &str| crate::missions::by_id(id).map_or(id.to_string(), |m| tr_en(m.title).to_string());
         match r {
             // (the button beside it says lesson, checkride or mission)
-            Req::Lesson(id) | Req::Exam(id) | Req::Mission(id) => (best.contains_key(id), title(id)),
+            Req::Lesson(id) | Req::Exam(id) => (best.contains_key(id), title(id)),
             Req::Challenge(id, min) => {
                 let c = crate::challenge::by_id(id).map(|i| &crate::challenge::ALL[i]);
                 let top = self.challenge_records.top(id).unwrap_or(0);
@@ -1314,7 +1312,7 @@ mod tests {
         for l in LICS {
             for r in l.reqs() {
                 match r {
-                    Req::Lesson(id) | Req::Exam(id) | Req::Mission(id) => assert!(crate::missions::by_id(id).is_some(), "{l:?}: {id}"),
+                    Req::Lesson(id) | Req::Exam(id) => assert!(crate::missions::by_id(id).is_some(), "{l:?}: {id}"),
                     Req::Challenge(id, _) => assert!(crate::challenge::by_id(id).is_some(), "{l:?}: {id}"),
                     _ => {}
                 }

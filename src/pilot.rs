@@ -115,6 +115,8 @@ pub static BADGES: &[Badge] = &[
     b("flawless", "Flawless", "A five star career job.", 400),
     b("owner", "Aircraft owner", "Buy an aircraft.", 400),
     b("chief_pilot", "Chief pilot", "Hire a pilot for your company.", 400),
+    b("dawn", "Dawn patrol", "Take off between five and seven in the morning.", 200),
+    b("marathon", "Marathon", "Stay in the air for three hours in one flight.", 500),
 ];
 
 pub fn badge(id: &str) -> Option<&'static Badge> {
@@ -202,6 +204,10 @@ impl Game {
             self.award(&format!("{} {}", tr_en("First flight in the"), name), 100);
         }
         self.unlock("first_flight");
+        let lon = geo::pos_to_lla(self.plane.pos).1.to_degrees();
+        if (5.0..7.0).contains(&(self.utc + lon / 15.0).rem_euclid(24.0)) {
+            self.unlock("dawn");
+        }
         self.award(tr_en("Take-off"), 25);
     }
 
@@ -236,6 +242,9 @@ impl Game {
         }
         if f.distance / 1852.0 >= 1000.0 && f.outcome != Outcome::Crashed {
             self.unlock("long_haul");
+        }
+        if f.air_time >= 3.0 * 3600.0 && f.outcome != Outcome::Crashed {
+            self.unlock("marathon");
         }
         self.sweep_badges();
     }

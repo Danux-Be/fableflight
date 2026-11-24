@@ -500,20 +500,15 @@ impl Game {
             flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(14, 12)), |ui| {
                 ui.set_width(300.0);
                 ui.spacing_mut().item_spacing.y = 4.0;
-                let what = match m.cat {
-                    Cat::Tutorial => tr_en("TUTORIAL"),
-                    Cat::Exam => tr_en("CHECKRIDE"),
-                    Cat::Mission => tr_en("MISSION"),
-                };
+                // the title, and the step it is on beside it.
                 ui.horizontal(|ui| {
-                    flightui::tag(ui, what);
+                    ui.label(RichText::new(tr_en(m.title)).font(menu::semibold(16.0)).color(Color32::WHITE));
                     if !done && failed.is_none() {
                         menu::at_right(ui, "mission_step", |ui| {
-                            ui.label(RichText::new(format!("{} / {n}", step + 1)).font(menu::data()).color(flightui::SOFT));
+                            ui.label(RichText::new(format!("{} / {n}", step + 1)).font(menu::label()).color(flightui::SOFT));
                         });
                     }
                 });
-                ui.label(RichText::new(tr_en(m.title)).font(menu::semibold(16.0)).color(Color32::WHITE));
                 ui.add_space(4.0);
                 if let Some(why) = &failed {
                     result_line(ui, tr_en("Not passed"), menu::BAD);

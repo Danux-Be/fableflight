@@ -28,7 +28,6 @@ enum Act {
     Hire(Hire),
     Fire(usize),
     Assign(usize, Option<String>),
-    MoveBase(String, f64),
     CloseDebrief,
     NewCareer,
 }
@@ -44,11 +43,6 @@ fn tab_name(t: Tab) -> &'static str {
         Tab::Company => tr_en("Company"),
         Tab::Finances => tr_en("Finances"),
     }
-}
-
-/// the cost of moving the base by airline ticket.
-fn move_cost(nm: f64) -> f64 {
-    ((150.0 + nm * 0.35) / 10.0).round() * 10.0
 }
 
 /// the airport's name for a code.
@@ -333,15 +327,6 @@ impl Game {
                     c.save();
                 }
             }
-            Act::MoveBase(code, cost) => {
-                if c.money >= cost {
-                    c.pay(format!("{} {code}", tr_en("Airline ticket to")), -cost);
-                    c.base = code;
-                    c.board.clear();
-                    c.view.move_to.clear();
-                    c.save();
-                }
-            }
             Act::CloseDebrief => c.view.debrief = None,
             Act::NewCareer => {
                 *c = Career::default();
@@ -379,13 +364,13 @@ impl Game {
                     if self.career.name.is_empty() && !self.profile.name.is_empty() {
                         self.career.name = self.profile.name.clone();
                     }
-                    ui.add(egui::TextEdit::singleline(&mut self.career.name).desired_width(280.0).hint_text(tr_en("your name")).font(menu::label()).margin(vec2(10.0, 7.0)));
+                    ui.add(egui::TextEdit::singleline(&mut self.career.name).desired_width(280.0).hint_text(tr_en("Your name")).font(menu::label()).margin(vec2(10.0, 7.0)));
                 });
                 menu::form_row(ui, tr_en("Home airport"), tr_en("Any airport by its ICAO code. Half Moon Bay (KHAF) is a good first base."), |ui| {
                     ui.add(egui::TextEdit::singleline(&mut self.career.base).desired_width(110.0).hint_text("KHAF").font(menu::label()).margin(vec2(10.0, 7.0)));
                     let db = Db::get();
                     let found = db.find(&self.career.base).map(|i| db.apts[i as usize].name.clone());
-                    ui.label(RichText::new(found.clone().unwrap_or_else(|| tr_en("unknown code").into())).font(menu::caption()).color(if found.is_some() { DIM } else { BAD }));
+                    ui.label(RichText::new(found.clone().unwrap_or_else(|| tr_en("Unknown code").into())).font(menu::caption()).color(if found.is_some() { DIM } else { BAD }));
                 });
                 ui.add_space(18.0);
                 ui.horizontal(|ui| {
@@ -527,31 +512,6 @@ impl Game {
                     widgets::line(ui, tr_en("Jobs done"), &self.career.jobs_done.to_string(), Color32::WHITE);
                     widgets::line(ui, tr_en("Average rating"), &if avg > 0.0 { format!("{avg:.1} ★") } else { "—".into() }, ACCENT);
                     widgets::line(ui, tr_en("Reputation"), &format!("{:.0}", self.career.rep), Color32::WHITE);
-                });
-                // the base, and moving it.
-                card(ui, 0.0, |ui| {
-                    widgets::title(ui, tr_en("BASE"));
-                    ui.label(RichText::new(format!("{}  {}", self.career.base, apt_name(&self.career.base))).font(menu::semibold(17.0)).color(Color32::WHITE));
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut self.career.view.move_to).desired_width(90.0).hint_text("ICAO").font(menu::label()).margin(vec2(8.0, 6.0)));
-                        let code = self.career.view.move_to.trim().to_uppercase();
-                        let db = Db::get();
-                        let dest = db.find(&code).map(|i| &db.apts[i as usize]);
-                        let from = apt_pos(&self.career.base);
-                        match (dest, from) {
-                            (Some(d), Some(f)) if d.ident != self.career.base => {
-                                let cost = move_cost(career::nm_between(f, (d.lat, d.lon)));
-                                if widgets::action(ui, &format!("{} {}", tr_en("Move for"), money(cost)), false, self.career.money >= cost, 150.0, 32.0).clicked() {
-                                    act = Some(Act::MoveBase(d.ident.clone(), cost));
-                                }
-                            }
-                            _ if !code.is_empty() => {
-                                ui.label(RichText::new(tr_en("unknown code")).font(menu::caption()).color(FAINT));
-                            }
-                            _ => {}
-                        }
-                    });
                 });
                 // the latest money in and out, once there is any.
                 let rows: Vec<_> = self.career.ledger.iter().rev().filter(|e| e.amount != 0.0).take(6).cloned().collect();
@@ -699,7 +659,12 @@ impl Game {
                 ui.add_space(6.0);
             }
             let cw = (w - 16.0) / 2.0;
-            for row in LICS.chunks(2) {
+            // only what can be worked on now: not held, and nothing else needed first.
+            let open: Vec<Lic> = LICS.iter().copied().filter(|l| !self.career.has(*l) && l.reqs().iter().all(|r| !matches!(r, Req::Holds(h) if !self.career.has(*h)))).collect();
+            if open.is_empty() {
+                widgets::empty(ui, tr_en("Every licence is earned."));
+            }
+            for row in open.chunks(2) {
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = 16.0;
                     for l in row {
@@ -775,7 +740,7 @@ impl Game {
                         ui.label(RichText::new(text).font(menu::label()).color(if *ok { DIM } else { TEXT }));
                         if !ok {
                             let fly = match req {
-                                Req::Lesson(id) | Req::Exam(id) | Req::Mission(id) => Some(*id),
+                                Req::Lesson(id) | Req::Exam(id) => Some(*id),
                                 _ => None,
                             };
                             if let Some(id) = fly {
@@ -875,7 +840,7 @@ impl Game {
                 });
             } else {
                 widgets::line(ui, tr_en("Rent"), &format!("{}/h", money(c.rent())), Color32::WHITE);
-                widgets::line(ui, tr_en("Price"), &price.map_or_else(|| tr_en("not for sale").to_string(), money), if price.is_some() { ACCENT } else { DIM });
+                widgets::line(ui, tr_en("Price"), &price.map_or_else(|| tr_en("Not for sale").to_string(), money), if price.is_some() { ACCENT } else { DIM });
                 ui.add_space(6.0);
                 if let Some(pr) = price {
                     let can = rated && self.career.money >= pr;
@@ -898,11 +863,11 @@ impl Game {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing = vec2(16.0, 14.0);
             ui.allocate_ui_with_layout(vec2(lw, h), Layout::top_down(egui::Align::Min), |ui| {
-                widgets::figures(ui, &[(self.career.hires.len().to_string(), tr_en("pilots")), (self.career.owned.len().to_string(), tr_en("aircraft owned")), (format!("{}/h", money(hourly)), tr_en("company earnings"))]);
+                widgets::figures(ui, &[(self.career.hires.len().to_string(), tr_en("Pilots")), (self.career.owned.len().to_string(), tr_en("Aircraft owned")), (format!("{}/h", money(hourly)), tr_en("Company earnings"))]);
                 card(ui, 0.0, |ui| {
                     widgets::title(ui, tr_en("YOUR PILOTS"));
                     if self.career.hires.is_empty() {
-                        widgets::empty(ui, tr_en("Nobody yet. Pilots you hire fly your own aircraft while you are away, and earn for the company every hour, game running or not."));
+                        widgets::empty(ui, tr_en("No pilots yet. Pilots you hire fly your aircraft and earn while you are away."));
                     }
                     let free = self.career.free_planes();
                     for (i, hh) in self.career.hires.iter().enumerate() {
@@ -911,9 +876,10 @@ impl Game {
                             let (r, _) = ui.allocate_exact_size(vec2(44.0, 44.0), Sense::hover());
                             widgets::avatar(ui.painter(), r.center(), 18.0, &hh.name, hh.skill as f32 / 5.0);
                             ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 2.0;
                                 ui.label(RichText::new(&hh.name).font(menu::semibold(15.5)).color(Color32::WHITE));
-                                let plane = hh.plane.as_deref().and_then(aircraft::by_key).map_or(tr_en("no aircraft"), |s| s.name);
-                                ui.label(RichText::new(format!("{} {}  ·  {plane}  ·  {} {}", tr_en("skill"), hh.skill, tr_en("earned"), money(hh.earned))).font(menu::caption()).color(DIM));
+                                let plane = hh.plane.as_deref().and_then(aircraft::by_key).map_or(tr_en("No aircraft"), |s| s.name);
+                                ui.label(RichText::new(format!("{} {}  ·  {plane}  ·  {} {}", tr_en("Skill"), hh.skill, money(hh.earned), tr_en("earned"))).font(menu::caption()).color(DIM));
                             });
                             menu::at_right(ui, ("hire", i), |ui| {
                                 if widgets::action(ui, tr_en("Let go"), false, true, 90.0, 30.0).clicked() {
@@ -939,9 +905,10 @@ impl Game {
             ui.allocate_ui_with_layout(vec2(rw, h), Layout::top_down(egui::Align::Min), |ui| {
                 card(ui, 0.0, |ui| {
                     widgets::title(ui, tr_en("LOOKING FOR WORK"));
+                    // no candidates to look at until hiring is possible.
                     if !can_hire {
-                        ui.add(egui::Label::new(RichText::new(tr_en("A company needs a commercial pilot licence and an aircraft of your own (Fleet).")).font(menu::label()).color(DIM)).wrap());
-                        ui.add_space(8.0);
+                        widgets::empty(ui, tr_en("To hire pilots, you need a commercial pilot licence and an aircraft of your own."));
+                        return;
                     }
                     for cand in self.career.candidates() {
                         ui.horizontal(|ui| {
@@ -949,12 +916,13 @@ impl Game {
                             let (r, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::hover());
                             widgets::avatar(ui.painter(), r.center(), 16.0, &cand.name, 0.0);
                             ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 2.0;
                                 ui.label(RichText::new(&cand.name).font(menu::semibold(15.0)).color(Color32::WHITE));
-                                ui.label(RichText::new(format!("{} {}  ·  {}/h", tr_en("skill"), cand.skill, money(career::wage(cand.skill)))).font(menu::caption()).color(DIM));
+                                ui.label(RichText::new(format!("{} {}  ·  {} {}", tr_en("Skill"), cand.skill, money(career::wage(cand.skill)), tr_en("an hour"))).font(menu::caption()).color(DIM));
                             });
                             menu::at_right(ui, ("cand", cand.name.as_str()), |ui| {
                                 let fee = career::signing_fee(cand.skill);
-                                if widgets::action(ui, &format!("{} {}", tr_en("Hire"), money_short(fee)), false, can_hire && self.career.money >= fee, 110.0, 30.0).clicked() {
+                                if widgets::action(ui, &format!("{} {}", tr_en("Hire"), money_short(fee)), false, self.career.money >= fee, 110.0, 30.0).clicked() {
                                     act = Some(Act::Hire(cand.clone()));
                                 }
                             });
@@ -973,7 +941,7 @@ impl Game {
         let mut act = None;
         let income: f64 = self.career.ledger.iter().filter(|e| e.amount > 0.0).map(|e| e.amount).sum();
         let spent: f64 = self.career.ledger.iter().filter(|e| e.amount < 0.0).map(|e| -e.amount).sum();
-        widgets::figures(ui, &[(money(self.career.money), tr_en("balance")), (money(income), tr_en("income")), (money(spent), tr_en("spending")), (self.career.jobs_done.to_string(), tr_en("jobs"))]);
+        widgets::figures(ui, &[(money(self.career.money), tr_en("Balance")), (money(income), tr_en("Income")), (money(spent), tr_en("Spending")), (self.career.jobs_done.to_string(), tr_en("Jobs"))]);
         ui.add_space(14.0);
         card(ui, h - 120.0, |ui| {
             widgets::title(ui, tr_en("STATEMENT"));
@@ -1068,7 +1036,7 @@ impl Game {
                             }
                             p.text(pos2(r.left() + 32.0, r.center().y), Align2::LEFT_CENTER, s.name, menu::medium(14.5), Color32::WHITE);
                             let est = (j.dist_nm / c.cruise_kt() + 0.25) * c.rent();
-                            let right = if *owned { format!("{}  ·  {:.0}%", tr_en("yours"), self.career.condition(key) * 100.0) } else { format!("{} ~{}", tr_en("rent"), money(est)) };
+                            let right = if *owned { format!("{}  ·  {:.0}%", tr_en("Yours"), self.career.condition(key) * 100.0) } else { format!("{} ~{}", tr_en("Rent"), money(est)) };
                             p.text(pos2(r.right() - 12.0, r.center().y), Align2::RIGHT_CENTER, right, menu::caption(), if *owned { ACCENT } else { DIM });
                             if resp.clicked() {
                                 self.career.view.brief_plane = Some(key.to_string());

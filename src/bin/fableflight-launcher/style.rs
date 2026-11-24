@@ -59,6 +59,8 @@ pub fn visuals(ctx: &egui::Context) {
     v.slider_trailing_fill = true;
     ctx.set_visuals(v);
     ctx.global_style_mut(|s| {
+        // no text selection anywhere.
+        s.interaction.selectable_labels = false;
         s.spacing.item_spacing = vec2(8.0, 8.0);
         s.spacing.slider_width = 220.0;
         s.text_styles.insert(egui::TextStyle::Body, FontId::proportional(15.0));

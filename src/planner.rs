@@ -5,7 +5,7 @@
 use crate::flightplan::{self, Kind, Leg, Phase, Pick, Waypoint};
 use crate::menu::{self, ACCENT, DIM, FAINT, TEXT};
 use crate::padui::Hint;
-use crate::{airports, navdata, route, simbrief, t, Game, ROUTE_COLOUR};
+use crate::{airports, navdata, route, simbrief, t, tr_en, Game, ROUTE_COLOUR};
 use egui::{pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
 use std::sync::mpsc::Receiver;
 
@@ -94,11 +94,6 @@ impl Planner {
     }
 }
 
-/// a button with a word in it, lit when chosen.
-fn chip(ui: &mut egui::Ui, text: &str, on: bool, tip: &str) -> egui::Response {
-    let resp = menu::choice(ui, text, on, 0.0);
-    if tip.is_empty() { resp } else { resp.on_hover_text(tip) }
-}
 
 
 impl Game {
@@ -255,30 +250,32 @@ impl Game {
         let mut close = false;
         egui::Area::new(egui::Id::unique("planner")).anchor(Align2::LEFT_TOP, [M, top]).show(ctx, |ui| {
             ui.set_max_height(h);
-            menu::panel().inner_margin(egui::Margin::symmetric(18, 16)).show(ui, |ui| {
-                ui.set_width(w - 36.0);
-                // title, the aircraft under it, done on the right.
+            menu::panel().inner_margin(egui::Margin::symmetric(20, 18)).show(ui, |ui| {
+                ui.set_width(w - 40.0);
+                // the title, the aircraft beside it, done on the right.
                 ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 2.0;
-                        ui.label(menu::section_text(t!("plan.flight_planner")));
-                        ui.label(RichText::new(self.spec.name).font(menu::caption()).color(DIM));
-                    });
+                    ui.label(RichText::new(t!("plan.flight_planner")).font(menu::semibold(22.0)).color(Color32::WHITE));
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(self.spec.name).font(menu::label()).color(DIM));
                     menu::at_right(ui, "planner done", |ui| {
-                        if menu::choice(ui, t!("plan.done"), false, 84.0).clicked() {
+                        if menu::choice(ui, t!("plan.done"), false, 80.0).clicked() {
                             close = true;
                         }
                     });
                 });
                 ui.add_space(12.0);
-                // made here, or brought from simbrief: two even tabs.
-                let tabs = [(t!("plan.tab_build"), !self.planner.simbrief_tab), ("SimBrief", self.planner.simbrief_tab)];
-                if let Some(k) = menu::choice_grid(ui, 2, &tabs) {
+                // made here, or brought from simbrief.
+                if let Some(k) = tabs(ui, &[t!("plan.tab_build"), "SimBrief"], usize::from(self.planner.simbrief_tab)) {
                     self.planner.simbrief_tab = k == 1;
                 }
-                ui.add_space(6.0);
-                let foot = if self.plan.is_empty() { 60.0 } else { 150.0 };
-                let mut area = egui::ScrollArea::vertical().max_height((h - foot - 130.0).max(140.0)).auto_shrink([false, true]);
+                ui.add_space(16.0);
+                if !self.plan.is_empty() {
+                    self.planner_summary(ui);
+                    ui.add_space(16.0);
+                }
+                let foot = if self.plan.is_empty() { 60.0 } else { 120.0 };
+                let used = if self.plan.is_empty() { 110.0 } else { 190.0 };
+                let mut area = egui::ScrollArea::vertical().max_height((h - foot - used).max(140.0)).auto_shrink([false, true]);
                 if std::mem::take(&mut self.planner.top) {
                     area = area.vertical_scroll_offset(0.0);
                 }
@@ -301,7 +298,7 @@ impl Game {
                     }
                     ui.add_space(6.0);
                 });
-                menu::rule(ui);
+                ui.add_space(12.0);
                 self.planner_foot(ui, start);
             });
         });
@@ -310,43 +307,53 @@ impl Game {
         }
     }
 
-    /// from and to, one under the other on the same label column, each with its runways.
-    fn planner_trip(&mut self, ui: &mut egui::Ui) {
+    /// the plan at a glance: from and to, then distance, time and level.
+    fn planner_summary(&mut self, ui: &mut egui::Ui) {
         let db = airports::Db::get();
+        let dep = self.menu.pick;
+        let from = self.menu.airport.map_or("—".to_string(), |i| db.apts[i as usize].ident.clone());
+        let to = self.plan.destination().map_or("—".to_string(), |w| w.ident.clone());
+        let total = self.plan.total(dep);
+        let gs = self.spec.cruise.max(20.0);
+        egui::Frame::new().fill(Color32::from_white_alpha(6)).stroke(Stroke::new(1.0, Color32::from_white_alpha(16))).inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 12.0;
+                ui.label(RichText::new(&from).font(menu::bold(30.0)).color(Color32::WHITE));
+                // a drawn arrow between them.
+                let (r, _) = ui.allocate_exact_size(vec2(28.0, 30.0), Sense::hover());
+                let (a, b) = (pos2(r.left(), r.center().y), pos2(r.right(), r.center().y));
+                ui.painter().line_segment([a, b], Stroke::new(2.0, ACCENT));
+                ui.painter().line_segment([b, b + vec2(-6.0, -5.0)], Stroke::new(2.0, ACCENT));
+                ui.painter().line_segment([b, b + vec2(-6.0, 5.0)], Stroke::new(2.0, ACCENT));
+                ui.label(RichText::new(&to).font(menu::bold(30.0)).color(Color32::WHITE));
+            });
+            let facts = [format!("{:.0} nm", total / 1852.0), flightplan::hm(total / gs), level(self.plan.cruise_ft), format!("{} {}", self.plan.wps.len(), tr_en("fixes"))];
+            ui.label(RichText::new(facts.join("   ·   ")).font(menu::label()).color(TEXT));
+        });
+    }
+
+    /// from and to, one under the other, each with its runways.
+    fn planner_trip(&mut self, ui: &mut egui::Ui) {
         let mut pick_from = None;
         let mut pick_to = None;
         let mut rw_from = None;
         let mut rw_to = None;
         for from in [true, false] {
             let cur = if from { self.menu.airport } else { self.planner.to };
-            ui.horizontal_top(|ui| {
-                label_col(ui, if from { t!("plan.departure") } else { t!("plan.arrival") }, DIM);
-                ui.vertical(|ui| {
-                    ui.set_width(ui.available_width());
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    let pick = self.planner_airport_box(ui, cur, from);
-                    let rw = cur.and_then(|i| {
-                        let now = if from { self.menu.runway.clone() } else { self.planner.arr_rwy.clone() };
-                        self.planner_runways(ui, i, now.as_deref())
-                    });
-                    if from {
-                        (pick_from, rw_from) = (pick, rw);
-                    } else {
-                        (pick_to, rw_to) = (pick, rw);
-                    }
-                });
+            field_label(ui, if from { tr_en("From") } else { tr_en("To") });
+            let pick = self.planner_airport_box(ui, cur, from);
+            let rw = cur.and_then(|i| {
+                let now = if from { self.menu.runway.clone() } else { self.planner.arr_rwy.clone() };
+                self.planner_runways(ui, i, now.as_deref())
             });
-            ui.add_space(12.0);
-        }
-        if let (Some(a), Some(b)) = (self.menu.airport, self.planner.to) {
-            let (pa, pb) = ((db.apts[a as usize].lat, db.apts[a as usize].lon), (db.apts[b as usize].lat, db.apts[b as usize].lon));
-            let line = t!("plan.great_circle", nm = format!("{:.0}", flightplan::dist(pa, pb) / 1852.0), crs = format!("{:03.0}", flightplan::course(pa, pb)));
-            let wind = t!("plan.wind_now", from = format!("{:03.0}", self.wx.wind_from.rem_euclid(360.0)), kt = format!("{:.0}", self.wx.wind * 1.943_84));
-            ui.horizontal(|ui| {
-                ui.add_space(LABEL_W);
-                ui.label(RichText::new(format!("{line}   ·   {wind}")).font(menu::caption()).color(DIM));
-            });
-            ui.add_space(12.0);
+            if from {
+                (pick_from, rw_from) = (pick, rw);
+            } else {
+                (pick_to, rw_to) = (pick, rw);
+            }
+            ui.add_space(20.0);
         }
         if let Some(i) = pick_from {
             self.planner_set_from(i, None);
@@ -476,9 +483,19 @@ impl Game {
             ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
             for e in &ends {
                 let on = cur == Some(e.ident.as_str());
-                let mark = if wind.as_deref() == Some(e.ident.as_str()) { " ↓" } else { "" };
-                let tip = t!("plan.runway_tip", len = format!("{:.0}", e.len), crs = format!("{:03.0}", e.course));
-                if chip(ui, &format!("{}{mark}", e.ident), on, &tip).clicked() {
+                let into = wind.as_deref() == Some(e.ident.as_str());
+                let mut tip = t!("plan.runway_tip", len = format!("{:.0}", e.len), crs = format!("{:03.0}", e.course));
+                if into {
+                    tip = format!("{tip}\n{}", tr_en("Into the wind."));
+                }
+                let resp = menu::choice_sized(ui, &e.ident, on, 54.0, 30.0);
+                if into {
+                    // a small windsock in the corner.
+                    let c = resp.rect.right_top() + vec2(-8.0, 8.0);
+                    let col = if on { ACCENT } else { menu::LINK };
+                    ui.painter().add(egui::Shape::convex_polygon(vec![c + vec2(-4.0, -2.5), c + vec2(3.0, -1.2), c + vec2(3.0, 1.2), c + vec2(-4.0, 2.5)], col, Stroke::NONE));
+                }
+                if resp.on_hover_text(tip).clicked() {
                     out = Some(e.ident.clone());
                 }
             }
@@ -489,12 +506,16 @@ impl Game {
     /// making the plan from the two airports.
     fn planner_source(&mut self, ui: &mut egui::Ui) {
         let ready = self.menu.airport.is_some() && self.planner.to.is_some() && self.menu.airport != self.planner.to;
-        let label = if self.plan.is_empty() { t!("plan.create_flight_plan") } else { t!("plan.create_it_again") };
-        let tip = if ready { t!("plan.create_hint") } else { t!("plan.pick_both_airports") };
-        if menu::wide_button(ui, label, Hint::None, false, ready).on_hover_text(tip).on_disabled_hover_text(tip).clicked() {
+        if !ready {
+            return;
+        }
+        if self.plan.is_empty() {
+            if menu::wide_button(ui, t!("plan.create_flight_plan"), Hint::None, false, true).on_hover_text(t!("plan.create_hint")).clicked() {
+                self.planner_make();
+            }
+        } else if link(ui, t!("plan.create_it_again")) {
             self.planner_make();
         }
-        // (a missing procedure shows as none in the grid below: no note for it here)
     }
 
     /// simbrief: username, import the latest plan, or plan a new one there.
@@ -543,7 +564,7 @@ impl Game {
         let db = airports::Db::get();
         let (dep, arr) = (self.menu.airport.map(|i| db.apts[i as usize].ident.clone()), self.planner.to.map(|i| db.apts[i as usize].ident.clone()));
         let word = if dep.is_some() && arr.is_some() { t!("plan.plan_this_on_simbrief") } else { t!("plan.open_simbrief") };
-        if link(ui, &format!("{word}  ↗")) {
+        if link(ui, word) {
             let ty = self.spec.keys.first().map(|k| icao_type(k)).unwrap_or_default();
             let url = match (dep, arr) {
                 (Some(a), Some(b)) => simbrief::dispatch_url(&a, &b, ty),
@@ -561,7 +582,7 @@ impl Game {
         let mut change: Option<(Phase, Option<Pick>)> = None;
         section_title(ui, t!("game.procedures"));
         {
-            let rows = [(Phase::Sid, "SID", dep_apt.clone(), self.menu.runway.clone()), (Phase::Star, "STAR", dest_apt.clone(), self.planner.arr_rwy.clone()), (Phase::App, "APP", dest_apt.clone(), None)];
+            let rows = [(Phase::Sid, tr_en("Departure"), dep_apt.clone(), self.menu.runway.clone()), (Phase::Star, tr_en("Arrival"), dest_apt.clone(), self.planner.arr_rwy.clone()), (Phase::App, tr_en("Approach"), dest_apt.clone(), None)];
             for (k, (phase, tag, apt, rwy)) in rows.into_iter().enumerate() {
                 if k > 0 {
                     ui.add_space(4.0);
@@ -581,7 +602,7 @@ impl Game {
                     ui.set_min_height(32.0);
                     label_col(ui, tag, phase_colour(phase));
                     let Some(apt) = apt else {
-                        ui.label(RichText::new("—").font(menu::body()).color(FAINT));
+                        ui.label(RichText::new(t!("game.none")).font(menu::label()).color(FAINT));
                         return;
                     };
                     // only the ones that serve the chosen runway.
@@ -593,7 +614,7 @@ impl Game {
                         _ => true,
                     }).collect();
                     if names.is_empty() {
-                        ui.label(RichText::new(t!("game.none")).font(menu::caption()).color(FAINT));
+                        ui.label(RichText::new(t!("game.none")).font(menu::label()).color(FAINT));
                         return;
                     }
                     let name_w = ((ui.available_width() - 6.0) * 0.5).max(110.0);
@@ -789,25 +810,9 @@ impl Game {
 
     /// the figures, the cruise level, and the way into the air.
     fn planner_foot(&mut self, ui: &mut egui::Ui, start: &mut bool) {
-        let dep = self.menu.pick;
         if !self.plan.is_empty() {
-            let total = self.plan.total(dep);
-            let gs = self.spec.cruise.max(20.0);
-            let fl = self.plan.cruise_ft;
-            let lvl = if fl >= 18_000.0 { format!("FL{:03.0}", fl / 100.0) } else { format!("{fl:.0} ft") };
-            let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
-            let p = ui.painter();
-            let cells = [(t!("plan.distance"), format!("{:.0} nm", total / 1852.0)), (t!("plan.time"), flightplan::hm(total / gs))];
-            let cw = r.width() / 2.0;
-            for (k, (cap, v)) in cells.iter().enumerate() {
-                let x = r.left() + cw * k as f32;
-                p.text(pos2(x, r.top()), Align2::LEFT_TOP, *cap, menu::caption(), DIM);
-                p.text(pos2(x, r.bottom()), Align2::LEFT_BOTTOM, v, menu::semibold(20.0), Color32::WHITE);
-            }
-            ui.add_space(8.0);
-            let _ = lvl;
-            menu::slider(ui, t!("game.cruise"), t!("plan.cruise_hint"), &mut self.plan.cruise_ft, menu::Scale::new(1000.0, 60000.0).step(1000.0), |fl| if fl >= 18_000.0 { format!("FL{:03.0}", fl / 100.0) } else { format!("{fl:.0} ft") });
-            ui.add_space(8.0);
+            menu::slider_inline(ui, t!("game.cruise"), &mut self.plan.cruise_ft, menu::Scale::new(1000.0, 60000.0).step(1000.0), level);
+            ui.add_space(12.0);
         }
         let ready = self.menu.pick.is_some() && !self.menu.starting;
         let db = airports::Db::get();
@@ -830,37 +835,83 @@ fn phase_colour(p: Phase) -> Color32 {
     }
 }
 
-/// the width of the planner's label column: from, to, sid, star, app.
-const LABEL_W: f32 = 92.0;
+/// the width of the procedures' label column.
+const LABEL_W: f32 = 104.0;
 
-/// a row's label in the planner's label column, set to line up with a field beside it.
+/// a procedure's name in the label column, a dot in its colour on the map before it.
 fn label_col(ui: &mut egui::Ui, text: &str, col: Color32) {
-    let (r, _) = ui.allocate_exact_size(vec2(LABEL_W - 6.0, 36.0), Sense::hover());
-    let g = menu::one_line(ui.painter(), &text.to_uppercase(), menu::section_title(), col, r.width() - 4.0);
-    ui.painter().galley(pos2(r.left(), r.center().y - g.size().y * 0.5), g, col);
+    let (r, _) = ui.allocate_exact_size(vec2(LABEL_W - 6.0, 32.0), Sense::hover());
+    ui.painter().circle_filled(pos2(r.left() + 4.0, r.center().y), 4.0, col);
+    let g = menu::one_line(ui.painter(), text, menu::label(), TEXT, r.width() - 18.0);
+    ui.painter().galley(pos2(r.left() + 16.0, r.center().y - g.size().y * 0.5), g, TEXT);
+}
+
+/// a field's name over it.
+fn field_label(ui: &mut egui::Ui, text: &str) {
+    ui.label(RichText::new(text).font(menu::label()).color(DIM));
+    ui.add_space(6.0);
+}
+
+/// a cruise level as pilots say it.
+fn level(fl: f64) -> String {
+    if fl >= 18_000.0 { format!("FL{:03.0}", fl / 100.0) } else { format!("{fl:.0} ft") }
+}
+
+/// underline tabs: the words, the chosen one lit with a bar under it.
+fn tabs(ui: &mut egui::Ui, names: &[&str], cur: usize) -> Option<usize> {
+    let mut hit = None;
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+    ui.painter().hline(row.x_range(), row.bottom() - 0.5, Stroke::new(1.0, menu::LINE_HI));
+    let mut x = row.left();
+    for (k, name) in names.iter().enumerate() {
+        let g = ui.painter().layout_no_wrap(name.to_string(), menu::medium(15.5), TEXT);
+        let r = Rect::from_min_max(pos2(x, row.top()), pos2(x + g.size().x, row.bottom()));
+        let resp = ui.interact(r.expand2(vec2(8.0, 0.0)), ui.scope_id().with(("plan_tab", k)), Sense::click());
+        let lit = menu::ease(ui.ctx(), resp.id, resp.hovered());
+        let col = if k == cur { Color32::WHITE } else { menu::mix(DIM, TEXT, lit) };
+        ui.painter().galley(pos2(r.left(), r.top() + 2.0), g, col);
+        if k == cur {
+            ui.painter().rect_filled(Rect::from_min_max(pos2(r.left(), row.bottom() - 2.0), pos2(r.right(), row.bottom())), 0.0, ACCENT);
+        }
+        if resp.clicked() {
+            hit = Some(k);
+        }
+        x = r.right() + 28.0;
+    }
+    hit
 }
 
 /// space between the planner's sections.
 fn gap(ui: &mut egui::Ui) {
-    ui.add_space(18.0);
+    ui.add_space(24.0);
 }
 
-/// a small caps title over a section.
+/// a title over a section.
 fn section_title(ui: &mut egui::Ui, title: &str) {
-    ui.label(menu::section_text(title).color(DIM));
-    ui.add_space(8.0);
+    ui.label(RichText::new(sentence(title)).font(menu::semibold(16.0)).color(Color32::WHITE));
+    ui.add_space(10.0);
+}
+
+/// a title in sentence case: the first letter up, the rest as written unless it was all caps.
+fn sentence(s: &str) -> String {
+    if s.chars().any(|c| c.is_lowercase()) {
+        return s.to_string();
+    }
+    let low = s.to_lowercase();
+    let mut c = low.chars();
+    c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
 }
 
 /// a section title with links on the right, all on one line.
 fn header(ui: &mut egui::Ui, title: &str, links: impl FnOnce(&mut egui::Ui)) {
     ui.horizontal(|ui| {
-        ui.label(menu::section_text(title).color(DIM));
+        ui.label(RichText::new(sentence(title)).font(menu::semibold(16.0)).color(Color32::WHITE));
         menu::at_right(ui, title, |ui| {
             ui.spacing_mut().item_spacing.x = 14.0;
             links(ui);
         });
     });
-    ui.add_space(8.0);
+    ui.add_space(10.0);
 }
 
 /// a quiet box around a section.

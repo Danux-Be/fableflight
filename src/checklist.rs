@@ -592,8 +592,8 @@ fn list_row(ui: &mut egui::Ui, name: &str, done: usize, of: usize, on: bool, w: 
     let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
     let p = ui.painter();
     if on {
-        p.rect_filled(r, 0.0, Color32::from_white_alpha(14));
-        p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, flightui::LIT);
+        p.rect_filled(r, 0.0, flightui::LIT.gamma_multiply(0.14));
+        p.rect_stroke(r, 0.0, Stroke::new(1.0, flightui::LIT.gamma_multiply(0.5)), egui::StrokeKind::Inside);
     } else if lit > 0.0 {
         p.rect_filled(r, 0.0, Color32::from_white_alpha((8.0 * lit) as u8));
     }
@@ -626,7 +626,6 @@ fn item_row(ui: &mut egui::Ui, what: &str, state: &str, done: bool, next: bool) 
     let p = ui.painter();
     if next {
         p.rect_filled(r, 0.0, flightui::LIT.gamma_multiply(0.10));
-        p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, flightui::LIT);
     }
     if lit > 0.0 {
         p.rect_filled(r, 0.0, Color32::from_white_alpha((10.0 * lit) as u8));

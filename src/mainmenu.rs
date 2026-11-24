@@ -150,7 +150,7 @@ impl Game {
                 self.pad_home_focus(&r);
                 let mut pf = fg.clone();
                 pf.set_opacity(a);
-                free_card(&pf, left, &r, k, &globe);
+                free_card(&pf, left, &r, k);
                 if r.clicked() {
                     press = Some(Tile::Free);
                 }
@@ -285,14 +285,49 @@ fn activities_bar(p: &Painter, r: Rect, resp: &egui::Response, count: &str) {
     p.galley(pos2(r.right() - 14.0 - g.size().x, r.center().y - g.size().y * 0.5), g, DIM);
 }
 
-/// free flight: the globe filling the card, the word over its foot.
-fn free_card(p: &Painter, r: Rect, resp: &egui::Response, k: f32, globe: &egui::TextureHandle) {
+/// free flight: an aircraft over a globe on a dark blue card, the word, the line under it.
+fn free_card(p: &Painter, r: Rect, resp: &egui::Response, k: f32) {
     let lit = menu::ease(p.ctx(), resp.id, resp.hovered() || resp.has_focus());
-    p.rect_filled(r, menu::R_PANEL, Color32::BLACK);
-    cover(p, r.shrink(1.0), globe, vec2(0.72, 0.42), 1.0 - 0.03 * lit, menu::mix(Color32::from_gray(200), Color32::WHITE, lit));
-    gradient(p, Rect::from_min_max(pos2(r.left(), r.top() + r.height() * 0.4), r.max), Color32::TRANSPARENT, Color32::from_black_alpha(220));
+    let sky = Color32::from_rgb(96, 170, 255);
+    p.rect_filled(r, menu::R_PANEL, menu::mix(Color32::from_rgb(11, 18, 30), Color32::from_rgb(16, 28, 46), lit));
+    let clip = p.with_clip_rect(r.shrink(1.0));
+    let c = pos2(r.center().x, r.top() + r.height() * 0.36);
+    menu::glow(&clip, c, vec2(r.width() * 0.5, r.height() * 0.4), sky.gamma_multiply(0.06 + 0.05 * lit));
+    globe_plane(p, c, 52.0 * k.max(0.7), menu::mix(sky.gamma_multiply(0.85), sky, lit));
     tile_frame(p, r, lit, false);
-    card_words(p, r, k, lit, tr_en("Free flight"), tr_en("Any aircraft, anywhere on Earth"));
+    card_words(p, r, k, lit, tr_en("Free flight"), tr_en("Any aircraft, anywhere on Earth."));
+}
+
+/// the free flight mark: a globe's outline and an aircraft climbing across it.
+fn globe_plane(p: &Painter, c: Pos2, s: f32, col: Color32) {
+    let faint = Stroke::new(1.4, col.gamma_multiply(0.45));
+    p.circle_stroke(c, s, Stroke::new(1.8, col.gamma_multiply(0.7)));
+    // the equator and two meridians, as flattened ellipses.
+    let ellipse = |rx: f32, ry: f32| -> Vec<Pos2> { (0..=48).map(|i| { let a = i as f32 / 48.0 * std::f32::consts::TAU; c + vec2(a.cos() * rx, a.sin() * ry) }).collect() };
+    p.add(egui::Shape::line(ellipse(s, s * 0.32), faint));
+    p.add(egui::Shape::line(ellipse(s * 0.45, s), faint));
+    p.hline(c.x - s..=c.x + s, c.y, faint);
+    // the aircraft from above, nose to the upper right, over the globe.
+    let rot = -0.785f32;
+    let (sn, cs) = rot.sin_cos();
+    let at = c + vec2(s * 0.15, -s * 0.1);
+    let u = s * 0.95;
+    let pt = |x: f32, y: f32| at + vec2(x * cs - y * sn, x * sn + y * cs) * u;
+    let shapes: [&[(f32, f32)]; 6] = [
+        &[(-0.06, -0.62), (0.0, -0.78), (0.06, -0.62), (0.06, 0.62), (-0.06, 0.62)],
+        &[(-0.06, -0.18), (-0.06, 0.08), (-0.82, 0.22), (-0.82, 0.1)],
+        &[(0.06, -0.18), (0.82, 0.1), (0.82, 0.22), (0.06, 0.08)],
+        &[(-0.05, 0.46), (-0.05, 0.62), (-0.3, 0.7), (-0.3, 0.62)],
+        &[(0.05, 0.46), (0.3, 0.62), (0.3, 0.7), (0.05, 0.62)],
+        &[(-0.06, -0.62), (0.06, -0.62), (0.06, -0.5), (-0.06, -0.5)],
+    ];
+    // a dark cut round it so it reads over the lines.
+    for sh in shapes {
+        p.add(egui::Shape::convex_polygon(sh.iter().map(|&(x, y)| pt(x, y)).collect(), col, Stroke::new(3.0, Color32::from_rgb(11, 18, 30))));
+    }
+    for sh in shapes {
+        p.add(egui::Shape::convex_polygon(sh.iter().map(|&(x, y)| pt(x, y)).collect(), col, Stroke::NONE));
+    }
 }
 
 /// career: pilot's wings on a dark gold card, the word, where the career stands.

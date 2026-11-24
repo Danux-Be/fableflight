@@ -171,11 +171,11 @@ impl Game {
                 pa.galley(pos2(r.right() - 30.0 - ng.size().x, by - ng.size().y * 0.5), ng, TEXT);
                 // the figures.
                 widgets::figures(ui, &[
-                    (profile::hours(tot.air_s), tr_en("hours")),
-                    (tot.flights.to_string(), tr_en("flights")),
-                    (tot.landings.to_string(), tr_en("landings")),
-                    (p.airports.len().to_string(), tr_en("airports")),
-                    (tot.best.map_or("—".into(), |b| b.to_string()), tr_en("best landing")),
+                    (profile::hours(tot.air_s), tr_en("Hours")),
+                    (tot.flights.to_string(), tr_en("Flights")),
+                    (tot.landings.to_string(), tr_en("Landings")),
+                    (p.airports.len().to_string(), tr_en("Airports")),
+                    (tot.best.map_or("—".into(), |b| b.to_string()), tr_en("Best landing")),
                 ]);
                 // the latest achievements.
                 card(ui, 0.0, |ui| {

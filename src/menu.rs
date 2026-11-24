@@ -967,6 +967,8 @@ pub fn apply_theme(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
     ctx.all_styles_mut(|s| {
         use egui::{FontFamily, FontId, TextStyle};
+        // words are read, not picked up: no text selection anywhere.
+        s.interaction.selectable_labels = false;
         s.text_styles = [
             (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
             (TextStyle::Body, FontId::new(15.0, FontFamily::Proportional)),

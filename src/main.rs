@@ -2612,13 +2612,11 @@ impl Game {
                 (Some(d), _) => d.clone(),
                 _ => start.as_ref().map(|s| s.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| menu::latlon(lat, lon)),
             };
-            let mut y = pic.bottom() + 18.0 * k;
-            mainmenu::spaced(p, pos2(cx, y), Align2::CENTER_TOP, &spec.name.to_uppercase(), menu::semibold(15.0 * k), ACCENT.gamma_multiply(a1), 2.0);
-            y += 30.0 * k;
+            let mut y = pic.bottom() + 24.0 * k;
             let tg = p.layout(title, menu::bold(56.0 * k), Color32::WHITE.gamma_multiply(a1), screen.width() * 0.8);
             p.galley(pos2(cx - tg.size().x * 0.5, y), tg.clone(), Color32::WHITE);
             y += tg.size().y + 6.0 * k;
-            let mut facts: Vec<String> = Vec::new();
+            let mut facts: Vec<String> = vec![spec.name.to_string()];
             if let Some(r) = start.as_ref().and_then(|s| s.runway.clone()) {
                 facts.push(t!("load.runway", rwy = r));
             }
