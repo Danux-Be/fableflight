@@ -86,7 +86,7 @@ impl crate::Game {
             let full = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
             ui.painter().with_clip_rect(pic).image(tex.id(), egui::Rect::from_center_size(pic.center(), egui::vec2(iw, iw * 392.0 / 680.0)), full, Color32::WHITE);
             if spec.origin.is_some() {
-                badge(ui.painter(), pic.left_top() + egui::vec2(12.0, 6.0), if spec.ext.is_some() { "FlightGear" } else { "JSBSim" });
+                badge(ui.painter(), pic.left_top() + egui::vec2(12.0, 6.0), if is_custom(spec) { "Custom" } else if spec.ext.is_some() { "FlightGear" } else { "JSBSim" });
             }
             if resp.hovered() {
                 ui.painter().rect_filled(pic, 0.0, Color32::from_black_alpha(90));
@@ -343,7 +343,7 @@ impl crate::Game {
         let img = egui::Rect::from_center_size(stage.center(), egui::vec2(iw, iw * 392.0 / 680.0));
         egui::Image::new(tex).paint_at(ui, img);
         if spec.origin.is_some() {
-            badge(ui.painter(), stage.left_top() + egui::vec2(14.0, 12.0), if spec.ext.is_some() { "FlightGear" } else { "JSBSim" });
+            badge(ui.painter(), stage.left_top() + egui::vec2(14.0, 12.0), if is_custom(spec) { "Custom" } else if spec.ext.is_some() { "FlightGear" } else { "JSBSim" });
         }
         if chosen {
             // the aircraft you will fly gets a mark in the corner.
@@ -740,6 +740,9 @@ impl crate::Game {
 
 /// What kind of aircraft, for the list: built in, or where it came from.
 fn kind_line(spec: &Spec) -> String {
+    if let (true, Some(o)) = (is_custom(spec), spec.origin) {
+        return format!("{} {}", tr_en("Made from files, on the"), o.body);
+    }
     match spec.origin {
         Some(o) if spec.ext.is_some() => t!("hangar.downloaded_2", o.license),
         Some(o) => t!("hangar.drawn_as_the", o.body),
@@ -749,6 +752,9 @@ fn kind_line(spec: &Spec) -> String {
 
 /// Under the name on the big view.
 fn origin_line(spec: &Spec) -> String {
+    if let (true, Some(o)) = (is_custom(spec), spec.origin) {
+        return format!("{} {}  ·  {}", tr_en("Made from files, on the"), o.body, o.license);
+    }
     match spec.origin {
         Some(o) if spec.ext.is_some() => t!("hangar.downloaded_from_flightgears_collection", o.license),
         Some(o) => t!("hangar.from_flightgears_collection_drawn_as", o.body, o.license),
@@ -813,4 +819,9 @@ fn badge(p: &egui::Painter, at: egui::Pos2, text: &str) {
     p.rect_filled(r, menu::R_WIDGET, Color32::from_rgba_premultiplied(0, 0, 0, 150));
     p.rect_stroke(r, menu::R_WIDGET, Stroke::new(1.0, menu::LINE_HI), egui::StrokeKind::Inside);
     p.galley(r.min + egui::vec2(7.0, 2.0), g, TEXT);
+}
+
+/// made from files in the custom folder (custom.rs), not downloaded.
+fn is_custom(spec: &Spec) -> bool {
+    spec.keys.first().is_some_and(|k| k.starts_with("custom:"))
 }

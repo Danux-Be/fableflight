@@ -1133,7 +1133,7 @@ fn own_geometry(s: &mut Spec, base: &Spec, j: &jsbsim::Aircraft, fg: &FgFiles, f
         s.gear = Box::leak(legs.into_boxed_slice());
         s.gear_rate = if bogeys.iter().any(|c| c.retractable) { base.gear_rate.max(1.0 / 6.0) } else { 0.0 };
     }
-    s.ext = Some(Box::leak(Box::new(crate::fgmodel::Ext { dir: fg.dir.clone(), fg_dir: folder.to_string(), model: fg.model.clone(), origin, steer_max: s.steer_max as f32, travel, span: span as f32 })));
+    s.ext = Some(Box::leak(Box::new(crate::fgmodel::Ext { dir: fg.dir.clone(), fg_dir: folder.to_string(), model: fg.model.clone(), origin, steer_max: s.steer_max as f32, travel, span: span as f32, gltf: [1.0, 0.0] })));
     if let Some(still) = fg.still {
         s.still = still;
     }
