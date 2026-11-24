@@ -62,6 +62,15 @@ cargo build --release --locked
 - **SimBrief:** enter your SimBrief username or pilot ID in the planner and **Import latest** loads your last OFP: departure and arrival runways, every navlog fix worldwide with its position, the cruise level, block fuel and payload. **Plan this flight on SimBrief** opens SimBrief's dispatch page with the airports filled in. `--simbrief USER` imports at start.
 - **Autopilot:** an on-screen panel under the heading tape with the modes and four two-ring knobs (heading, altitude, vertical speed, speed): the inner ring turns in fine steps, the outer ring (or Shift) in coarse steps, by dragging round or with the wheel; a click on the middle sets it to what the aircraft is doing. Set a new altitude and it climbs or descends to it. Engaged with a flight plan it follows it in GPS, carries on climbing to the cruise level, and on the approach tunes the ILS and arms APR.
 - **Logbook:** flight time from lift off to the last touchdown, flights, landings, distance, hours by aircraft and airports visited, on the main menu's **Logbook**. Kept in `profile.json` next to the settings.
+- **Career:** start as a student pilot with $15,000 at a home airport. The tutorials earn the private licence; hours, jobs and reputation bring the instrument, commercial and airline transport licences, and type ratings (bought as training) open the Gulfstream, the 747, Concorde, the air display team and the SR-71. The job board offers passengers, cargo, ferry, medical, aerial photography and display flights to real airports in range; each pays by how it went (on time, the landing, the controllers' word) less fuel, landing fees and rental, and leaves you where it ended. Rent or buy aircraft. Kept in `career.json`.
+- **Tutorials and challenges:** six tutorials (first flight, landing, engine start, radio navigation, talking to ATC, autopilot and ILS), twelve landing challenges at famous airports (Courchevel, Lukla, Saba, St Barth, Maho Beach, Gibraltar, Innsbruck, London City, Paro...) scored on the touchdown, and missions, in the pause menu's **Tutorials and challenges**.
+- **ATC:** a COM radio with the airports' real frequencies (OurAirports), ATIS, clearance delivery, ground, tower, departure and approach in text: clearances, taxi, takeoff and landing clearances, handoffs, CTAF calls at uncontrolled fields, and pilot deviations noted. The **ATC** page of the flight menu; subtitles on screen.
+- **Checklists:** the normal checklists of each type (after the makers' handbooks), on the flight menu's **Checklist**; items the sim can see tick themselves.
+- **Ground services:** start at a stand, then pushback (pick the way the tail goes), a jet bridge that drives to the door or stairs, fuel, boarding and baggage, on the flight menu's **Ground** page.
+- **Saved flights and replay:** save the flight and load it back later, and watch the last half hour again (pause, speeds, scrubbing) and fly on from any moment: the pause menu's **Flights and replay**.
+- **AI traffic:** game-managed airliners, regionals and light aircraft fly between real airports around you, beside the live traffic. On and off in the ATC page.
+- **Icing:** ice builds on the wings and the windshield in cloud or rain below freezing, over the pitot without its heat, and in a piston engine's carburettor in damp air: pitot heat (`F8`), anti ice (`Home`) and carburettor heat (`F7`).
+- **Seasons:** autumn colours, bare winter trees, the spring's fresh green and dormant grass by latitude and date, beside the snow cover.
 - **Contrails:** jets leave ice trails above about FL250 where the air is colder than the contrail threshold (about −40 °C), short in dry air and spreading into lasting cirrus in moist air, drifting with the wind and lit by the low sun at dawn and dusk. Live traffic up high leaves them too.
 - **Mouse yoke:** `J` turns it on: the pointer becomes a dot and its offset from the centre is the stick, the wheel is the throttle.
 - **Head tracking:** run [OpenTrack](https://github.com/opentrack/opentrack) (TrackIR, webcams, phones) with the output set to *UDP over network*, `127.0.0.1` port `4242`, and the cockpit view turns and leans with your head. `FABLE_OPENTRACK_PORT` picks another port.
@@ -127,6 +136,13 @@ When using optional Google Maps imagery/3D tiles, prefer setting the `FABLE_GOOG
 - **Invalid command-line flags:** Run `fablegame --help` to see all supported options.
 - **The game stops while starting from the launcher:** the launcher shows the game's last log lines, and the full log of the last run is in the cache folder as `last-run.log` (Home → Open the last game log).
 
+## Not yet
+
+- **In-flight VFR map:** the full-size interactive map is in PR #107.
+- **Turbulence and winds aloft:** in PRs #83 and #85.
+- **VR:** OpenXR needs the renderer to draw both eyes through the headset's swapchain; not started. Head tracking works through OpenTrack (above).
+- **JSBSim inside the game:** see [docs/jsbsim.md](docs/jsbsim.md).
+
 ## Multiplayer
 
 Connect from the **Multiplayer** settings. To host a relay:
@@ -143,7 +159,7 @@ Read [docs/relay.md](docs/relay.md) for more info.
 
 The source code is licensed under the MIT License (see [LICENSE](LICENSE)). Bundled data and media assets include:
 
-- **Airports & navigation aids (`assets/airports.tsv.gz`, `assets/navaids.tsv.gz`):** Derived from [OurAirports](https://ourairports.com/data/) (Public Domain).
+- **Airports, navigation aids & radio frequencies (`assets/airports.tsv.gz`, `assets/navaids.tsv.gz`, `assets/frequencies.tsv.gz`):** Derived from [OurAirports](https://ourairports.com/data/) (Public Domain); `assets/mkfreq.py` rebuilds the frequencies.
 - **Night lights (`assets/night_lights.bin`):** Block-wise zlib-compressed global radiance tiles packed from NASA Earth Observatory's Black Marble 2016 dataset (Public Domain).
 - **Fonts (`assets/fonts/`):** Barlow and IBM Plex Mono, licensed under the SIL Open Font License 1.1 (see `assets/fonts/OFL-Barlow.txt` and `assets/fonts/OFL-IBMPlexMono.txt`).
 - **AMD FidelityFX Super Resolution:** `src/shaders/fsr3.wgsl` and the FSR 1/RCAS functions in `src/shaders/post.wgsl` are ported from AMD's FSR SDK v2.4.0 (MIT; notice in [docs/upscaling.md](docs/upscaling.md)). AMD's FSR 4 runtime is not bundled: it is downloaded from AMD at the player's request, under AMD's licence.
