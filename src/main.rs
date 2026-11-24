@@ -7828,7 +7828,7 @@ impl Game {
                 }
                 menu::Screen::Fly => {}
             }
-            use egui::{Align2, Color32, FontId, RichText};
+            use egui::{Align2, Color32, RichText};
             let ppp = ctx.pixels_per_point();
             // With a gamepad, X starts at the crosshair in the middle of the screen.
             let aim = padui::active().then(|| egui::pos2(w * 0.5 / ppp, h * 0.5 / ppp));
