@@ -497,7 +497,7 @@ impl Game {
         let (step, n, done, failed, rating) = (run.step, m.steps.len(), run.done, run.failed.clone(), run.rating);
         let top = if self.hud_on() { flightui::right_top(ctx) } else { 24.0 };
         egui::Area::new(egui::Id::unique("mission_card")).anchor(egui::Align2::RIGHT_TOP, [-14.0, top]).show(ctx, |ui| {
-            flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(14, 12)), |ui| {
+            flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(16, 12)), |ui| {
                 ui.set_width(300.0);
                 ui.spacing_mut().item_spacing.y = 4.0;
                 // the title, and the step it is on beside it.

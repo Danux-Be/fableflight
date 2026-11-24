@@ -791,7 +791,7 @@ pub fn button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 
 /// Even buttons in `cols` columns filling the width: the one clicked, if any.
 pub fn choice_grid(ui: &mut egui::Ui, cols: usize, items: &[(&str, bool)]) -> Option<usize> {
-    let gap = 6.0;
+    let gap = 8.0;
     let cols = cols.max(1);
     let w = ((ui.available_width() - gap * (cols as f32 - 1.0)) / cols as f32).floor();
     let mut hit = None;
@@ -1033,7 +1033,7 @@ pub fn apply_theme(ctx: &egui::Context) {
 
 /// A panel frame in the shared style.
 pub fn panel() -> egui::Frame {
-    egui::Frame::new().fill(PANEL).corner_radius(R_PANEL).inner_margin(20.0).stroke(Stroke::new(1.0, LINE_HI)).shadow(egui::Shadow { offset: [0, 10], blur: 32, spread: 0, color: Color32::from_black_alpha(120) })
+    egui::Frame::new().fill(PANEL).corner_radius(R_PANEL).inner_margin(24.0).stroke(Stroke::new(1.0, LINE_HI)).shadow(egui::Shadow { offset: [0, 10], blur: 32, spread: 0, color: Color32::from_black_alpha(120) })
 }
 
 /// a key or the pad's buttons, right aligned.
@@ -1240,52 +1240,45 @@ pub fn chevron(p: &egui::Painter, c: egui::Pos2, size: f32, turn: f32, col: Colo
     p.line(pts.to_vec(), Stroke::new(1.8, col));
 }
 
-/// A collapsible section: a full-width header row (its title, a few words
-/// on what is inside while it is shut, a chevron) that opens and closes the
-/// body under it. Shut ones keep a first look at the start screen calm.
+/// a collapsible section, one row of a list: its name, what it is set to
+/// while it is shut, a chevron, and a hairline under it. it opens and closes
+/// the body under it. shut ones keep a first look at the start screen calm.
 pub fn section(ui: &mut egui::Ui, id: &str, title: &str, summary: &str, open: bool, body: impl FnOnce(&mut egui::Ui)) {
     let id = ui.make_persistent_id(("section", id));
     let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, open);
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.0), egui::Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     let k = state.openness(ui.ctx());
     let lit = ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
     let p = ui.painter();
-    // the title row, lit when open.
-    p.rect_filled(rect, R_WIDGET, Color32::from_white_alpha((7.0 + 9.0 * lit) as u8));
-    let title_col = mix(TEXT, Color32::WHITE, lit.max(k));
-    p.text(rect.left_center() + egui::vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, title, label(), title_col);
-    if k < 1.0 && !summary.is_empty() {
-        let col = DIM.gamma_multiply(1.0 - k);
-        p.text(rect.right_center() - egui::vec2(32.0, 0.0), egui::Align2::RIGHT_CENTER, summary, egui::FontId::proportional(13.0), col);
+    if lit > 0.0 {
+        p.rect_filled(rect.expand2(egui::vec2(8.0, 0.0)), R_WIDGET, Color32::from_white_alpha((8.0 * lit) as u8));
     }
-    chevron(p, rect.right_center() - egui::vec2(16.0, 0.0), 5.5, k, mix(DIM, Color32::WHITE, lit));
+    // the name, white once open; what it is set to in the label face, fading as it opens.
+    let title_col = mix(TEXT, Color32::WHITE, lit.max(k));
+    p.text(rect.left_center(), egui::Align2::LEFT_CENTER, title, semibold(15.0), title_col);
+    if k < 1.0 && !summary.is_empty() {
+        let tw = p.layout_no_wrap(title.to_string(), semibold(15.0), title_col).size().x;
+        let g = one_line(p, summary, label(), DIM, rect.width() - tw - 48.0);
+        p.galley(rect.right_center() - egui::vec2(20.0 + g.size().x, g.size().y * 0.5), g, DIM.gamma_multiply(1.0 - k));
+    }
+    chevron(p, rect.right_center() - egui::vec2(4.0, 0.0), 5.0, k, mix(DIM, Color32::WHITE, lit));
     if resp.clicked() {
         state.toggle(ui);
     }
     state.show_body_unindented(ui, |ui| {
-        ui.add_space(2.0);
-        egui::Frame::new().inner_margin(egui::Margin { left: 4, right: 4, top: 0, bottom: 4 }).show(ui, |ui| {
+        egui::Frame::new().inner_margin(egui::Margin { left: 0, right: 0, top: 4, bottom: 8 }).show(ui, |ui| {
             ui.set_width(ui.available_width());
             body(ui);
         });
     });
-    ui.add_space(2.0);
+    let y = ui.cursor().top();
+    ui.painter().hline(ui.max_rect().x_range(), y - ui.spacing().item_spacing.y * 0.5, Stroke::new(1.0, Color32::from_white_alpha(14)));
 }
 
 /// The title bar of a start-screen window: a small capitalised name, then a hairline.
 pub fn window_title(ui: &mut egui::Ui, s: &str) {
     ui.label(section_text(s));
-    ui.add_space(8.0);
-}
-
-/// A window title with its "?" after it.
-pub fn window_title_help(ui: &mut egui::Ui, s: &str, help_text: &str) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        ui.label(section_text(s));
-        help(ui, help_text);
-    });
     ui.add_space(8.0);
 }
 

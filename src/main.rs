@@ -3995,44 +3995,41 @@ impl Game {
         let dep = self.menu.pick;
         let db = airports::Db::get();
         let from = self.menu.airport.map(|i| db.apts[i as usize].ident.clone());
-        let summary = match (self.plan.destination(), &from) {
-            (Some(d), Some(f)) => format!("{f} → {}", d.ident),
-            (Some(d), None) => format!("→ {}", d.ident),
-            _ if self.plan.is_empty() => t!("game.direct_2").to_string(),
-            _ => format!("{} wpt", self.plan.wps.len()),
-        };
-        menu::section(ui, "flightplan", t!("game.flight_plan"), &summary, true, |ui| {
-            if !self.plan.is_empty() {
-                let total = self.plan.total(dep);
-                let gs = self.spec.cruise.max(20.0);
-                let fl = self.plan.cruise_ft;
-                let lvl = if fl >= 18_000.0 { format!("FL{:03.0}", fl / 100.0) } else { format!("{fl:.0} ft") };
-                ui.label(RichText::new(format!("{:.0} nm  ·  {}  ·  {lvl}", total / 1852.0, flightplan::hm(total / gs))).font(menu::semibold(15.0)).color(Color32::WHITE));
-                let route = self.plan.route_text();
-                ui.add(egui::Label::new(RichText::new(route).font(menu::caption()).color(TEXT)).wrap());
+        // the plan is something to do, not a condition: a button above the list, and the route once there is one.
+        if !self.plan.is_empty() {
+            let summary = match (self.plan.destination(), &from) {
+                (Some(d), Some(f)) => format!("{f} → {}", d.ident),
+                (Some(d), None) => format!("→ {}", d.ident),
+                _ => format!("{} wpt", self.plan.wps.len()),
+            };
+            let total = self.plan.total(dep);
+            let gs = self.spec.cruise.max(20.0);
+            let fl = self.plan.cruise_ft;
+            let lvl = if fl >= 18_000.0 { format!("FL{:03.0}", fl / 100.0) } else { format!("{fl:.0} ft") };
+            ui.label(RichText::new(summary).font(menu::item_title()).color(Color32::WHITE));
+            ui.label(RichText::new(format!("{:.0} nm  ·  {}  ·  {lvl}", total / 1852.0, flightplan::hm(total / gs))).font(menu::label()).color(TEXT));
+            ui.add(egui::Label::new(RichText::new(self.plan.route_text()).font(menu::caption()).color(menu::DIM)).wrap());
+            ui.add_space(4.0);
+        }
+        let word = if self.plan.is_empty() { t!("plan.plan_a_flight") } else { t!("plan.open_planner") };
+        // (take off is the one yellow button on this screen)
+        let mut clear = false;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let cw = if self.plan.is_empty() { 0.0 } else { 84.0 };
+            if menu::choice(ui, word, false, ui.available_width() - if cw > 0.0 { cw + 8.0 } else { 0.0 }).clicked() {
+                self.open_planner();
             }
-            if !self.plan.is_empty() {
-                ui.add_space(8.0);
-            }
-            let word = if self.plan.is_empty() { t!("plan.plan_a_flight") } else { t!("plan.open_planner") };
-            // (take off is the one yellow button on this screen)
-            let mut clear = false;
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                let cw = if self.plan.is_empty() { 0.0 } else { 84.0 };
-                if menu::choice(ui, word, false, ui.available_width() - if cw > 0.0 { cw + 6.0 } else { 0.0 }).clicked() {
-                    self.open_planner();
-                }
-                if cw > 0.0 && menu::choice(ui, t!("game.clear"), false, cw).clicked() {
-                    clear = true;
-                }
-            });
-            if clear {
-                self.plan.clear();
-                self.planner.to = None;
-                self.planner.ofp = None;
+            if cw > 0.0 && menu::choice(ui, t!("game.clear"), false, cw).clicked() {
+                clear = true;
             }
         });
+        if clear {
+            self.plan.clear();
+            self.planner.to = None;
+            self.planner.ofp = None;
+        }
+        ui.add_space(8.0);
     }
 
     /// mouse yoke, pointer offset from centre is the stick.
@@ -8114,14 +8111,13 @@ impl Game {
                 // the list gives up height first so the panel never overlaps the aircraft card.
                 // (the title, the search, its hint and the tabs above the list)
                 let body_h = (screen.bottom() - M - top - 40.0 - 28.0 - 104.0 - foot_h).max(80.0);
-                // whole rows of buttons only (38 each, the last without its gap).
-                let body_h = ((body_h + 6.0) / 38.0).floor().max(2.0) * 38.0 - 6.0;
+                // whole rows of buttons only (40 each, the last without its gap).
+                let body_h = ((body_h + 8.0) / 40.0).floor().max(2.0) * 40.0 - 8.0;
                 egui::Area::new(egui::Id::unique("menu")).anchor(Align2::LEFT_TOP, [M, top]).show(ctx, |ui| {
                     ui.set_max_height(screen.bottom() - M - top);
-                    menu::panel().inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
+                    menu::panel().inner_margin(16.0).show(ui, |ui| {
                         ui.set_width(W - 32.0);
-                        let tip = if padui::active() { t!("game.or_turn_the_globe_left") } else { t!("game.or_drag_the_globe_scroll") };
-                        menu::window_title_help(ui, t!("game.start_location"), tip);
+                        menu::window_title(ui, t!("game.start_location"));
                         // the search: a field and its button on one line.
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
@@ -8153,7 +8149,7 @@ impl Game {
                                 for i in hits {
                                     let a = &db.apts[i as usize];
                                     let on = self.menu.airport == Some(i);
-                                    let (r, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
+                                    let (r, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.0), egui::Sense::click());
                                     let lit = menu::ease(ctx, resp.id, resp.hovered() || resp.has_focus());
                                     let p = ui.painter();
                                     p.rect_filled(r, menu::R_WIDGET, if on { menu::CHOSEN } else { menu::mix(menu::RAISED, menu::RAISED_HI, lit) });
@@ -8255,7 +8251,7 @@ impl Game {
                 egui::Area::new(egui::Id::unique("menu_setup")).anchor(Align2::RIGHT_TOP, [-M, M]).show(ctx, |ui| {
                     // (an area lays out in last frame's size: let it grow as sections open)
                     ui.set_max_height(right_h);
-                    menu::panel().inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
+                    menu::panel().inner_margin(16.0).show(ui, |ui| {
                         ui.set_width(320.0);
                         menu::window_title(ui, t!("game.conditions"));
                         egui::ScrollArea::vertical().max_height(right_h - 40.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -8682,7 +8678,7 @@ impl Game {
         egui::Area::new(egui::Id::unique("info_panel")).anchor(Align2::CENTER_TOP, [0.0, y]).show(ctx, |ui| {
             // an area only offers last frame's height; a longer page needs the room up front.
             ui.set_max_height(max_h + 120.0);
-            flightui::panel(ui, flightui::glass().inner_margin(18.0), |ui| {
+            flightui::panel(ui, flightui::glass().inner_margin(16.0), |ui| {
                 ui.set_width(flightui::CARD_W);
                 let (to, close, x) = flightui::card_header(ui, self.info_page);
                 self.pad_home_focus(&x);
@@ -8692,7 +8688,7 @@ impl Game {
                 if close {
                     self.info_open = false;
                 }
-                ui.add_space(10.0);
+                ui.add_space(12.0);
                 egui::ScrollArea::vertical().max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
                     ui.set_width(flightui::CARD_W);
                     ui.spacing_mut().item_spacing.y = 4.0;
@@ -8712,90 +8708,81 @@ impl Game {
         });
     }
 
-    /// the flight page: the engine, fuel and power, how the aircraft is set up, and what is wrong.
+    /// the flight page: an instrument list of the engine, fuel and power, how the aircraft is set up,
+    /// what is wrong, and who else is flying.
     fn flight_page(&mut self, ui: &mut egui::Ui) {
         use egui::{Color32, RichText};
-        use flightui::{big, cells, key, meter, note, tag, wide_tile, AMBER, LIT, SOFT};
+        use flightui::{inst_meter, inst_row, inst_rule, key, AMBER, LIT, SOFT};
         let bad = menu::BAD;
+        let white = Color32::WHITE;
         let mut engine_btn: Option<bool> = None;
         let p = &self.plane;
+        let w = ui.available_width();
         let rpm = p.prop_rate * 60.0 / std::f64::consts::TAU;
         let starting = p.starter_on || (p.prop_rate > 5.0 && !p.spec.is_jet() && p.ignition);
-        cells(ui, 3, 126.0, |ui, i| match i {
-            0 => {
-                tag(ui, t!("game.engine"));
-                let (state, col) = if p.running { (t!("game.running_2"), Color32::WHITE) } else if starting { (t!("game.starting_2"), AMBER) } else { (t!("game.off_3"), SOFT) };
-                big(ui, state, "", col);
-                let detail = if let Some((_, lit, n)) = p.engines() {
-                    t!("game.of_lit_0", lit, n, p.throttle * 100.0)
-                } else if p.spec.is_jet() && p.reheat > 0.0 {
-                    format!("N1 {:.0}%  ·  {} {:.0}%", p.n1 * 100.0, t!("game.reheat"), p.reheat * 100.0)
-                } else if p.spec.is_jet() {
-                    format!("N1 {:.0}%  ·  {} {:.0}%", p.n1 * 100.0, t!("game.thrust_2"), p.throttle * 100.0)
-                } else {
-                    format!("{rpm:.0} rpm  ·  {} {:.0}%", t!("game.throttle_2"), p.throttle * 100.0)
-                };
-                note(ui, &detail);
-                ui.add_space(2.0);
-                let on = p.running || p.starter_on;
-                if key(ui, if on { t!("game.shut_down") } else { t!("game.start") }, false, ui.available_width(), 28.0).on_hover_text("F4").clicked() {
-                    engine_btn = Some(!on);
-                }
-            }
-            1 => {
-                tag(ui, t!("game.fuel"));
-                let low = p.fuel_frac() < 0.1;
-                big(ui, &format!("{:.0}", p.fuel), "kg", if low { AMBER } else { Color32::WHITE });
-                ui.add_space(4.0);
-                meter(ui, p.fuel_frac() as f32, if low { AMBER } else { LIT });
-                ui.add_space(2.0);
-                let left = match p.endurance() {
-                    Some(e) => t!("game.0_kg_h_h_02", p.fuel_flow * 3600.0, (e / 3600.0) as u32, (e / 60.0) as u32 % 60),
-                    None => t!("game.0_full", p.fuel_frac() * 100.0),
-                };
-                note(ui, &left);
-            }
-            _ => {
-                tag(ui, t!("game.electrics"));
-                let el = &p.sys.elec;
-                if !el.master {
-                    big(ui, t!("game.off_4"), "", SOFT);
-                    note(ui, t!("game.ins_turns_the_master_on"));
-                } else {
-                    big(ui, &format!("{:.1}", el.volts), "V", if p.sys.powered() { Color32::WHITE } else { AMBER });
-                    ui.add_space(4.0);
-                    meter(ui, el.charge as f32, if el.charge < 0.2 { AMBER } else { LIT });
-                    ui.add_space(2.0);
-                    note(ui, &t!("game.battery_0_0_a", el.charge * 100.0, el.amps));
-                }
-            }
-        });
-        // how it is set up, one small tile each.
+        // the engine, with its start or shut down button at the right.
+        let (state, col) = if p.running { (t!("game.running_2"), white) } else if starting { (t!("game.starting_2"), AMBER) } else { (t!("game.off_3"), SOFT) };
+        let detail = if let Some((_, lit, n)) = p.engines() {
+            t!("game.of_lit_0", lit, n, p.throttle * 100.0)
+        } else if p.spec.is_jet() && p.reheat > 0.0 {
+            format!("N1 {:.0}%  ·  {} {:.0}%", p.n1 * 100.0, t!("game.reheat"), p.reheat * 100.0)
+        } else if p.spec.is_jet() {
+            format!("N1 {:.0}%  ·  {} {:.0}%", p.n1 * 100.0, t!("game.thrust_2"), p.throttle * 100.0)
+        } else {
+            format!("{rpm:.0} rpm  ·  {} {:.0}%", t!("game.throttle_2"), p.throttle * 100.0)
+        };
+        let right = inst_row(ui, w, t!("game.engine"), state, col, &detail, 112.0);
+        let on = p.running || p.starter_on;
+        let mut b = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_center_size(right.center(), egui::vec2(right.width(), 28.0))));
+        if key(&mut b, if on { t!("game.shut_down") } else { t!("game.start") }, false, right.width(), 28.0).on_hover_text("F4").clicked() {
+            engine_btn = Some(!on);
+        }
+        // fuel and power, each with a bar at the right.
+        let low = p.fuel_frac() < 0.1;
+        let left = match p.endurance() {
+            Some(e) => t!("game.0_kg_h_h_02", p.fuel_flow * 3600.0, (e / 3600.0) as u32, (e / 60.0) as u32 % 60),
+            None => t!("game.0_full", p.fuel_frac() * 100.0),
+        };
+        let right = inst_row(ui, w, t!("game.fuel"), &format!("{:.0} kg", p.fuel), if low { AMBER } else { white }, &left, 112.0);
+        inst_meter(ui.painter(), right, p.fuel_frac() as f32, if low { AMBER } else { LIT });
+        let el = &p.sys.elec;
+        if !el.master {
+            inst_row(ui, w, t!("game.electrics"), t!("game.off_4"), SOFT, t!("game.ins_turns_the_master_on"), 0.0);
+        } else {
+            let right = inst_row(ui, w, t!("game.electrics"), &format!("{:.1} V", el.volts), if p.sys.powered() { white } else { AMBER }, &t!("game.battery_0_0_a", el.charge * 100.0, el.amps), 112.0);
+            inst_meter(ui.painter(), right, el.charge as f32, if el.charge < 0.2 { AMBER } else { LIT });
+        }
+        inst_rule(ui);
+        // how it is set up, in two columns.
         let mut set: Vec<(&str, String, Color32)> = Vec::new();
         let gear = if p.gear >= 1.0 { t!("game.down_3") } else if p.gear <= 0.0 { t!("game.up_2") } else { t!("game.moving_2") };
-        set.push((t!("game.gear"), gear.into(), if p.gear > 0.0 && p.gear < 1.0 { AMBER } else { Color32::WHITE }));
+        set.push((t!("game.gear"), gear.into(), if p.gear > 0.0 && p.gear < 1.0 { AMBER } else { white }));
         match &p.spec.lever {
-            Some(l) => set.push((l.label(), l.notch(p.flap_set).to_string(), Color32::WHITE)),
-            None => set.push((t!("game.flaps"), format!("{:.0}°", p.flap_notch_deg()), Color32::WHITE)),
+            Some(l) => set.push((l.label(), l.notch(p.flap_set).to_string(), white)),
+            None => set.push((t!("game.flaps"), format!("{:.0}°", p.flap_notch_deg()), white)),
         }
         if p.spec.spoiler_cd > 0.0 {
             let sb = if p.spoilers > 0.6 { t!("game.ground") } else if p.speedbrake > 0.0 { t!("game.out_2") } else { t!("game.in") };
-            set.push((t!("game.speedbrake"), sb.into(), Color32::WHITE));
+            set.push((t!("game.speedbrake"), sb.into(), white));
         }
-        set.push((t!("game.brake"), if p.parking_brake { t!("game.set").into() } else { t!("game.off_5").into() }, if p.parking_brake { AMBER } else { Color32::WHITE }));
+        set.push((t!("game.brake"), if p.parking_brake { t!("game.set").into() } else { t!("game.off_5").into() }, if p.parking_brake { AMBER } else { white }));
         if !p.spec.is_jet() {
-            set.push((t!("game.mixture"), format!("{:.0}%", p.mixture * 100.0), Color32::WHITE));
+            set.push((t!("game.mixture"), format!("{:.0}%", p.mixture * 100.0), white));
         }
         if p.spec.chute.is_some() {
             let c = if p.spoilers > 0.0 { t!("game.out_3") } else if p.chute_spent { t!("game.gone_2") } else { t!("game.packed_2") };
-            set.push((t!("game.drag_chute_2"), c.into(), Color32::WHITE));
+            set.push((t!("game.drag_chute_2"), c.into(), white));
         }
-        set.push((t!("game.mass"), format!("{:.0} kg", p.mass()), if p.cg_excess() != 0.0 { bad } else { Color32::WHITE }));
-        cells(ui, set.len(), 58.0, |ui, i| {
-            let (k, v, col) = &set[i];
-            tag(ui, k);
-            ui.label(RichText::new(v).font(menu::semibold(17.0)).color(*col));
-        });
+        set.push((t!("game.mass"), format!("{:.0} kg", p.mass()), if p.cg_excess() != 0.0 { bad } else { white }));
+        let half = ((w - 24.0) * 0.5).floor();
+        for pair in set.chunks(2) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 24.0;
+                for (k, v, col) in pair {
+                    inst_row(ui, half, k, v, *col, "", 0.0);
+                }
+            });
+        }
         // what is wrong, only when something is.
         let mut wrong: Vec<(String, Color32)> = Vec::new();
         if self.crashed {
@@ -8813,12 +8800,15 @@ impl Game {
             wrong.push((t!("game.out_of_balance").into(), bad));
         }
         if !wrong.is_empty() {
-            wide_tile(ui, |ui| {
-                tag(ui, t!("game.needs_attention"));
+            inst_rule(ui);
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                let (r, _) = ui.allocate_exact_size(egui::vec2(112.0, 28.0), egui::Sense::hover());
+                ui.painter().text(egui::pos2(r.left(), r.center().y), egui::Align2::LEFT_CENTER, t!("game.needs_attention"), menu::label(), menu::DIM);
                 ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
                     for (text, col) in &wrong {
-                        egui::Frame::new().fill(col.gamma_multiply(0.18)).corner_radius(flightui::R_IN).inner_margin(egui::Margin::symmetric(10, 5)).show(ui, |ui| {
+                        egui::Frame::new().fill(col.gamma_multiply(0.18)).corner_radius(flightui::R_IN).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
                             ui.label(RichText::new(text).font(menu::medium(13.5)).color(*col));
                         });
                     }
@@ -8826,50 +8816,27 @@ impl Game {
             });
         }
         // who else is flying.
+        inst_rule(ui);
         let me = p.pos;
-        let live_n = self.live.planes.len();
         let nearest_live = self.live.planes.iter().min_by(|a, b| (a.pos - me).length().total_cmp(&(b.pos - me).length()));
-        let mp_status = self.mp.as_ref().map(|m| m.status());
+        if !self.live.enabled() {
+            inst_row(ui, w, t!("game.live_traffic"), t!("game.off_6"), SOFT, t!("game.settings_general"), 0.0);
+        } else {
+            let near = match nearest_live {
+                Some(lp) => t!("game.nearest_1_km", lp.call, (lp.pos - me).length() / 1000.0),
+                None => t!("game.waiting_for_data").to_string(),
+            };
+            inst_row(ui, w, t!("game.live_traffic"), &format!("{} {}", self.live.planes.len(), t!("game.aircraft_3")), white, &near, 0.0);
+        }
         let server = self.mp.as_ref().map(|m| self.mp_server_name(&m.server)).unwrap_or_default();
-        cells(ui, 2, 92.0, |ui, i| {
-            if i == 0 {
-                tag(ui, t!("game.live_traffic"));
-                if !self.live.enabled() {
-                    big(ui, t!("game.off_6"), "", SOFT);
-                    note(ui, t!("game.settings_general"));
-                } else {
-                    big(ui, &live_n.to_string(), t!("game.aircraft_3"), Color32::WHITE);
-                    match nearest_live {
-                        Some(lp) => note(ui, &t!("game.nearest_1_km", lp.call, (lp.pos - me).length() / 1000.0)),
-                        None => note(ui, t!("game.waiting_for_data")),
-                    }
-                }
-            } else {
-                tag(ui, t!("game.multiplayer"));
-                match &mp_status {
-                    Some(mp::Status::Connected) => {
-                        big(ui, &self.mp_players.len().to_string(), t!("game.pilots_nearby"), Color32::WHITE);
-                        note(ui, &server);
-                    }
-                    Some(mp::Status::Connecting) => {
-                        big(ui, t!("game.connecting"), "", AMBER);
-                        note(ui, &server);
-                    }
-                    Some(mp::Status::Error(e)) => {
-                        big(ui, t!("game.no_connection_2"), "", bad);
-                        note(ui, e);
-                    }
-                    None if self.mp_on => {
-                        big(ui, t!("game.searching"), "", AMBER);
-                        note(ui, t!("game.for_the_fastest_server"));
-                    }
-                    None => {
-                        big(ui, t!("game.off_6"), "", SOFT);
-                        note(ui, t!("game.esc_settings_multiplayer"));
-                    }
-                }
-            }
-        });
+        let (v, col, d) = match self.mp.as_ref().map(|m| m.status()) {
+            Some(mp::Status::Connected) => (format!("{} {}", self.mp_players.len(), t!("game.pilots_nearby")), white, server),
+            Some(mp::Status::Connecting) => (t!("game.connecting").to_string(), AMBER, server),
+            Some(mp::Status::Error(e)) => (t!("game.no_connection_2").to_string(), bad, e),
+            None if self.mp_on => (t!("game.searching").to_string(), AMBER, t!("game.for_the_fastest_server").to_string()),
+            None => (t!("game.off_6").to_string(), SOFT, t!("game.esc_settings_multiplayer").to_string()),
+        };
+        inst_row(ui, w, t!("game.multiplayer"), &v, col, &d, 0.0);
         match engine_btn {
             Some(true) => self.plane.start_engine(),
             Some(false) => self.plane.stop_engine(),
@@ -9312,7 +9279,7 @@ impl Game {
                             let a = (1.0 - ((self.real - t0 - FLASH_HOLD) / FLASH_FADE).max(0.0)).clamp(0.0, 1.0) as f32;
                             ui.scope(|ui| {
                                 ui.multiply_opacity(a);
-                                egui::Frame::new().fill(menu::BAD.gamma_multiply(0.2)).stroke(egui::Stroke::new(1.0, menu::BAD)).corner_radius(menu::R_WIDGET).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
+                                egui::Frame::new().fill(menu::BAD.gamma_multiply(0.2)).stroke(egui::Stroke::new(1.0, menu::BAD)).corner_radius(menu::R_WIDGET).inner_margin(egui::Margin::symmetric(8, 4)).show(ui, |ui| {
                                     ui.label(RichText::new(i18n::caps(s)).font(menu::bold(14.0)).color(menu::BAD).extra_letter_spacing(0.6));
                                 });
                             });
@@ -9347,7 +9314,7 @@ impl Game {
             }
             if self.crashed && self.real - self.crash_real > 3.5 {
                 egui::Area::new(egui::Id::unique("crash")).anchor(Align2::CENTER_BOTTOM, [0.0, -70.0]).show(ctx, |ui| {
-                    flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(20, 12)), |ui| {
+                    flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(24, 12)), |ui| {
                         if pad {
                             let panel = padmap::spec_of("flight_panel");
                             let mut items = vec![("A", tr_en("respawn")), (panel.as_str(), tr_en("go somewhere else")), ("Menu", tr_en("menu"))];

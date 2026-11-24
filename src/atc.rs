@@ -935,7 +935,7 @@ impl Game {
         let lift = flightui::bottom_stack(ctx, "atc_sub");
         egui::Area::new(egui::Id::unique("atc_sub")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_BOTTOM, [0.0, -lift]).interactable(false).show(ctx, |ui| {
             ui.multiply_opacity(a);
-            flightui::panel(ui, flightui::glass().inner_margin(10.0), |ui| {
+            flightui::panel(ui, flightui::glass().inner_margin(12.0), |ui| {
                 ui.set_max_width(w);
                 if !l.station.is_empty() {
                     ui.label(egui::RichText::new(&l.station).font(menu::semibold(11.5)).color(flightui::SOFT));

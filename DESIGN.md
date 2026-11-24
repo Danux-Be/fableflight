@@ -101,12 +101,12 @@ components:
     backgroundColor: "{colors.panel-glass}"
     textColor: "{colors.text}"
     rounded: "{rounded.sm}"
-    padding: "20px"
+    padding: "24px"
   card:
     backgroundColor: "{colors.panel-glass}"
     textColor: "{colors.text}"
     rounded: "{rounded.sm}"
-    padding: "16px 20px"
+    padding: "16px 24px"
   hud-panel:
     backgroundColor: "{colors.hud-box}"
     textColor: "#FFFFFF"
@@ -199,7 +199,7 @@ A cool navy-black night with one warm light: the accent is the only saturated co
 
 ## Layout
 
-Menus are full screen: a page head (back button, display title, tabs, the pilot's level and money at the right) over a hairline, then content in one or two columns of cards with 16px between cards. The start globe keeps two floating panels at the left and right edges with the globe between them. Panel insets are 20px; card insets 16px by 20px; rows inside 4px to 8px apart; sections 24px apart (tight within a group, generous between).
+Menus are full screen: a page head (back button, display title, tabs, the pilot's level and money at the right) over a hairline, then content in one or two columns of cards with 16px between cards. The start globe keeps two floating panels at the left and right edges with the globe between them. Every inset and gap is on the 4, 8, 12, 16, 24 scale: panel insets 24px (16px on the start globe's narrow panels and in-flight cards), card insets 16px by 24px; rows inside 4px to 8px apart; sections 24px apart (tight within a group, generous between). Rows are 32, 40 or 48px tall, never in between.
 
 In flight the middle of the screen belongs to the world. The heading strip hangs top centre; the speed tape sits on the left edge and the altitude tape on the right, centred a little above the middle; the minimap is bottom left; tutorial and job cards are top right; the autopilot panel, alerts and ATC subtitles stack upward from the bottom centre; achievements arrive bottom right, experience bottom left above the map.
 
@@ -242,7 +242,7 @@ Nearly square: 3px corners on panels, cards, buttons, fields and key caps; squar
 - **Corner Style:** 3px.
 - **Background:** Panel Glass with a Hairline Lit edge.
 - **Shadow Strategy:** none inside a screen (see Elevation).
-- **Internal Padding:** 16px by 20px.
+- **Internal Padding:** 16px by 24px.
 - **Content:** a section title or a title, then rows. Empty cards are hidden; a card shows only when it has something to say.
 
 ### Inputs / Fields
@@ -251,10 +251,11 @@ Nearly square: 3px corners on panels, cards, buttons, fields and key caps; squar
 
 ### Navigation
 - **Page head:** a back button (chevron and the word), the screen title in display, the tab strip, and the status at the right. A hairline below.
-- **Flight menu:** an icon row for the pages with the current one filled yellow, and a close button.
+- **Flight menu:** the page's name, an icon row for the pages with the current one filled yellow, and a close button. Pointing at (or pad-focusing) an icon shows that page's name in the title, dimmed. Its Flight page is an instrument list: name, value and a dim detail in three aligned columns, hairlines between groups, never tiles with a label over a big number.
 
 ### HUD Panels
 - **Style:** HUD Box fill, square, no border radius, numbers in Barlow SemiBold, live values white, the bug and cautions in yellow and amber.
+- **Tapes:** the speed and altitude tapes carry their tags inside, a head and a foot row (G/S, V/S above; THR, AGL below) on the tape's own fill, never floating over the sky. The readout is one number in one size in a box with a yellow hairline and a notch at the scale, like the heading's; no rolling drum.
 - **Cards in flight:** a title and the one thing to do now, a thin progress bar, a quiet abandon link. 300px wide, top right.
 
 ### Notifications

@@ -39,7 +39,7 @@ pub fn cells(ui: &mut egui::Ui, n: usize, h: f32, mut add: impl FnMut(&mut egui:
     for i in 0..n {
         let r = Rect::from_min_size(pos2(row.left() + i as f32 * (cw + GAP), row.top()), vec2(cw, h));
         tile_bg(ui.painter(), r);
-        let inner = r.shrink2(vec2(12.0, 10.0));
+        let inner = r.shrink(12.0);
         let mut c = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)).id_salt(resp.id.with(i)));
         c.set_clip_rect(r.intersect(ui.clip_rect()));
         c.spacing_mut().item_spacing = vec2(6.0, 4.0);
@@ -51,7 +51,7 @@ pub fn cells(ui: &mut egui::Ui, n: usize, h: f32, mut add: impl FnMut(&mut egui:
 /// one tile across the card, as tall as what it holds.
 pub fn wide_tile<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let slot = ui.painter().add(egui::Shape::Noop);
-    let r = egui::Frame::new().inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+    let r = egui::Frame::new().inner_margin(egui::Margin::same(12)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
         add(ui)
@@ -100,10 +100,51 @@ pub fn meter(ui: &mut egui::Ui, frac: f32, col: Color32) {
     ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width() * frac.clamp(0.0, 1.0), r.height())), 2, col);
 }
 
+// the flight page's instrument list: rows with the name, the value and a detail in three columns.
+
+/// the instrument list's columns and row height.
+const NAME_W: f32 = 112.0;
+const VALUE_W: f32 = 124.0;
+const ROW_H: f32 = 32.0;
+
+/// one instrument row `w` wide: the name, its value, a dim detail, and the room left at the
+/// right end (`right_w`, for a button or a bar) given back.
+pub fn inst_row(ui: &mut egui::Ui, w: f32, name: &str, value: &str, col: Color32, detail: &str, right_w: f32) -> Rect {
+    let (r, _) = ui.allocate_exact_size(vec2(w, ROW_H), Sense::hover());
+    let p = ui.painter();
+    let y = r.center().y;
+    let end = r.right() - right_w;
+    let ng = menu::one_line(p, name, menu::label(), DIM, NAME_W - 8.0);
+    p.galley(pos2(r.left(), y - ng.size().y * 0.5), ng, DIM);
+    let vg = menu::one_line(p, value, menu::semibold(15.0), col, (end - r.left() - NAME_W).min(if detail.is_empty() { f32::INFINITY } else { VALUE_W - 8.0 }));
+    p.galley(pos2(r.left() + NAME_W, y - vg.size().y * 0.5), vg, col);
+    let dx = r.left() + NAME_W + VALUE_W;
+    if !detail.is_empty() && end - dx > 24.0 {
+        let dg = menu::one_line(p, detail, menu::caption(), SOFT, end - dx - 8.0);
+        p.galley(pos2(dx, y - dg.size().y * 0.5), dg, SOFT);
+    }
+    Rect::from_min_max(pos2(end, r.top()), r.max)
+}
+
+/// a thin bar `frac` full, centred in `r`.
+pub fn inst_meter(p: &egui::Painter, r: Rect, frac: f32, col: Color32) {
+    let bar = Rect::from_center_size(r.center(), vec2(r.width(), 4.0));
+    p.rect_filled(bar, 2, white(0.1));
+    p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * frac.clamp(0.0, 1.0), 4.0)), 2, col);
+}
+
+/// a hairline between groups of rows.
+pub fn inst_rule(ui: &mut egui::Ui) {
+    ui.add_space(4.0);
+    let y = ui.cursor().top();
+    ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, white(0.08)));
+    ui.add_space(4.0);
+}
+
 /// a pick from a list: a code, a name and a figure, lit when it is the one in use.
 pub fn pick_row(ui: &mut egui::Ui, code: &str, name: &str, right: &str, on: bool) -> egui::Response {
     let w = ui.available_width();
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, name));
     let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
     let p = ui.painter();
@@ -127,31 +168,41 @@ pub fn pick_row(ui: &mut egui::Ui, code: &str, name: &str, right: &str, on: bool
     resp
 }
 
-/// the card's header: the page's icon and name, the pages as icons, and a close button.
+/// the card's header: the page's name, the pages as icons, and a close button. the name shows
+/// the page under the pointer (or the pad's focus), dimmed, so every icon reads as its page.
 /// gives back the page asked for, and whether close was pressed.
 pub fn card_header(ui: &mut egui::Ui, page: Page) -> (Option<Page>, bool, egui::Response) {
     let mut to = None;
     let mut close = false;
     let mut close_resp = None;
+    let mut over = None;
     ui.horizontal(|ui| {
-        let (r, _) = ui.allocate_exact_size(vec2(26.0, 30.0), Sense::hover());
-        menu::icon(ui.painter(), page_icon(page), r.center(), 22.0, LIT);
-        ui.add_space(2.0);
-        ui.label(RichText::new(page.label()).font(menu::page_title()).color(Color32::WHITE));
+        let (title, _) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::hover());
+        let slot = ui.painter().add(egui::Shape::Noop);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let x = icon_key(ui, Some(Icon::Close), "", false, t!("flight.close_tab"));
+            let x = icon_key(ui, Some(Icon::Close), "", false, t!("flight.close_tab")).on_hover_text(t!("flight.close_tab"));
             if x.clicked() {
                 close = true;
             }
             close_resp = Some(x);
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             for p in Page::INFO.into_iter().rev() {
-                if icon_key(ui, Some(page_icon(p)), "", p == page, p.label()).clicked() && p != page {
+                let r = icon_key(ui, Some(page_icon(p)), "", p == page, p.label());
+                if r.hovered() || r.has_focus() {
+                    over = Some(p);
+                }
+                if r.clicked() && p != page {
                     to = Some(p);
                 }
             }
         });
+        let (name, col) = match over.filter(|p| *p != page) {
+            Some(p) => (p.label(), DIM),
+            None => (page.label(), Color32::WHITE),
+        };
+        let g = ui.painter().layout_no_wrap(name.to_string(), menu::page_title(), col);
+        ui.painter().set(slot, egui::Shape::galley(pos2(title.left(), title.center().y - g.size().y * 0.5), g, col));
     });
     (to, close, close_resp.expect("close button"))
 }
@@ -174,7 +225,7 @@ fn icon_key(ui: &mut egui::Ui, icon: Option<Icon>, text: &str, on: bool, hint: &
             p.text(r.center(), Align2::CENTER_CENTER, text, menu::medium(18.0), col);
         }
     }
-    resp.on_hover_text(hint)
+    resp
 }
 
 /// the icon each page goes by.
@@ -259,7 +310,7 @@ impl Game {
                         // a scope so each notice takes its own room.
                         ui.scope(|ui| {
                             ui.multiply_opacity(*a);
-                            panel(ui, glass().inner_margin(egui::Margin::symmetric(18, 10)), |ui| {
+                            panel(ui, glass().inner_margin(egui::Margin::symmetric(16, 8)), |ui| {
                                 ui.spacing_mut().item_spacing.y = 2.0;
                                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                                 for (text, font, col) in lines {
@@ -409,6 +460,9 @@ pub const HEADING_TOP: f32 = 10.0;
 const TAPE_H: f32 = 352.0;
 const SPEED_W: f32 = 124.0;
 const ALT_W: f32 = 118.0;
+/// a tape's head and foot rows, and its readout box.
+const LINE_H: f32 = 28.0;
+const READOUT_H: f32 = 34.0;
 /// corner radii: square, like the menus.
 pub(crate) const R_HUD: u8 = 0;
 pub(crate) const R_IN: u8 = 0;
@@ -434,9 +488,6 @@ fn num_l() -> egui::FontId {
 fn num_m() -> egui::FontId {
     menu::medium(17.0)
 }
-fn num_minor() -> egui::FontId {
-    egui::FontId::proportional(12.5)
-}
 fn num_s() -> egui::FontId {
     menu::medium(13.5)
 }
@@ -448,9 +499,7 @@ fn tag_text(s: &str) -> RichText {
 }
 /// spaced capitals at a point.
 pub(crate) fn paint_tag(p: &egui::Painter, at: egui::Pos2, align: Align2, s: &str) {
-    paint_tag_col(p, at, align, s, white(0.62));
-}
-fn paint_tag_col(p: &egui::Painter, at: egui::Pos2, align: Align2, s: &str, col: Color32) {
+    let col = white(0.62);
     let mut job = egui::text::LayoutJob::default();
     job.append(&s.to_uppercase(), 0.0, egui::TextFormat { font_id: tag_font(), color: col, extra_letter_spacing: 1.1, ..Default::default() });
     let g = p.layout_job(job);
@@ -524,44 +573,25 @@ pub fn panel<R>(ui: &mut egui::Ui, frame: egui::Frame, add: impl FnOnce(&mut egu
     resp
 }
 
-/// a rolling readout: steady figures in a box, the last ones on a drum that turns.
-fn drum(p: &egui::Painter, at: egui::Pos2, align: Align2, value: f32, lead: usize, roll_step: i32, col: Color32) -> Rect {
-    let big = num_l();
-    let small = menu::semibold(17.0);
-    let cw = p.layout_no_wrap("0".into(), big.clone(), col).size().x;
-    let sw = p.layout_no_wrap("0".into(), small.clone(), col).size().x;
-    let v = value.max(0.0);
-    let roll_digits = if roll_step >= 10 { 2 } else { 1 };
-    let unit = 10f32.powi(roll_digits as i32);
-    let top_part = (v / unit).floor();
-    let k = (v - top_part * unit) / roll_step as f32;
-    let digits = format!("{}", top_part as i64);
-    let n_lead = if lead > digits.len() { lead } else if top_part == 0.0 && lead == 0 { 0 } else { digits.len() };
-    let shown = if n_lead == 0 { String::new() } else { format!("{:0w$}", top_part as i64, w = n_lead) };
-    let pad = n_lead.saturating_sub(digits.len());
-    // the drum is a figure wider and taller than the box.
-    let drum_w = sw * roll_digits as f32 + 10.0;
-    let box_w = 12.0 + cw * shown.len().max(1) as f32 + drum_w + 4.0;
-    let r = align.anchor_size(at, vec2(box_w, 40.0));
-    p.rect_filled(r, R_IN, BOX);
-    let dr = Rect::from_min_max(pos2(r.right() - drum_w - 4.0, r.top() - 8.0), pos2(r.right() - 4.0, r.bottom() + 8.0));
-    p.rect_filled(dr, R_IN, Color32::from_rgba_premultiplied(18, 21, 27, 240));
-    let clip = p.with_clip_rect(dr.shrink(1.0));
-    let cell_h = 21.0;
-    for d in -2..=2 {
-        let s = k.floor() + d as f32;
-        let n = ((s * roll_step as f32) as i32).rem_euclid(unit as i32);
-        let y = r.center().y - (s - k) * cell_h;
-        let a = 1.0 - ((y - r.center().y).abs() / cell_h).min(1.0) * 0.7;
-        clip.text(pos2(dr.center().x, y), Align2::CENTER_CENTER, format!("{:0w$}", n, w = roll_digits), small.clone(), col.gamma_multiply(a));
-    }
-    let mut x = dr.left() - 4.0 - cw * shown.len() as f32;
-    for (i, ch) in shown.chars().enumerate() {
-        let c = if i < pad { col.gamma_multiply(0.32) } else { col };
-        p.text(pos2(x + cw * 0.5, r.center().y), Align2::CENTER_CENTER, ch.to_string(), big.clone(), c);
-        x += cw;
-    }
-    r.union(dr)
+/// a tape's readout: the figure in one size in a box with a notch at the scale, like the heading's.
+/// `right` puts the notch on the right edge (the altitude tape).
+fn readout(p: &egui::Painter, r: Rect, text: &str, col: Color32, edge: Color32, right: bool) {
+    let y = r.center().y;
+    let (x, tip) = if right { (r.right(), r.right() + 7.0) } else { (r.left(), r.left() - 7.0) };
+    let notch = vec![pos2(x, y - 7.0), pos2(tip, y), pos2(x, y + 7.0)];
+    p.rect_filled(r, 0, BOX);
+    p.add(egui::Shape::convex_polygon(notch.clone(), BOX, Stroke::NONE));
+    p.rect_stroke(r, 0, Stroke::new(1.0, edge), egui::StrokeKind::Inside);
+    p.add(egui::Shape::line(notch, Stroke::new(1.0, edge)));
+    // the notch opens into the box.
+    p.line_segment([pos2(x + if right { -0.5 } else { 0.5 }, y - 6.0), pos2(x + if right { -0.5 } else { 0.5 }, y + 6.0)], Stroke::new(1.5, BOX));
+    p.text(pos2(r.right() - 10.0, y), Align2::RIGHT_CENTER, text, num_l(), col);
+}
+
+/// a tag and its figure on one line inside a tape's head or foot.
+fn tape_line(p: &egui::Painter, r: Rect, tag: &str, value: &str, col: Color32) {
+    paint_tag(p, pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, tag);
+    p.text(pos2(r.right() - 12.0, r.center().y), Align2::RIGHT_CENTER, value, num_s(), col);
 }
 
 /// thousands set apart with a thin space.
@@ -589,7 +619,7 @@ impl Game {
         self.speed_tape(ctx, h, cy);
         // the altitude tape steps down below a tutorial or job card over it (small or scaled screens).
         let over = ["hud_hint", "mission_card", "job_card"].iter().filter_map(|n| shown(ctx, n, if *n == "hud_hint" { egui::Order::Background } else { egui::Order::Middle })).map(|r| r.bottom()).fold(f32::NEG_INFINITY, f32::max);
-        let cy_alt = cy.max(over + 36.0 + TAPE_H * 0.5).min(screen.bottom() - TAPE_H * 0.5 - 40.0);
+        let cy_alt = cy.max(over + 12.0 + TAPE_H * 0.5).min(screen.bottom() - TAPE_H * 0.5 - 16.0);
         self.altitude_tape(ctx, h, cy_alt);
         if self.path_marker {
             self.flight_path_marker(ctx);
@@ -698,14 +728,18 @@ impl Game {
             v
         };
         let panel = Rect::from_min_size(pos2(screen.left(), cy - TAPE_H * 0.5), vec2(SPEED_W, TAPE_H));
-        egui::Area::new(egui::Id::unique("hud_speed")).fixed_pos(panel.min - vec2(0.0, 24.0)).interactable(false).order(egui::Order::Background).show(ctx, |ui| {
-            ui.allocate_exact_size(vec2(SPEED_W + 20.0, TAPE_H + 24.0), Sense::hover());
+        egui::Area::new(egui::Id::unique("hud_speed")).fixed_pos(panel.min).interactable(false).order(egui::Order::Background).show(ctx, |ui| {
+            ui.allocate_exact_size(panel.size() + vec2(8.0, 0.0), Sense::hover());
             let pt = ui.painter();
-            // ground speed over it.
-            paint_tag(pt, pos2(panel.left() + 14.0, panel.top() - 12.0), Align2::LEFT_CENTER, &format!("G/S  {:.0}", kt(p.vel.length())));
             panel_rect(pt, panel);
+            // ground speed in the head, the throttle in the foot.
+            let head = Rect::from_min_size(panel.min, vec2(panel.width(), LINE_H));
+            let foot = Rect::from_min_max(pos2(panel.left(), panel.bottom() - LINE_H), panel.max);
+            let thr = (p.throttle as f32).clamp(0.0, 1.0);
+            tape_line(pt, head, "G/S", &format!("{:.0}", kt(p.vel.length())), Color32::WHITE);
+            tape_line(pt, foot, t!("flight.thr"), &format!("{:.0}%", thr * 100.0), Color32::WHITE);
             // figures fade towards the ends.
-            let tape = Rect::from_min_max(pos2(panel.left(), panel.top() + 8.0), pos2(panel.right() - 46.0, panel.bottom() - 8.0));
+            let tape = Rect::from_min_max(pos2(panel.left(), head.bottom()), pos2(panel.right() - 36.0, foot.top()));
             let clip = pt.with_clip_rect(tape);
             let c = pos2(tape.center().x, cy);
             const PPK: f32 = 6.0;
@@ -752,26 +786,18 @@ impl Game {
                 clip.line_segment([pos2(tape.left() + 10.0, y), pos2(tape.left() + if big { 18.0 } else { 14.0 }, y)], Stroke::new(1.3, white(if big { 0.85 } else { 0.5 } * a)));
                 if big {
                     clip.text(pos2(tape.left() + 26.0, y), Align2::LEFT_CENTER, format!("{v}"), num_m(), white(a));
-                } else {
-                    clip.text(pos2(tape.left() + 26.0, y), Align2::LEFT_CENTER, format!("{v}"), num_minor(), white(0.5 * a));
                 }
             }
             // the readout.
             let warn = p.stalled || p.overspeed() > 0.0 || (p.flaps > 0.25 && p.ias() > p.vfe());
             let col = if p.stalled { menu::BAD } else if warn { AMBER } else { Color32::WHITE };
-            let rr = drum(pt, pos2(tape.left() + 12.0, c.y), Align2::LEFT_CENTER, ias, 0, 1, col);
-            pt.add(egui::Shape::convex_polygon(vec![pos2(tape.left() + 5.0, c.y), pos2(tape.left() + 12.5, c.y - 7.0), pos2(tape.left() + 12.5, c.y + 7.0)], BOX, Stroke::NONE));
-            if warn {
-                pt.rect_stroke(rr, R_IN, Stroke::new(1.5, col), egui::StrokeKind::Outside);
-            }
-            // the throttle.
-            let col_r = Rect::from_min_max(pos2(panel.right() - 40.0, panel.top() + 12.0), pos2(panel.right() - 12.0, panel.bottom() - 12.0));
-            paint_tag(pt, pos2(col_r.center().x, col_r.top() + 6.0), Align2::CENTER_CENTER, t!("flight.thr"));
-            let track = Rect::from_min_max(pos2(col_r.center().x - 3.0, col_r.top() + 20.0), pos2(col_r.center().x + 3.0, col_r.bottom() - 26.0));
+            let rb = Rect::from_min_max(pos2(tape.left() + 12.0, c.y - READOUT_H * 0.5), pos2(tape.right(), c.y + READOUT_H * 0.5));
+            readout(pt, rb, &format!("{:.0}", ias), col, if warn { col } else { LIT }, false);
+            // the throttle, a bar between the head and the foot.
+            let x = panel.right() - 20.0;
+            let track = Rect::from_min_max(pos2(x - 3.0, head.bottom() + 8.0), pos2(x + 3.0, foot.top() - 8.0));
             pt.rect_filled(track, 3, white(0.14));
-            let thr = (p.throttle as f32).clamp(0.0, 1.0);
             pt.rect_filled(Rect::from_min_max(pos2(track.left(), track.bottom() - track.height() * thr), track.max), 3, if p.running { LIT } else { menu::BAD });
-            pt.text(pos2(col_r.center().x, col_r.bottom() - 8.0), Align2::CENTER_CENTER, format!("{:.0}%", thr * 100.0), num_s(), Color32::WHITE);
         });
     }
 
@@ -783,20 +809,19 @@ impl Game {
         let agl = ft(h.agl.max(0.0));
         let w = ALT_W;
         let panel = Rect::from_min_size(pos2(screen.right() - w, cy - TAPE_H * 0.5), vec2(w, TAPE_H));
-        egui::Area::new(egui::Id::unique("hud_alt")).fixed_pos(panel.min - vec2(0.0, 24.0)).interactable(false).order(egui::Order::Background).show(ctx, |ui| {
-            ui.allocate_exact_size(vec2(w, TAPE_H + 48.0), Sense::hover());
+        egui::Area::new(egui::Id::unique("hud_alt")).fixed_pos(panel.min - vec2(8.0, 0.0)).interactable(false).order(egui::Order::Background).show(ctx, |ui| {
+            ui.allocate_exact_size(panel.size() + vec2(8.0, 0.0), Sense::hover());
             let pt = ui.painter().clone();
-            // climb over it, height above the ground under it.
-            let vs_col = if vs_fpm < -1500.0 && agl < 2500.0 { menu::BAD } else { Color32::WHITE };
-            let vy = panel.top() - 12.0;
-            paint_tag(&pt, pos2(panel.right() - 14.0, vy), Align2::RIGHT_CENTER, "V/S");
-            pt.text(pos2(panel.right() - 48.0, vy), Align2::RIGHT_CENTER, format!("{:+.0}", (vs_fpm / 10.0).round() * 10.0), num_s(), vs_col);
-            if agl < 2500.0 && !self.plane.on_ground {
-                let col = if agl < 300.0 { AMBER } else { white(0.62) };
-                paint_tag_col(&pt, pos2(panel.right() - 14.0, panel.bottom() + 12.0), Align2::RIGHT_CENTER, &format!("{:.0} ft AGL", agl), col);
-            }
             panel_rect(&pt, panel);
-            let tape = Rect::from_min_max(pos2(panel.left() + 30.0, panel.top() + 8.0), pos2(panel.right(), panel.bottom() - 8.0));
+            // climb in the head, height above the ground in the foot when low.
+            let head = Rect::from_min_size(panel.min, vec2(panel.width(), LINE_H));
+            let foot = Rect::from_min_max(pos2(panel.left(), panel.bottom() - LINE_H), panel.max);
+            let vs_col = if vs_fpm < -1500.0 && agl < 2500.0 { menu::BAD } else { Color32::WHITE };
+            tape_line(&pt, head, "V/S", &format!("{:+.0}", (vs_fpm / 10.0).round() * 10.0), vs_col);
+            if agl < 2500.0 && !self.plane.on_ground {
+                tape_line(&pt, foot, "AGL", &format!("{:.0}", agl), if agl < 300.0 { AMBER } else { Color32::WHITE });
+            }
+            let tape = Rect::from_min_max(pos2(panel.left(), head.bottom()), pos2(panel.right(), foot.top()));
             let c = pos2(tape.center().x, cy);
             let clip = pt.with_clip_rect(tape);
             const PPF: f32 = 0.6;
@@ -816,13 +841,11 @@ impl Game {
                 }
                 if big {
                     clip.text(pos2(tape.right() - 20.0, y), Align2::RIGHT_CENTER, grouped(v as f32), num_m(), white(a));
-                } else {
-                    clip.text(pos2(tape.right() - 20.0, y), Align2::RIGHT_CENTER, grouped(v as f32), num_minor(), white(0.5 * a));
                 }
             }
-            // the readout.
-            let rr = drum(&pt, pos2(tape.right() - 18.0, c.y), Align2::RIGHT_CENTER, alt, 3, 20, Color32::WHITE);
-            pt.add(egui::Shape::convex_polygon(vec![pos2(tape.right() - 10.0, c.y), pos2(rr.right() - 0.5, c.y - 7.0), pos2(rr.right() - 0.5, c.y + 7.0)], BOX, Stroke::NONE));
+            // the readout, to the nearest ten feet.
+            let rb = Rect::from_min_max(pos2(tape.left() + 12.0, c.y - READOUT_H * 0.5), pos2(tape.right() - 18.0, c.y + READOUT_H * 0.5));
+            readout(&pt, rb, &grouped((alt / 10.0).round() * 10.0), Color32::WHITE, LIT, true);
         });
     }
 
@@ -881,7 +904,7 @@ impl Game {
                     ui.horizontal(|ui| {
                         for (w, col) in warn {
                             // a lit plate.
-                            egui::Frame::new().fill(col.gamma_multiply(0.92)).stroke(Stroke::new(1.0, *col)).inner_margin(egui::Margin::symmetric(16, 7)).show(ui, |ui| {
+                            egui::Frame::new().fill(col.gamma_multiply(0.92)).stroke(Stroke::new(1.0, *col)).inner_margin(egui::Margin::symmetric(16, 8)).show(ui, |ui| {
                                 ui.label(RichText::new(w.to_uppercase()).font(menu::semibold(14.0)).color(Color32::WHITE).extra_letter_spacing(1.0));
                             });
                         }

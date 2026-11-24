@@ -210,7 +210,7 @@ impl Game {
         let mut close = false;
         let mut page = false;
         egui::Area::new(egui::Id::unique("ap_bar")).anchor(Align2::CENTER_BOTTOM, [0.0, -16.0]).show(ctx, |ui| {
-            let frame = egui::Frame::new().fill(Color32::from_rgba_premultiplied(8, 10, 14, 214)).stroke(Stroke::new(1.0, Color32::from_white_alpha(28))).corner_radius(flightui::R_HUD).inner_margin(egui::Margin::symmetric(10, 8));
+            let frame = egui::Frame::new().fill(Color32::from_rgba_premultiplied(8, 10, 14, 214)).stroke(Stroke::new(1.0, Color32::from_white_alpha(28))).corner_radius(flightui::R_HUD).inner_margin(egui::Margin::symmetric(12, 8));
             frame.show(ui, |ui| {
                 // the annunciator: what flies now in green, what waits in white.
                 ui.horizontal(|ui| {

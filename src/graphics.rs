@@ -20,7 +20,7 @@
 //! and given their own detail level in the map imagery settings (gmaps.rs).
 use crate::i18n::t;
 use crate::menu;
-use crate::settings_ui::row;
+use crate::settings_ui::{row, row_help};
 use egui::RichText;
 
 pub use crate::graphics_core::*;
@@ -192,7 +192,7 @@ impl Graphics {
         if INTEGRATED.load(std::sync::atomic::Ordering::Relaxed) && matches!(self.matches(), Some(Preset::Medium | Preset::High | Preset::Ultra) | None) {
             about = format!("{} {}", menu::sentence(&about), t!("graphics.integrated_note"));
         }
-        row(ui, t!("graphics.preset"), &about, |ui| {
+        row_help(ui, t!("graphics.preset"), &about, |ui| {
             ui.horizontal(|ui| {
                 let cur = self.matches();
                 let mut pick = cur;
@@ -206,11 +206,11 @@ impl Graphics {
                 }
             });
         });
-        row(ui, t!("graphics.dynamic"), t!("graphics.dynamic_hint"), |ui| {
+        row_help(ui, t!("graphics.dynamic"), t!("graphics.dynamic_hint"), |ui| {
             menu::switch(ui, &mut self.dynamic);
         });
         if self.dynamic {
-            row(ui, t!("graphics.dynamic_target"), t!("graphics.dynamic_note"), |ui| {
+            row_help(ui, t!("graphics.dynamic_target"), t!("graphics.dynamic_note"), |ui| {
                 menu::segments(ui, |ui| {
                     for f in DYN_FPS {
                         menu::seg(ui, &mut self.dyn_fps, f, &if f == 0 { t!("graphics.dynamic_display").to_owned() } else { f.to_string() });
@@ -276,7 +276,7 @@ impl Graphics {
                 }
             });
         });
-        row(ui, t!("graphics.ambient_occlusion"), t!("graphics.ambient_occlusion_hint"), |ui| {
+        row_help(ui, t!("graphics.ambient_occlusion"), t!("graphics.ambient_occlusion_hint"), |ui| {
             menu::switch(ui, &mut self.ao);
         });
         let water = match self.water {
@@ -293,7 +293,7 @@ impl Graphics {
         });
         let now = crate::render::msaa();
         let restart = if self.msaa as u32 != now { t!("graphics.msaa_restart", if now == 1 { t!("graphics.level_off").to_string() } else { format!("{now}×") }) } else { String::new() };
-        row(ui, t!("graphics.msaa"), &help(t!("graphics.msaa_hint"), restart), |ui| {
+        row_help(ui, t!("graphics.msaa"), &help(t!("graphics.msaa_hint"), restart), |ui| {
             menu::segments(ui, |ui| {
                 for (n, name) in [(1u8, t!("graphics.level_off")), (2, "2×"), (4, "4×")] {
                     menu::seg(ui, &mut self.msaa, n, name);
@@ -310,7 +310,7 @@ impl Graphics {
         let (rw, rh) = ((w as f32 * self.scale).round() as u32, (h as f32 * self.scale).round() as u32);
         let what = if self.scale > 1.001 { t!("graphics.supersampled").to_owned() } else if self.scale < 0.999 { t!("graphics.upscaled_with", crate::upscale::active(self.upscaler, self.scale).name()) } else { t!("graphics.native").to_owned() };
         let about = format!("{} {}", menu::sentence(t!("graphics.render_resolution_hint")), menu::sentence(&format!("{rw}×{rh}, {what}")));
-        row(ui, t!("graphics.render_resolution"), &about, |ui| {
+        row_help(ui, t!("graphics.render_resolution"), &about, |ui| {
             // (the temporal upscalers never supersample)
             let top = if self.upscaler.temporal() { 1.0 } else { SCALE_MAX };
             self.scale = self.scale.min(top);
@@ -318,7 +318,7 @@ impl Graphics {
             ui.add(egui::Slider::new(&mut self.scale, SCALE_MIN..=top).step_by(0.05).clamping(egui::SliderClamping::Edits).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
         });
         let aa = if crate::upscale::active(self.upscaler, self.render_scale()).temporal() { t!("graphics.anti_aliasing_hint_replaced") } else { t!("graphics.anti_aliasing_hint") };
-        row(ui, t!("graphics.anti_aliasing"), aa, |ui| {
+        row_help(ui, t!("graphics.anti_aliasing"), aa, |ui| {
             menu::switch(ui, &mut self.taa);
         });
         row(ui, "VSync", if self.vsync { t!("graphics.vsync_on") } else { t!("graphics.vsync_off") }, |ui| {
@@ -331,7 +331,7 @@ impl Graphics {
                 }
             });
         });
-        row(ui, t!("graphics.dynamic_res"), t!("graphics.dynamic_res_hint"), |ui| {
+        row_help(ui, t!("graphics.dynamic_res"), t!("graphics.dynamic_res_hint"), |ui| {
             menu::switch(ui, &mut self.dynamic_res);
         });
         use crate::fsr4::State;
@@ -342,7 +342,7 @@ impl Graphics {
             _ => String::new(),
         };
         let about = if status.is_empty() { t!("graphics.framegen_hint").to_string() } else { format!("{} {}", menu::sentence(t!("graphics.framegen_hint")), menu::sentence(&status)) };
-        row(ui, t!("graphics.framegen"), &about, |ui| {
+        row_help(ui, t!("graphics.framegen"), &about, |ui| {
             ui.horizontal(|ui| match fg_state {
                 State::Installed => {
                     menu::switch(ui, &mut self.framegen);
@@ -432,7 +432,7 @@ impl Graphics {
             format!("In use: {} ({} needs the render resolution below 100%).", cx.active.name(), self.upscaler.name())
         };
         let about = format!("{} {} {running} ★ marks the one suggested for {}.", menu::sentence("how frames below 100% reach the window's size"), self.upscaler.about(), cx.gpu.name);
-        row(ui, "Upscaler", &about, |ui| {
+        row_help(ui, "Upscaler", &about, |ui| {
             let before = self.upscaler;
             menu::segments(ui, |ui| {
                 for u in Upscaler::ALL {
@@ -447,7 +447,7 @@ impl Graphics {
         let (w, h) = cx.window;
         let k = self.render_scale();
         let about = format!("AMD's render resolutions. Now {:.0}%: {}×{} from {w}×{h}.", k * 100.0, (w as f32 * k).round(), (h as f32 * k).round());
-        row(ui, "Quality mode", &about, |ui| {
+        row_help(ui, "Quality mode", &about, |ui| {
             menu::segments(ui, |ui| {
                 for (name, k) in QUALITY_MODES {
                     if k >= 1.0 && !self.upscaler.temporal() {
@@ -480,7 +480,7 @@ impl Graphics {
         if let State::Failed(e) = &st {
             about += &format!(" Download failed: {e}.");
         }
-        row(ui, "FSR 4.1 runtime", &about, |ui| {
+        row_help(ui, "FSR 4.1 runtime", &about, |ui| {
             ui.horizontal(|ui| match st {
                 State::NotInstalled | State::Failed(_) => {
                     if menu::button(ui, &format!("Download ({})", crate::bytes(fsr4::download_size()))).clicked() {

@@ -1036,7 +1036,7 @@ impl Weather {
                 self.live_raw.clone()
             };
             // the report as it reads.
-            egui::Frame::new().fill(egui::Color32::from_rgb(11, 14, 20)).corner_radius(crate::menu::R_WIDGET).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+            egui::Frame::new().fill(egui::Color32::from_rgb(11, 14, 20)).corner_radius(crate::menu::R_WIDGET).inner_margin(egui::Margin::symmetric(12, 8)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.add(egui::Label::new(RichText::new(text).font(egui::FontId::monospace(12.5)).color(crate::menu::TEXT)).wrap());
             });

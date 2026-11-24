@@ -57,8 +57,8 @@ impl crate::Game {
             ui.spacing_mut().item_spacing.y = 0.0;
             let top = egui::CornerRadius { nw: menu::R_PANEL, ne: menu::R_PANEL, sw: 0, se: 0 };
             let bottom = egui::CornerRadius { nw: 0, ne: 0, sw: menu::R_PANEL, se: menu::R_PANEL };
-            egui::Frame::new().fill(menu::PANEL).corner_radius(top).inner_margin(egui::Margin { left: 10, right: 10, top: 10, bottom: 6 }).show(ui, |ui| {
-                ui.set_width(w - 20.0);
+            egui::Frame::new().fill(menu::PANEL).corner_radius(top).inner_margin(egui::Margin { left: 12, right: 12, top: 12, bottom: 8 }).show(ui, |ui| {
+                ui.set_width(w - 24.0);
                 ui.horizontal(|ui| {
                     let arrow = |ui: &mut egui::Ui, turn: f32| {
                         let r = ui.add(egui::Button::new("").min_size(egui::vec2(34.0, 34.0)).fill(Color32::from_white_alpha(8)).corner_radius(menu::R_WIDGET));
@@ -69,10 +69,9 @@ impl crate::Game {
                         choose = Some((k + n - 1) % n);
                     }
                     let name_w = ui.available_width() - 34.0 - ui.spacing().item_spacing.x;
-                    ui.allocate_ui_with_layout(egui::vec2(name_w, 34.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                        ui.label(menu::section_text(&t!("hangar.aircraft", k + 1, n)).color(DIM));
-                        ui.label(RichText::new(spec.name).font(menu::item_title()).color(Color32::WHITE));
-                    });
+                    let (nr, _) = ui.allocate_exact_size(egui::vec2(name_w, 34.0), egui::Sense::hover());
+                    let g = menu::one_line(ui.painter(), spec.name, menu::item_title(), Color32::WHITE, name_w - 8.0);
+                    ui.painter().galley(nr.center() - g.size() * 0.5, g, Color32::WHITE);
                     if arrow(ui, 0.0).on_hover_text(t!("hangar.next_aircraft")).clicked() {
                         choose = Some((k + 1) % n);
                     }
@@ -96,16 +95,12 @@ impl crate::Game {
             if resp.clicked() {
                 open = Some(Tab::Mine);
             }
-            egui::Frame::new().fill(menu::PANEL).corner_radius(bottom).inner_margin(egui::Margin { left: 10, right: 10, top: 4, bottom: 10 }).show(ui, |ui| {
-                ui.set_width(w - 20.0);
-                ui.columns(2, |c| {
-                    if menu::wide_button(&mut c[0], t!("hangar.all_aircraft"), crate::padui::Hint::None, false, true).clicked() {
-                        open = Some(Tab::Mine);
-                    }
-                    if menu::wide_button(&mut c[1], t!("hangar.get_more"), crate::padui::Hint::None, false, true).clicked() {
-                        open = Some(Tab::Download);
-                    }
-                });
+            // (more to download is at the foot of the aircraft screen's list)
+            egui::Frame::new().fill(menu::PANEL).corner_radius(bottom).inner_margin(egui::Margin { left: 12, right: 12, top: 4, bottom: 12 }).show(ui, |ui| {
+                ui.set_width(w - 24.0);
+                if menu::wide_button(ui, t!("hangar.all_aircraft"), crate::padui::Hint::None, false, true).clicked() {
+                    open = Some(Tab::Mine);
+                }
             });
         });
         let r = air.response.rect;
@@ -567,7 +562,7 @@ impl crate::Game {
             // The details.
             if let Some(e) = self.menu.hangar_sel.as_ref().and_then(|s| entries.iter().find(|e| &e.folder == s)) {
                 ui.scope_builder(column(right), |ui| {
-                    egui::Frame::new().fill(Color32::from_white_alpha(6)).corner_radius(menu::R_PANEL).inner_margin(18.0).show(ui, |ui| {
+                    egui::Frame::new().fill(Color32::from_white_alpha(6)).corner_radius(menu::R_PANEL).inner_margin(16.0).show(ui, |ui| {
                         ui.set_width(right.width() - 36.0);
                         ui.set_height(h - 36.0);
                         egui::ScrollArea::vertical().id_salt("hangar_detail").auto_shrink([false, false]).show(ui, |ui| {

@@ -340,7 +340,7 @@ impl Game {
         let mut start = false;
         let mut back = false;
         egui::Area::new(egui::Id::unique("career_new")).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-            menu::panel().inner_margin(32.0).show(ui, |ui| {
+            menu::panel().inner_margin(24.0).show(ui, |ui| {
                 ui.set_width(640.0);
                 ui.label(RichText::new(tr_en("CAREER")).font(menu::semibold(13.0)).color(ACCENT));
                 menu::screen_heading(ui, tr_en("From student to captain"));
@@ -476,36 +476,38 @@ impl Game {
                         }
                     });
                 }
-                // the licences held, as badges.
+                // the licences held, then the next one to work on.
+                let next = LICS.into_iter().find(|l| !self.career.has(*l) && l.reqs().iter().all(|r| !matches!(r, Req::Holds(h) if !self.career.has(*h))));
                 card(ui, 0.0, |ui| {
                     widgets::title(ui, tr_en("LICENCES AND RATINGS"));
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-                        for l in LICS {
-                            let has = self.career.has(l);
-                            let ready = !has && self.can_get(l);
-                            let col = if has { ACCENT } else if ready { OK } else { Color32::from_white_alpha(70) };
-                            let resp = lic_badge(ui, l, col, has);
-                            let resp = resp.on_hover_text(format!("{}\n{}", tr_en(l.name()), tr_en(l.opens())));
-                            if resp.clicked() {
-                                act = Some(Act::Tab(Tab::Training));
-                            }
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    for l in LICS.into_iter().filter(|l| self.career.has(*l) || Some(*l) == next) {
+                        let has = self.career.has(l);
+                        let state = if has {
+                            None
+                        } else if self.can_get(l) {
+                            Some((tr_en("Ready").to_string(), OK))
+                        } else {
+                            let done = l.reqs().iter().filter(|r| self.req_state(**r).0).count();
+                            Some((format!("{} {done} / {}", tr_en("Next"), l.reqs().len()), DIM))
+                        };
+                        if lic_row(ui, l, has, state).clicked() {
+                            act = Some(Act::Tab(Tab::Training));
                         }
-                    });
+                    }
                 });
             });
             ui.allocate_ui_with_layout(vec2(rw, h), Layout::top_down(egui::Align::Min), |ui| {
                 // the pilot.
                 card(ui, 0.0, |ui| {
+                    // the licence is the career's one rank; the level and its experience are in the head.
                     let lvl = pilot::level(self.profile.xp);
-                    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 86.0), Sense::hover());
+                    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 72.0), Sense::hover());
                     let p = ui.painter();
-                    widgets::avatar(p, pos2(r.left() + 38.0, r.center().y), 32.0, &self.career.name, lvl.frac());
-                    p.text(pos2(r.left() + 88.0, r.top() + 18.0), Align2::LEFT_CENTER, &self.career.name, menu::bold(22.0), Color32::WHITE);
-                    p.text(pos2(r.left() + 88.0, r.top() + 42.0), Align2::LEFT_CENTER, format!("{}  ·  {} {}", tr_en(self.career.title()), tr_en("Level"), lvl.n), menu::label(), TEXT);
-                    p.text(pos2(r.left() + 88.0, r.top() + 62.0), Align2::LEFT_CENTER, format!("{}  ·  {} / {} XP", tr_en(pilot::rank(lvl.n)), lvl.into, lvl.span), menu::caption(), DIM);
-                    meter_row(ui, lvl.frac(), ACCENT, 6.0);
-                    ui.add_space(10.0);
+                    widgets::avatar(p, pos2(r.left() + 32.0, r.center().y), 30.0, &self.career.name, lvl.frac());
+                    p.text(pos2(r.left() + 80.0, r.center().y - 12.0), Align2::LEFT_CENTER, &self.career.name, menu::bold(22.0), Color32::WHITE);
+                    p.text(pos2(r.left() + 80.0, r.center().y + 12.0), Align2::LEFT_CENTER, tr_en(self.career.title()), menu::label(), TEXT);
+                    ui.add_space(8.0);
                     let hours = profile::totals(&self.logbook.flights).air_s / 3600.0;
                     let avg = if self.career.stars.is_empty() { 0.0 } else { self.career.stars.iter().map(|s| *s as f64).sum::<f64>() / self.career.stars.len() as f64 };
                     widgets::line(ui, tr_en("Hours flown"), &format!("{hours:.1}"), Color32::WHITE);
@@ -537,7 +539,11 @@ impl Game {
         let filter = self.career.view.filter;
         let board = self.career.board.clone();
         let shown: Vec<&Job> = board.iter().filter(|j| filter.is_none_or(|k| j.kind == k)).collect();
-        let sel = self.career.view.sel.and_then(|id| board.iter().find(|j| j.id == id)).or(shown.first().copied()).cloned();
+        // what can be flown first; the rest fold into one line under it.
+        let (open, out): (Vec<&Job>, Vec<&Job>) = shown.iter().copied().partition(|j| self.career.can_take(j).is_ok());
+        let fold_id = egui::Id::unique("career_board_locked");
+        let unfolded = ui.ctx().data(|d| d.get_temp::<bool>(fold_id)).unwrap_or(false);
+        let sel = self.career.view.sel.and_then(|id| board.iter().find(|j| j.id == id)).or(open.first().copied()).cloned();
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing = vec2(16.0, 6.0);
             // the kinds of work.
@@ -585,27 +591,51 @@ impl Game {
                     ui.spacing_mut().item_spacing.y = 8.0;
                     if shown.is_empty() {
                         widgets::empty(ui, tr_en("No work of this kind here today. Try new jobs, or move your base."));
+                    } else if open.is_empty() {
+                        widgets::empty(ui, tr_en("Nothing you can fly here yet."));
                     }
-                    for j in &shown {
-                        let ok = self.career.can_take(j);
+                    for j in &open {
                         let on = sel.as_ref().is_some_and(|s| s.id == j.id);
-                        let resp = job_row(ui, j, on, ok.as_ref().err());
+                        let resp = job_row(ui, j, on, None);
                         if resp.clicked() {
                             act = Some(Act::Select(j.id));
                         }
-                        if resp.double_clicked() && ok.is_ok() && self.career.active.is_none() {
+                        if resp.double_clicked() && self.career.active.is_none() {
                             act = Some(Act::Brief((*j).clone()));
+                        }
+                    }
+                    if !out.is_empty() {
+                        let n = out.len();
+                        let words = if open.is_empty() { tr_en(if n == 1 { "job out of reach" } else { "jobs out of reach" }) } else { tr_en("more out of reach") };
+                        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{n} {words}")));
+                        let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
+                        let p = ui.painter();
+                        let col = menu::mix(DIM, TEXT, lit);
+                        lock(p, pos2(r.left() + 8.0, r.center().y), 9.0, col);
+                        let g = p.layout_no_wrap(format!("{n} {words}"), menu::label(), col);
+                        let gx = r.left() + 24.0;
+                        p.galley(pos2(gx, r.center().y - g.size().y * 0.5), g.clone(), col);
+                        menu::chevron(p, pos2(gx + g.size().x + 14.0, r.center().y), 5.0, if unfolded { 3.0 } else { 1.0 }, col);
+                        if resp.clicked() {
+                            ui.ctx().data_mut(|d| d.insert_temp(fold_id, !unfolded));
+                        }
+                        if unfolded {
+                            for j in &out {
+                                let on = sel.as_ref().is_some_and(|s| s.id == j.id);
+                                let why = self.career.can_take(j).err();
+                                if job_row(ui, j, on, why.as_ref()).clicked() {
+                                    act = Some(Act::Select(j.id));
+                                }
+                            }
                         }
                     }
                 });
             });
-            // the job picked.
+            // the job picked, none while nothing is.
+            let Some(j) = sel.as_ref() else { return };
             ui.allocate_ui_with_layout(vec2(dw, h), Layout::top_down(egui::Align::Min), |ui| {
                 card(ui, h, |ui| {
-                    let Some(j) = sel.as_ref() else {
-                        widgets::empty(ui, tr_en("Pick a job to see it here."));
-                        return;
-                    };
                     let col = j.kind.colour();
                     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::hover());
                     let cr = chip(ui.painter(), pos2(r.left(), r.center().y), &tr_en(j.kind.name()).to_uppercase(), col);
@@ -629,8 +659,8 @@ impl Game {
                         Err(why) => {
                             ui.horizontal(|ui| {
                                 let (lr, _) = ui.allocate_exact_size(vec2(16.0, 18.0), Sense::hover());
-                                lock(ui.painter(), lr.center(), 10.0, BAD);
-                                ui.label(RichText::new(why).font(menu::label()).color(BAD));
+                                lock(ui.painter(), lr.center(), 10.0, FAINT);
+                                ui.label(RichText::new(why).font(menu::label()).color(DIM));
                             });
                         }
                         Ok(()) if self.career.active.is_some() => {
@@ -987,7 +1017,7 @@ impl Game {
             ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(170));
         });
         egui::Area::new(egui::Id::unique("brief")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-            menu::panel().inner_margin(28.0).show(ui, |ui| {
+            menu::panel().inner_margin(24.0).show(ui, |ui| {
                 ui.set_width(760.0);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tr_en("BRIEFING")).font(menu::semibold(13.0)).color(ACCENT));
@@ -1092,7 +1122,7 @@ impl Game {
         let objs = career::objectives(f);
         let job = f.job.clone();
         egui::Area::new(egui::Id::unique("job_card")).anchor(Align2::RIGHT_TOP, [-14.0, top]).show(ctx, |ui| {
-            flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(14, 12)), |ui| {
+            flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(16, 12)), |ui| {
                 ui.set_width(300.0);
                 ui.spacing_mut().item_spacing.y = 4.0;
                 ui.horizontal(|ui| {
@@ -1140,23 +1170,34 @@ impl Game {
     }
 }
 
-/// a licence as a round badge with its short name.
-fn lic_badge(ui: &mut egui::Ui, l: Lic, col: Color32, has: bool) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(64.0, 64.0), Sense::click());
+/// a licence as a row: its badge, its name and what it opens, and for one not held yet how far along it is.
+fn lic_row(ui: &mut egui::Ui, l: Lic, has: bool, state: Option<(String, Color32)>) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr_en(l.name())));
+    let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
     let p = ui.painter();
-    let c = r.center() - vec2(0.0, 6.0);
-    p.circle_filled(c, 22.0, if has { Color32::from_rgb(52, 42, 8) } else { menu::SURFACE });
-    p.circle_stroke(c, 22.0, Stroke::new(2.0, col));
-    p.text(c, Align2::CENTER_CENTER, l.short(), menu::bold(12.0), if has { ACCENT } else { DIM });
-    if !has {
-        lock(p, c + vec2(15.0, 15.0), 7.0, col);
+    if lit > 0.0 {
+        p.rect_filled(r.expand2(vec2(8.0, 0.0)), menu::R_WIDGET, Color32::from_white_alpha((8.0 * lit) as u8));
     }
-    resp
+    let c = pos2(r.left() + 20.0, r.center().y);
+    p.circle_filled(c, 18.0, if has { Color32::from_rgb(52, 42, 8) } else { menu::SURFACE });
+    p.circle_stroke(c, 18.0, Stroke::new(1.5, if has { ACCENT } else { menu::LINE_HI }));
+    p.text(c, Align2::CENTER_CENTER, l.short(), menu::bold(11.0), if has { ACCENT } else { TEXT });
+    let right_w = state.as_ref().map_or(0.0, |(s, _)| p.layout_no_wrap(s.clone(), menu::label(), DIM).size().x + 16.0);
+    let room = r.width() - 52.0 - right_w;
+    let ng = menu::one_line(p, tr_en(l.name()), menu::semibold(15.0), Color32::WHITE, room);
+    p.galley(pos2(r.left() + 52.0, r.center().y - 2.0 - ng.size().y), ng, Color32::WHITE);
+    let og = menu::one_line(p, tr_en(l.opens()), menu::caption(), DIM, room);
+    p.galley(pos2(r.left() + 52.0, r.center().y + 2.0), og, DIM);
+    if let Some((s, col)) = state {
+        p.text(pos2(r.right(), r.center().y), Align2::RIGHT_CENTER, s, menu::label(), col);
+    }
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// one job on the board: its kind, where, the load, the pay.
 fn job_row(ui: &mut egui::Ui, j: &Job, on: bool, locked: Option<&String>) -> egui::Response {
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 78.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 80.0), Sense::click());
     let lit = menu::ease(ui.ctx(), resp.id, resp.hovered());
     let p = ui.painter();
     p.rect_filled(r, menu::R_PANEL, if on { menu::mix(menu::PANEL, menu::CHOSEN, 0.6) } else { menu::mix(menu::PANEL, menu::RAISED, lit) });
@@ -1172,10 +1213,10 @@ fn job_row(ui: &mut egui::Ui, j: &Job, on: bool, locked: Option<&String>) -> egu
     p.galley(pos2(r.left() + 18.0, r.top() + 56.0), sg, DIM);
     p.text(pos2(r.right() - 16.0, r.top() + 28.0), Align2::RIGHT_CENTER, money(j.pay), menu::bold(21.0), if locked.is_some() { DIM } else { ACCENT });
     if let Some(why) = locked {
-        let g = menu::one_line(p, why, menu::caption(), BAD.gamma_multiply(0.85), 170.0);
+        let g = menu::one_line(p, why, menu::caption(), DIM, 170.0);
         let gw = g.size().x;
-        p.galley(pos2(r.right() - 16.0 - gw, r.top() + 50.0), g, BAD);
-        lock(p, pos2(r.right() - 26.0 - gw, r.top() + 57.0), 8.0, BAD.gamma_multiply(0.85));
+        p.galley(pos2(r.right() - 16.0 - gw, r.top() + 50.0), g, DIM);
+        lock(p, pos2(r.right() - 26.0 - gw, r.top() + 57.0), 8.0, FAINT);
     }
     resp
 }
@@ -1190,7 +1231,7 @@ fn debrief_window(ctx: &egui::Context, d: &Debrief, in_flight: bool) -> bool {
         ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(175));
     });
     egui::Area::new(egui::Id::unique("debrief")).order(egui::Order::Foreground).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-        menu::panel().inner_margin(30.0).show(ui, |ui| {
+        menu::panel().inner_margin(24.0).show(ui, |ui| {
             ui.set_width(720.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new(tr_en("DEBRIEF")).font(menu::semibold(13.0)).color(ACCENT));

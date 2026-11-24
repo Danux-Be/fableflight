@@ -100,7 +100,7 @@ pub fn tab_strip(ui: &mut egui::Ui, tabs: &[&str], current: usize) -> Option<usi
 /// a card: the panel look, `h` high (0: as tall as it grows), filling the width.
 pub fn card<R>(ui: &mut egui::Ui, h: f32, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     menu::panel()
-        .inner_margin(egui::Margin::symmetric(20, 16))
+        .inner_margin(egui::Margin::symmetric(24, 16))
         .shadow(egui::Shadow::NONE)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());

@@ -250,7 +250,7 @@ impl Game {
         let mut close = false;
         egui::Area::new(egui::Id::unique("planner")).anchor(Align2::LEFT_TOP, [M, top]).show(ctx, |ui| {
             ui.set_max_height(h);
-            menu::panel().inner_margin(egui::Margin::symmetric(20, 18)).show(ui, |ui| {
+            menu::panel().inner_margin(egui::Margin::symmetric(24, 16)).show(ui, |ui| {
                 ui.set_width(w - 40.0);
                 // the title, the aircraft beside it, done on the right.
                 ui.horizontal(|ui| {
@@ -316,7 +316,7 @@ impl Game {
         let to = self.plan.destination().map_or("—".to_string(), |w| w.ident.clone());
         let total = self.plan.total(dep);
         let gs = self.spec.cruise.max(20.0);
-        egui::Frame::new().fill(Color32::from_white_alpha(6)).stroke(Stroke::new(1.0, Color32::from_white_alpha(16))).inner_margin(egui::Margin::symmetric(16, 14)).show(ui, |ui| {
+        egui::Frame::new().fill(Color32::from_white_alpha(6)).stroke(Stroke::new(1.0, Color32::from_white_alpha(16))).inner_margin(egui::Margin::same(16)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 4.0;
             ui.horizontal(|ui| {

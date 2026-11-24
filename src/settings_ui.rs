@@ -207,7 +207,7 @@ pub fn card(ui: &mut Ui, title: &str, mut body: impl FnMut(&mut Ui)) {
         .fill(menu::SURFACE)
         .stroke(Stroke::new(1.0, menu::LINE))
         .corner_radius(menu::R_PANEL)
-        .inner_margin(egui::Margin { left: 22, right: 22, top: 16, bottom: 10 })
+        .inner_margin(egui::Margin { left: 24, right: 24, top: 16, bottom: 12 })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(menu::section_text(title));
@@ -220,9 +220,18 @@ pub fn card(ui: &mut Ui, title: &str, mut body: impl FnMut(&mut Ui)) {
     ui.add_space(14.0);
 }
 
-/// One `label | control` row: the label (and a "?" with the hint, on hover)
-/// on the left, the control against the right edge, a faint line between rows.
+/// one `label | control` row: the label on the left, the control against the
+/// right edge, a faint line between rows. the hint is only searched, not shown.
 pub fn row(ui: &mut Ui, label: &str, hint: &str, add: impl FnOnce(&mut Ui)) {
+    row_in(ui, label, hint, false, add);
+}
+
+/// a `row` whose label has a "?" with the hint on hover, for a setting that needs explaining.
+pub fn row_help(ui: &mut Ui, label: &str, hint: &str, add: impl FnOnce(&mut Ui)) {
+    row_in(ui, label, hint, true, add);
+}
+
+fn row_in(ui: &mut Ui, label: &str, hint: &str, show_help: bool, add: impl FnOnce(&mut Ui)) {
     let q = find();
     if !q.is_empty() && !WHOLE.with(|w| w.get()) && !hit(label, &q) && !hit(hint, &q) {
         return;
@@ -238,25 +247,28 @@ pub fn row(ui: &mut Ui, label: &str, hint: &str, add: impl FnOnce(&mut Ui)) {
         ui.add_space(6.0);
     }
     let lw = (w * 0.42).clamp(170.0, 320.0);
+    // the control's size last frame: its width pushes it right, its height centres the label on its first line.
+    let id = egui::Id::unique(("settings row size", label));
+    let last = ui.ctx().data(|d| d.get_temp::<egui::Vec2>(id)).unwrap_or(vec2(f32::INFINITY, 32.0));
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(vec2(lw, 0.0), Layout::top_down(Align::Min), |ui| {
             ui.set_width(lw - 16.0);
-            ui.add_space(4.0);
-            // what it does is under the "?", not in the way.
-            menu::field_name(ui, label, hint);
+            let lh = ui.painter().layout_no_wrap("Ag".into(), menu::label(), TEXT).size().y.max(if show_help { 18.0 } else { 0.0 });
+            // (a row is as tall as the interact height, which would push the name down)
+            ui.spacing_mut().interact_size.y = lh;
+            ui.add_space(((last.y.min(32.0) - lh) * 0.5).max(0.0));
+            menu::field_name(ui, label, if show_help { hint } else { "" });
         });
         let cw = (ui.available_width()).max(100.0);
         ui.allocate_ui_with_layout(vec2(cw, 0.0), Layout::top_down(Align::Min), |ui| {
             ui.set_width(cw);
-            // laid out left to right so it reads in order, pushed right by last frame's width.
-            let id = egui::Id::unique(("settings row width", label));
-            let last = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(cw).min(cw);
+            // laid out left to right so it reads in order.
             let right = ui.max_rect().right();
-            let at = Rect::from_min_size(pos2(right - last, ui.cursor().top()), vec2(cw, f32::INFINITY));
-            let w = ui.scope_builder(egui::UiBuilder::new().max_rect(at).layout(Layout::top_down(Align::Min)), |ui| add(ui)).response.rect.width();
-            if (w - last).abs() > 0.5 {
-                ui.ctx().data_mut(|d| d.insert_temp(id, w));
-                ui.ctx().request_discard("settings row width");
+            let at = Rect::from_min_size(pos2(right - last.x.min(cw), ui.cursor().top()), vec2(cw, f32::INFINITY));
+            let size = ui.scope_builder(egui::UiBuilder::new().max_rect(at).layout(Layout::top_down(Align::Min)), |ui| add(ui)).response.rect.size();
+            if (size - last).abs().max_elem() > 0.5 {
+                ui.ctx().data_mut(|d| d.insert_temp(id, size));
+                ui.ctx().request_discard("settings row size");
             }
         });
     });
@@ -318,7 +330,7 @@ impl Game {
             menu::screen_heading(&mut s, t!("settings.settings"));
             s.add_space(18.0);
             // one box that searches every section.
-            egui::Frame::new().fill(menu::SURFACE).stroke(Stroke::new(1.0, menu::LINE_HI)).corner_radius(menu::R_WIDGET).inner_margin(egui::Margin::symmetric(10, 6)).show(&mut s, |ui| {
+            egui::Frame::new().fill(menu::SURFACE).stroke(Stroke::new(1.0, menu::LINE_HI)).corner_radius(menu::R_WIDGET).inner_margin(egui::Margin::symmetric(12, 8)).show(&mut s, |ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.settings_find).hint_text(t!("settings.search")).frame(egui::Frame::NONE).desired_width(f32::INFINITY).font(menu::label()));
             });
             s.add_space(14.0);
@@ -461,7 +473,7 @@ impl Game {
             row(ui, t!("settings.hud_in_the_cockpit"), t!("settings.off_the_cockpits_own_instruments"), |ui| {
                 ui.add_enabled_ui(self.show_hud, |ui| menu::switch(ui, &mut self.hud_cockpit));
             });
-            row(ui, t!("settings.flight_path_marker"), t!("settings.a_ring_on_the_hud"), |ui| {
+            row_help(ui, t!("settings.flight_path_marker"), t!("settings.a_ring_on_the_hud"), |ui| {
                 ui.add_enabled_ui(self.show_hud, |ui| menu::switch(ui, &mut self.path_marker));
             });
             row(ui, t!("settings.minimap"), t!("settings.key_left_of_1_in"), |ui| {
@@ -484,12 +496,12 @@ impl Game {
                     menu::seg(ui, &mut self.minimap.heading_up, true, t!("settings.heading_up"));
                 });
             });
-            row(ui, t!("settings.landing_guidance"), t!("settings.approach_arrows_and_tunnel"), |ui| {
+            row_help(ui, t!("settings.landing_guidance"), t!("settings.approach_arrows_and_tunnel"), |ui| {
                 menu::switch(ui, &mut self.minimap.landing_guidance);
             });
         });
         card(ui, t!("settings.mode"), |ui| {
-            row(ui, t!("settings.arcade_mode"), t!("settings.missiles_boost_on_any_aircraft"), |ui| {
+            row_help(ui, t!("settings.arcade_mode"), t!("settings.missiles_boost_on_any_aircraft"), |ui| {
                 menu::switch(ui, &mut self.arcade);
             });
         });
@@ -603,7 +615,7 @@ impl Game {
         let has_key = !self.gkey.trim().is_empty();
         let need_key = t!("settings.enter_a_google_maps_platform");
         card(ui, t!("settings.map_imagery"), |ui| {
-            row(ui, t!("settings.google_api_key"), t!("settings.map_tiles_api_billed_to"), |ui| {
+            row_help(ui, t!("settings.google_api_key"), t!("settings.map_tiles_api_billed_to"), |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
                     let r = ui.add(egui::TextEdit::singleline(&mut self.gkey).password(!self.gkey_show).hint_text(t!("settings.google_maps_platform_key")).font(menu::label()).margin(vec2(10.0, 7.0)).desired_width(260.0));
@@ -619,7 +631,7 @@ impl Game {
                 });
             });
             let about = format!("{} {}", menu::sentence(if has_key { t!("settings.google_maps") } else { need_key }), if g.enabled() { t!("settings.terrain_and_roofs_take_googles") } else { t!("settings.off_the_free_default_imagery") });
-            row(ui, t!("settings.satellite_imagery"), &about, |ui| {
+            row_help(ui, t!("settings.satellite_imagery"), &about, |ui| {
                 let mut on = g.enabled();
                 if ui.add_enabled_ui(has_key, |ui| menu::switch(ui, &mut on)).inner.changed() {
                     g.set_key(&self.gkey);
@@ -636,13 +648,13 @@ impl Game {
             let detail = g.detail();
             let zone_km = tiles3d::Params::of(detail).zone_r / 1000.0;
             let about = format!("{} {}", menu::sentence(if has_key { t!("settings.beta") } else { need_key }), if photo { t!("settings.googles_photogrammetry_meshes_replace_th", zone_km = zone_km) } else { t!("settings.off_our_own_3d_world").to_string() });
-            row(ui, t!("settings.google_3d_tiles"), &about, |ui| {
+            row_help(ui, t!("settings.google_3d_tiles"), &about, |ui| {
                 if ui.add_enabled_ui(has_key, |ui| menu::switch(ui, &mut photo)).inner.changed() {
                     g.set_key(&self.gkey);
                     g.set_photoreal(photo);
                 }
             });
-            row(ui, t!("settings.3d_detail"), &t!("settings.one_billed_session_per_flight", crate::detail_hint(detail)), |ui| {
+            row_help(ui, t!("settings.3d_detail"), &t!("settings.one_billed_session_per_flight", crate::detail_hint(detail)), |ui| {
                 ui.add_enabled_ui(photo, |ui| {
                     let mut d = detail;
                     menu::segments(ui, |ui| {
@@ -763,7 +775,7 @@ impl Game {
                 String::new()
             };
             let mut flip = false;
-            row(ui, t!("settings.multiplayer_status"), &about, |ui| {
+            row_help(ui, t!("settings.multiplayer_status"), &about, |ui| {
                 ui.horizontal(|ui| {
                     let (r, _) = ui.allocate_exact_size(vec2(10.0, 18.0), Sense::hover());
                     ui.painter().circle_filled(r.center(), 4.5, col);
@@ -855,7 +867,7 @@ impl Game {
         // From the pad: B held calls it off (a tap of B binds B), and how far through that is.
         let from_pad = c.from_pad();
         let cancelling = self.binds.pad_catch.cancelling(self.real);
-        egui::Frame::new().fill(ACCENT.gamma_multiply(0.22)).corner_radius(menu::R_PANEL).inner_margin(10.0).show(ui, |ui| {
+        egui::Frame::new().fill(ACCENT.gamma_multiply(0.22)).corner_radius(menu::R_PANEL).inner_margin(12.0).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(RichText::new(what).font(menu::body()).color(Color32::WHITE));
