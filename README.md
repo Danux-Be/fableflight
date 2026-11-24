@@ -23,7 +23,7 @@ Explore the skies with real-world weather, live air traffic, and an immersive op
 </div>
 
 ## Download
-Download the [latest release](https://github.com/Rolandjg/fableflight/releases/latest), unpack it, and run **`fableflight-launcher`** (`fableflight-launcher.exe` on Windows).
+Download the [latest release](https://github.com/Rolandjg/fableflight/releases/latest), unpack it, and run **`fableflight-launcher`** (`fableflight-launcher.exe` on Windows). On Windows, the `-setup.exe` installs it for your user (no admin rights) with a Start menu entry and an uninstaller.
 
 ## Compiling
 
