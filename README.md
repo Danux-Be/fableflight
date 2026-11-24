@@ -64,6 +64,7 @@ cargo build --release --locked
 - **Logbook:** flight time from lift off to the last touchdown, flights, landings, distance, hours by aircraft and airports visited, on the main menu's **Logbook**. Kept in `profile.json` next to the settings.
 - **Contrails:** jets leave ice trails above about FL250 where the air is colder than the contrail threshold (about −40 °C), short in dry air and spreading into lasting cirrus in moist air, drifting with the wind and lit by the low sun at dawn and dusk. Live traffic up high leaves them too.
 - **Mouse yoke:** `J` turns it on: the pointer becomes a dot and its offset from the centre is the stick, the wheel is the throttle.
+- **Head tracking:** run [OpenTrack](https://github.com/opentrack/opentrack) (TrackIR, webcams, phones) with the output set to *UDP over network*, `127.0.0.1` port `4242`, and the cockpit view turns and leans with your head. `FABLE_OPENTRACK_PORT` picks another port.
 - **World:** real METAR weather, seasonal & live snow cover, satellite/road minimap, live ADS-B traffic, and multiplayer.
 - **Controls:** remappable keyboard, joystick, throttle, pedals, and gamepad. Configure them in **Settings → Controls**.
 - **Arcade mode:** optional boosts, missiles, and in-flight respawns. Enable in **Settings → General** or pass `--arcade`.

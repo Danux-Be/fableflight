@@ -34,6 +34,7 @@ mod globeclouds;
 mod hangar;
 mod hangar_ui;
 mod bind;
+mod headtrack;
 mod i18n;
 mod icing;
 mod jsbsim;
@@ -1966,6 +1967,10 @@ impl Game {
         std::thread::spawn(|| {
             navdata::Db::get();
         });
+        // opentrack's udp output, when it runs.
+        if !scripted {
+            headtrack::start();
+        }
         if let Some(r) = &args.route {
             let (lat, lon, _) = geo::pos_to_lla(g.plane.pos);
             let here = (lat.to_degrees(), lon.to_degrees());
@@ -6691,7 +6696,11 @@ impl Game {
             }
             let up = self.plane.pos.normalize();
             let day = ((up.dot(self.sun_dir()) as f32 + 0.2) / 0.4).clamp(0.0, 1.0);
-            let view = self.head.update(self.spec, dt_real, (self.cam_yaw, self.cam_pitch), self.cockpit_fov, self.plane.head, self.plane.rot, up, w / h, day);
+            // a head tracker turns and moves the head on top of the look (headtrack.rs).
+            let tr = headtrack::pose().unwrap_or_default();
+            self.head.track = DVec3::new(tr.x.clamp(-0.3, 0.3), tr.y.clamp(-0.2, 0.2), tr.z.clamp(-0.3, 0.3));
+            self.head.track_roll = tr.roll.clamp(-0.6, 0.6);
+            let view = self.head.update(self.spec, dt_real, (self.cam_yaw + tr.yaw, (self.cam_pitch - tr.pitch).clamp(-1.4, 1.4)), self.cockpit_fov, self.plane.head, self.plane.rot, up, w / h, day);
             fov = view.fov.to_radians();
             // A rough engine or damage shakes the whole cabin.
             let vibe = self.plane.dmg.vibe.min(2.0) as f64;
