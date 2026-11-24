@@ -93,7 +93,7 @@ pub fn card<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
         .fill(PANEL)
         .stroke(Stroke::new(1.0, LINE))
         .corner_radius(R + 2)
-        .inner_margin(18)
+        .inner_margin(egui::Margin::symmetric(24, 16))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui)
@@ -106,12 +106,42 @@ pub fn heading(ui: &mut egui::Ui, s: &str) {
     ui.label(RichText::new(s.to_uppercase()).font(bold(16.0)).color(Color32::WHITE).extra_letter_spacing(1.0));
 }
 
-pub fn page_title(ui: &mut egui::Ui, title: &str, blurb: &str) {
+/// a page's title, alone: no line under it saying what the page is for.
+pub fn page_title(ui: &mut egui::Ui, title: &str) {
     ui.label(RichText::new(title).font(semibold(30.0)).color(Color32::WHITE));
-    if !blurb.is_empty() {
-        ui.label(RichText::new(blurb).color(DIM));
+    ui.add_space(8.0);
+}
+
+/// one line of an instrument list: the name, its value, a dim detail, in three aligned columns,
+/// and the room at the right end (`right_w` wide, for a button) given back.
+pub fn list_row(ui: &mut egui::Ui, name: &str, value: &str, detail: &str, right_w: f32) -> Rect {
+    let w = ui.available_width();
+    let (r, _) = ui.allocate_exact_size(vec2(w, 48.0), Sense::hover());
+    let p = ui.painter();
+    let y = r.center().y;
+    let (name_w, value_w) = (150.0, (w * 0.32).clamp(180.0, 300.0));
+    let end = r.right() - right_w;
+    let one = |s: &str, font: FontId, col: Color32, width: f32| {
+        let mut job = egui::text::LayoutJob::simple_singleline(s.to_string(), font, col);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(8.0));
+        p.layout_job(job)
+    };
+    let ng = one(name, medium(15.0), DIM, name_w - 12.0);
+    p.galley(pos2(r.left(), y - ng.size().y * 0.5), ng, DIM);
+    let vg = one(value, semibold(16.0), Color32::WHITE, value_w - 12.0);
+    p.galley(pos2(r.left() + name_w, y - vg.size().y * 0.5), vg, Color32::WHITE);
+    let dx = r.left() + name_w + value_w;
+    if !detail.is_empty() && end - dx > 40.0 {
+        let dg = one(detail, FontId::proportional(13.5), DIM, end - dx - 12.0);
+        p.galley(pos2(dx, y - dg.size().y * 0.5), dg, DIM);
     }
-    ui.add_space(6.0);
+    Rect::from_min_max(pos2(end, r.top()), r.max)
+}
+
+/// a hairline across a card, between rows.
+pub fn rule(ui: &mut egui::Ui) {
+    let y = ui.cursor().top() - ui.spacing().item_spacing.y * 0.5;
+    ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, Color32::from_white_alpha(12)));
 }
 
 /// Small grey text.
@@ -144,7 +174,12 @@ pub enum Kind {
 
 /// A button, with an icon before its text if given.
 pub fn button(ui: &mut egui::Ui, text: &str, icon: Option<&egui::TextureHandle>, kind: Kind, size: Vec2) -> egui::Response {
-    let font = medium(if size.y >= 44.0 { 17.0 } else { 15.0 });
+    // the yellow one in the display face, in capitals, as the game's take off.
+    let (font, text) = match kind {
+        Kind::Primary => (bold(if size.y >= 44.0 { 26.0 } else { 18.0 }), text.to_uppercase()),
+        _ => (medium(if size.y >= 44.0 { 17.0 } else { 15.0 }), text.to_string()),
+    };
+    let text = text.as_str();
     let enabled = ui.is_enabled();
     let (fg, bg, bg_hi) = match kind {
         Kind::Primary => (ON_ACCENT, ACCENT, ACCENT_HI),
@@ -227,9 +262,9 @@ pub fn switch(ui: &mut egui::Ui, on: &mut bool) -> bool {
     resp.clicked()
 }
 
-/// One setting: its name and hint on the left, the control against the
-/// right edge (in reading order: it is placed by last frame's width), a
-/// faint line above all but a card's first row.
+/// one setting: its name (and a "?" with the hint, when there is one) on the
+/// left, centred on the control against the right edge (in reading order: it
+/// is placed by last frame's size), a faint line above all but a card's first row.
 pub fn row<R>(ui: &mut egui::Ui, name: &str, hint: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let w = ui.available_width();
     let id = egui::Id::unique(("launcher row", name));
@@ -239,11 +274,14 @@ pub fn row<R>(ui: &mut egui::Ui, name: &str, hint: &str, add: impl FnOnce(&mut e
         ui.add_space(8.0);
     }
     let lw = (w * 0.45).clamp(200.0, 340.0);
+    let last = ui.ctx().data(|d| d.get_temp::<Vec2>(id)).unwrap_or(vec2(f32::INFINITY, 32.0));
     let out = ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(vec2(lw, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(lw - 16.0);
-            ui.spacing_mut().item_spacing.y = 2.0;
-            ui.add_space(3.0);
+            let lh = ui.painter().layout_no_wrap("Ag".into(), medium(15.5), TEXT).size().y.max(if hint.is_empty() { 0.0 } else { 18.0 });
+            // (a row is as tall as the interact height, which would push the name down)
+            ui.spacing_mut().interact_size.y = lh;
+            ui.add_space(((last.y.min(34.0) - lh) * 0.5).max(0.0));
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 ui.label(RichText::new(name).font(medium(15.5)).color(TEXT));
@@ -253,13 +291,12 @@ pub fn row<R>(ui: &mut egui::Ui, name: &str, hint: &str, add: impl FnOnce(&mut e
             });
         });
         let cw = ui.available_width().max(80.0);
-        let last = ui.ctx().data(|d| d.get_temp::<f32>(id)).unwrap_or(cw).min(cw);
-        let at = Rect::from_min_size(pos2(ui.max_rect().right() - last, ui.cursor().top()), vec2(cw, f32::INFINITY));
+        let at = Rect::from_min_size(pos2(ui.max_rect().right() - last.x.min(cw), ui.cursor().top()), vec2(cw, f32::INFINITY));
         let r = ui.scope_builder(egui::UiBuilder::new().max_rect(at).layout(egui::Layout::top_down(egui::Align::Min)), add);
-        let got = r.response.rect.width();
-        if (got - last).abs() > 0.5 {
+        let got = r.response.rect.size();
+        if (got - last).abs().max_elem() > 0.5 {
             ui.ctx().data_mut(|d| d.insert_temp(id, got));
-            ui.ctx().request_discard("launcher row width");
+            ui.ctx().request_discard("launcher row size");
         }
         r.inner
     });
@@ -451,16 +488,16 @@ pub fn icon(p: &egui::Painter, icon: Icon, c: egui::Pos2, s: f32, col: Color32) 
 /// A page in the sidebar: its icon and name, lit when `on`, a dot when `badge`.
 pub fn nav_item(ui: &mut egui::Ui, name: &str, ic: Icon, on: bool, badge: bool) -> egui::Response {
     let w = ui.available_width();
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, 42.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 40.0), Sense::click());
     let lit = ease(ui.ctx(), resp.id, resp.hovered() || on);
     let p = ui.painter();
     if lit > 0.0 {
-        p.rect_filled(rect, R + 2, Color32::from_white_alpha((if on { 14.0 } else { 9.0 } * lit) as u8));
+        p.rect_filled(rect, R, Color32::from_white_alpha((if on { 14.0 } else { 9.0 } * lit) as u8));
     }
-    let bar = ui.ctx().animate_bool_with_time(resp.id.with("bar"), on, 0.15);
-    if bar > 0.0 {
-        let h = 22.0 * bar;
-        p.rect_filled(Rect::from_center_size(pos2(rect.left() + 1.5, rect.center().y), vec2(3.0, h)), 1.5, ACCENT);
+    // the chosen page outlined, as the game's sidebars, never a bar down one side.
+    let pick = ui.ctx().animate_bool_with_time(resp.id.with("pick"), on, 0.15);
+    if pick > 0.0 {
+        p.rect_stroke(rect, R, Stroke::new(1.0, ACCENT.gamma_multiply(0.7 * pick)), egui::StrokeKind::Inside);
     }
     let col = if on { Color32::WHITE } else { mix(DIM, TEXT, lit) };
     icon(p, ic, pos2(rect.left() + 26.0, rect.center().y), 19.0, if on { ACCENT } else { col });

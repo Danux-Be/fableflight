@@ -604,13 +604,13 @@ impl App {
             .exact_size(SIDEBAR)
             .resizable(false)
             .show_separator_line(false)
-            .frame(egui::Frame::new().fill(Color32::from_rgba_premultiplied(5, 7, 10, 232)).inner_margin(egui::Margin { left: 14, right: 14, top: 18, bottom: 18 }))
+            .frame(egui::Frame::new().fill(Color32::from_rgba_premultiplied(5, 7, 10, 232)).inner_margin(egui::Margin::same(16)))
             .show(ui, |ui| self.sidebar(ui));
         egui::Panel::bottom("footer")
             .show_separator_line(false)
-            .frame(egui::Frame::new().fill(Color32::from_rgba_premultiplied(5, 7, 10, 226)).inner_margin(egui::Margin { left: 36, right: 28, top: 14, bottom: 16 }))
+            .frame(egui::Frame::new().fill(Color32::from_rgba_premultiplied(5, 7, 10, 226)).inner_margin(egui::Margin { left: 32, right: 24, top: 16, bottom: 16 }))
             .show(ui, |ui| self.footer(ui));
-        egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(egui::Margin { left: 36, right: 24, top: 26, bottom: 8 })).show(ui, |ui| {
+        egui::CentralPanel::default().frame(egui::Frame::new().inner_margin(egui::Margin { left: 32, right: 24, top: 24, bottom: 8 })).show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_max_width((ui.available_width() - 12.0).min(PAGE_W));
                 match self.page {
@@ -694,10 +694,10 @@ impl App {
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
             let w = ui.available_width();
-            if style::button(ui, "Discord", Some(&self.tex.discord), Kind::Discord, vec2(w, 36.0)).on_hover_text(update::DISCORD_URL).clicked() {
+            if style::button(ui, "Discord", Some(&self.tex.discord), Kind::Discord, vec2(w, 40.0)).on_hover_text(update::DISCORD_URL).clicked() {
                 ctx.open_url(egui::OpenUrl::new_tab(update::DISCORD_URL));
             }
-            if style::button(ui, "GitHub", Some(&self.tex.github), Kind::Plain, vec2(w, 36.0)).on_hover_text(update::REPO_URL).clicked() {
+            if style::button(ui, "GitHub", Some(&self.tex.github), Kind::Plain, vec2(w, 40.0)).on_hover_text(update::REPO_URL).clicked() {
                 ctx.open_url(egui::OpenUrl::new_tab(update::REPO_URL));
             }
         });
@@ -709,11 +709,11 @@ impl App {
         let (title, detail, frac, busy, col) = self.status();
         ui.horizontal(|ui| {
             let play_w = 220.0;
-            let time_w = 130.0;
+            let time_w = if self.cfg.play_secs >= 60 { 150.0 } else { 0.0 };
             let left_w = ui.available_width() - play_w - time_w - 40.0;
             ui.allocate_ui_with_layout(vec2(left_w, 64.0), egui::Layout::top_down(egui::Align::Min), |ui| {
                 // as wide when idle as with the bar, so Play stays at the right.
-                ui.set_min_size(vec2(left_w, 58.0));
+                ui.set_min_size(vec2(left_w, 56.0));
                 ui.spacing_mut().item_spacing.y = 4.0;
                 if !busy {
                     // nothing under way: the words alone, level with the button.
@@ -738,15 +738,19 @@ impl App {
                 ui.add(egui::Label::new(RichText::new(&detail).size(13.5).color(DIM)).truncate());
             });
             ui.add_space(16.0);
-            // the time played, beside the button.
-            let (r, resp) = ui.allocate_exact_size(vec2(time_w, 58.0), egui::Sense::hover());
-            let p = ui.painter();
-            p.text(pos2(r.right(), r.center().y - 10.0), egui::Align2::RIGHT_CENTER, "PLAYTIME", style::bold(13.0), FAINT);
-            p.text(pos2(r.right(), r.center().y + 10.0), egui::Align2::RIGHT_CENTER, played(self.cfg.play_secs), style::semibold(19.0), Color32::WHITE);
-            resp.on_hover_text(format!("Time in the game started from this launcher. The logbook has {} in the air.", played(self.logbook_s as u64)));
+            // the time played, beside the button, on one line.
+            if time_w > 0.0 {
+                let (r, resp) = ui.allocate_exact_size(vec2(time_w, 56.0), egui::Sense::hover());
+                let mut job = egui::text::LayoutJob::default();
+                job.append("Played ", 0.0, egui::TextFormat { font_id: style::medium(15.0), color: DIM, ..Default::default() });
+                job.append(&played(self.cfg.play_secs), 0.0, egui::TextFormat { font_id: style::semibold(15.0), color: Color32::WHITE, ..Default::default() });
+                let g = ui.painter().layout_job(job);
+                ui.painter().galley(pos2(r.right() - g.size().x, r.center().y - g.size().y * 0.5), g, Color32::WHITE);
+                resp.on_hover_text(format!("Time in the game started from this launcher. The logbook has {} in the air.", played(self.logbook_s as u64)));
+            }
             ui.add_space(24.0);
             // the big button
-            let size = vec2(play_w, 58.0);
+            let size = vec2(play_w, 56.0);
             match &self.task {
                 Task::Testing { .. } => {
                     if style::button(ui, "Stop test", None, Kind::Danger, size).clicked() {
@@ -775,7 +779,7 @@ impl App {
                             self.start_update(&ctx);
                         }
                     } else {
-                        let resp = ui.add_enabled_ui(self.job.is_none(), |ui| style::button(ui, "PLAY", None, Kind::Primary, size)).inner;
+                        let resp = ui.add_enabled_ui(self.job.is_none(), |ui| style::button(ui, "Play", None, Kind::Primary, size)).inner;
                         if resp.clicked() {
                             self.play(&ctx);
                         }
@@ -865,10 +869,9 @@ impl App {
 
     fn home(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        ui.add_space(10.0);
+        ui.add_space(16.0);
         ui.label(RichText::new("Fly anywhere on Earth").font(style::bold(48.0)).color(Color32::WHITE));
-        ui.label(RichText::new("An open-world flight simulator with real weather, live traffic and the whole planet to fly over.").size(17.0).color(DIM));
-        ui.add_space(22.0);
+        ui.add_space(16.0);
         if let Some(rel) = self.update_available().cloned() {
             if self.game.exists() {
                 egui::Frame::new().fill(ACCENT.gamma_multiply(0.14)).stroke(egui::Stroke::new(1.0, ACCENT.gamma_multiply(0.5))).corner_radius(6).inner_margin(14).show(ui, |ui| {
@@ -890,65 +893,39 @@ impl App {
                         });
                     });
                 });
-                ui.add_space(10.0);
+                ui.add_space(16.0);
             }
         }
-        // three cards side by side
-        ui.columns(3, |cols| {
-            style::card(&mut cols[0], |ui| {
-                ui.set_min_height(150.0);
-                style::heading(ui, "Your system");
-                ui.add_space(4.0);
-                match &self.gpu {
-                    Some(g) => {
-                        ui.label(RichText::new(gpu::short(&g.name)).font(style::semibold(17.0)).color(Color32::WHITE));
-                        style::note(ui, format!("{} · {}", g.kind_label(), g.backend));
-                    }
-                    None => style::note(ui, "The graphics card couldn't be read."),
-                }
-                if let Some((w, h)) = self.screen {
-                    style::note(ui, format!("Screen {w} × {h}"));
-                }
-            });
-            let cur = self.gfx.matches();
-            style::card(&mut cols[1], |ui| {
-                ui.set_min_height(150.0);
-                style::heading(ui, "Graphics");
-                ui.add_space(4.0);
-                ui.label(RichText::new(cur.map_or("Custom", Preset::name)).font(style::semibold(17.0)).color(Color32::WHITE));
-                style::note(ui, format!("{:.0}% render resolution · {}", self.gfx.scale * 100.0, self.gfx.upscaler.name()));
-                style::note(ui, if self.gfx_on_disk { "Saved for the next start" } else { "Not set yet: the suggestion is used" });
-                ui.add_space(6.0);
-                if style::button(ui, "Change", None, Kind::Plain, vec2(0.0, 30.0)).clicked() {
-                    self.page = Page::Graphics;
-                }
-            });
-            let last = self.cfg.bench.last().cloned();
-            style::card(&mut cols[2], |ui| {
-                ui.set_min_height(150.0);
-                style::heading(ui, "Graphics test");
-                ui.add_space(4.0);
-                match &last {
-                    Some(r) => {
-                        let v = Verdict::of(r);
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new(format!("{:.0} fps", r.fps)).font(style::semibold(17.0)).color(Color32::WHITE));
-                            ui.label(RichText::new(v.label()).font(style::medium(15.0)).color(verdict_color(v)));
-                        });
-                        style::note(ui, format!("{} · 1% low {:.0} fps", r.preset, r.low1));
-                    }
-                    None => {
-                        ui.label(RichText::new("Not run yet").font(style::semibold(17.0)).color(Color32::WHITE));
-                        style::note(ui, "A 40-second flight that measures your frame rate.");
-                    }
-                }
-                ui.add_space(6.0);
-                if style::button(ui, if last.is_some() { "Test again" } else { "Run test" }, None, Kind::Plain, vec2(0.0, 30.0)).clicked() {
-                    self.page = Page::Test;
-                }
-            });
+        // this pc, its graphics and the last test, as one list.
+        let cur = self.gfx.matches();
+        let last = self.cfg.bench.last().cloned();
+        style::card(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let (card_name, card_detail) = match &self.gpu {
+                Some(g) => (gpu::short(&g.name).to_string(), format!("{} · {}", g.kind_label(), g.backend)),
+                None => ("Unknown".to_string(), "The graphics card couldn't be read".to_string()),
+            };
+            let screen = self.screen.map(|(w, h)| format!(" · {w} × {h}")).unwrap_or_default();
+            style::list_row(ui, "Graphics card", &card_name, &format!("{card_detail}{screen}"), 0.0);
+            style::rule(ui);
+            let saved = if self.gfx_on_disk { "" } else { " · not saved yet, the suggestion is used" };
+            let r = style::list_row(ui, "Graphics", cur.map_or("Custom", Preset::name), &format!("{:.0}% render resolution · {}{saved}", self.gfx.scale * 100.0, self.gfx.upscaler.name()), 120.0);
+            let mut b = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::right_to_left(egui::Align::Center)));
+            if style::button(&mut b, "Change", None, Kind::Plain, vec2(0.0, 32.0)).clicked() {
+                self.page = Page::Graphics;
+            }
+            style::rule(ui);
+            let (value, detail) = match &last {
+                Some(r) => (format!("{:.0} fps  ·  {}", r.fps, Verdict::of(r).label()), format!("{} · 1% low {:.0} fps", r.preset, r.low1)),
+                None => ("Not run yet".to_string(), String::new()),
+            };
+            let r = style::list_row(ui, "Graphics test", &value, &detail, 120.0);
+            let mut b = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::right_to_left(egui::Align::Center)));
+            if style::button(&mut b, if last.is_some() { "Test again" } else { "Run test" }, None, Kind::Plain, vec2(0.0, 32.0)).clicked() {
+                self.page = Page::Test;
+            }
         });
-        ui.add_space(10.0);
+        ui.add_space(16.0);
         // the latest release's notes
         let latest = self.latest().cloned();
         style::card(ui, |ui| {
@@ -986,7 +963,7 @@ impl App {
         });
         if let Some((_, true)) = &self.ended {
             if !self.log.is_empty() {
-                ui.add_space(10.0);
+                ui.add_space(16.0);
                 self.log_card(ui);
             }
         }
@@ -1005,7 +982,7 @@ impl App {
     fn graphics_page(&mut self, ui: &mut egui::Ui) {
         let now = ui.input(|i| i.time);
         ui.add_space(14.0);
-        style::page_title(ui, "Graphics", "Set how hard the game works your graphics card before it loads. The game reads these when it starts.");
+        style::page_title(ui, "Graphics");
         let before = self.gfx;
         style::card(ui, |ui| {
             style::heading(ui, "Preset");
@@ -1019,7 +996,7 @@ impl App {
                 }
             }
         });
-        ui.add_space(10.0);
+        ui.add_space(16.0);
         style::card(ui, |ui| {
             style::heading(ui, "Display");
             ui.add_space(4.0);
@@ -1034,20 +1011,20 @@ impl App {
                 let opts: Vec<(Upscaler, &str)> = Upscaler::ALL.iter().map(|u| (*u, u.name())).collect();
                 style::segments(ui, &mut g.upscaler, &opts);
             });
-            style::row(ui, "Anti-aliasing (TAA)", "Smooths edges and shimmer using past frames", |ui| {
+            style::row(ui, "Anti-aliasing (TAA)", "", |ui| {
                 style::switch(ui, &mut g.taa);
             });
             style::row(ui, "MSAA", "Multisampled edges in the scene (applied at start)", |ui| {
                 style::segments(ui, &mut g.msaa, &[(1, "Off"), (2, "2×"), (4, "4×")]);
             });
-            style::row(ui, "VSync", "Waits for the screen: no tearing, a little more latency", |ui| {
+            style::row(ui, "VSync", "", |ui| {
                 style::switch(ui, &mut g.vsync);
             });
-            style::row(ui, "Frame limit", "Caps the frame rate: cooler and quieter, longer on battery", |ui| {
+            style::row(ui, "Frame limit", "", |ui| {
                 style::segments(ui, &mut g.fps_cap, &[(0u16, "None"), (30, "30"), (60, "60"), (90, "90"), (120, "120"), (144, "144"), (165, "165"), (240, "240")]);
             });
         });
-        ui.add_space(10.0);
+        ui.add_space(16.0);
         style::card(ui, |ui| {
             style::heading(ui, "Quality");
             ui.add_space(4.0);
@@ -1055,22 +1032,22 @@ impl App {
             let all = [(Level::Off, "Off"), (Level::Low, "Low"), (Level::Medium, "Medium"), (Level::High, "High"), (Level::Ultra, "Ultra")];
             let no_off = &all[1..];
             let to_high = &all[..4];
-            style::row(ui, "Shadows", "The sun's shadows and how sharp they are", |ui| style::segments(ui, &mut g.shadows, &all));
+            style::row(ui, "Shadows", "", |ui| style::segments(ui, &mut g.shadows, &all));
             style::row(ui, "Clouds", "Volumetric clouds (Off still flies the weather)", |ui| style::segments(ui, &mut g.clouds, &all));
             style::row(ui, "Cloud shadows", "Cloud shadows on the ground: a fixed cost at any resolution", |ui| {
                 style::switch(ui, &mut g.cloud_shadows);
             });
-            style::row(ui, "Storms", "Detail of thunderstorm and squall cells", |ui| style::segments(ui, &mut g.storms, no_off));
-            style::row(ui, "Contrails", "Condensation trails behind aircraft at altitude", |ui| {
+            style::row(ui, "Storms", "", |ui| style::segments(ui, &mut g.storms, no_off));
+            style::row(ui, "Contrails", "", |ui| {
                 style::switch(ui, &mut g.contrails);
             });
-            style::row(ui, "Terrain", "How far out the ground keeps its detail", |ui| style::segments(ui, &mut g.terrain, no_off));
-            style::row(ui, "Scenery distance", "How far out buildings and trees are loaded", |ui| style::segments(ui, &mut g.scenery, no_off));
-            style::row(ui, "City detail", "How far buildings keep their full detail", |ui| style::segments(ui, &mut g.city, no_off));
-            style::row(ui, "Trees", "How far trees are drawn", |ui| style::segments(ui, &mut g.trees, no_off));
+            style::row(ui, "Terrain", "", |ui| style::segments(ui, &mut g.terrain, no_off));
+            style::row(ui, "Scenery distance", "", |ui| style::segments(ui, &mut g.scenery, no_off));
+            style::row(ui, "City detail", "", |ui| style::segments(ui, &mut g.city, no_off));
+            style::row(ui, "Trees", "", |ui| style::segments(ui, &mut g.trees, no_off));
             style::row(ui, "Water", "Low plain, Medium full, High with reflections", |ui| style::segments(ui, &mut g.water, &no_off[..3]));
-            style::row(ui, "Cars", "Traffic on the roads and parked cars", |ui| style::segments(ui, &mut g.cars, to_high));
-            style::row(ui, "Birds", "Flocks in the air", |ui| style::segments(ui, &mut g.birds, to_high));
+            style::row(ui, "Cars", "", |ui| style::segments(ui, &mut g.cars, to_high));
+            style::row(ui, "Birds", "", |ui| style::segments(ui, &mut g.birds, to_high));
             style::row(ui, "Ambient occlusion", "Soft contact shadows in corners and under things", |ui| {
                 style::switch(ui, &mut g.ao);
             });
@@ -1078,24 +1055,22 @@ impl App {
         if self.gfx != before {
             self.save_gfx(now, "Saved");
         }
-        ui.add_space(10.0);
-        style::note(ui, "These are the same settings as the game's Settings → Graphics, saved in graphics.json. Google's photorealistic 3D tiles have their own detail setting in the game.");
     }
 
     fn test_page(&mut self, ui: &mut egui::Ui) {
         let now = ui.input(|i| i.time);
         ui.add_space(14.0);
-        style::page_title(ui, "Graphics test", "A short scripted flight over San Francisco's city and bay, at your screen's resolution, that measures how smoothly the game runs.");
+        style::page_title(ui, "Graphics test");
         let testing = matches!(self.task, Task::Testing { .. });
         let idle = !self.busy() && self.game.exists();
         style::card(ui, |ui| {
             style::heading(ui, "Run a test");
             ui.add_space(4.0);
-            style::note(ui, format!("Each run opens the game in a window, waits for the scenery to stream in, then measures {BENCH_SECS} seconds of flight. Your settings aren't changed until you choose to use a result."));
+            style::note(ui, format!("Opens the game in a window over San Francisco and measures {BENCH_SECS} s of flight. Your settings stay until you use a result."));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 ui.add_enabled_ui(idle, |ui| {
-                    if style::button(ui, "Find the best preset", None, Kind::Primary, vec2(200.0, 40.0)).on_hover_text("Starts at the suggested preset and steps up or down: up to four runs of about 45 s each").clicked() {
+                    if style::button(ui, "Find the best preset", None, Kind::Plain, vec2(200.0, 40.0)).on_hover_text("Starts at the suggested preset and steps up or down: up to four runs of about 45 s each").clicked() {
                         self.start_test(true);
                     }
                     let cur = self.gfx.matches().map_or("Custom".to_string(), |p| p.name().to_string());
@@ -1118,7 +1093,7 @@ impl App {
         });
         // this session's runs and the verdict
         if let Some(plan) = &self.plan {
-            ui.add_space(10.0);
+            ui.add_space(16.0);
             let best = plan.best;
             let auto = plan.auto;
             let runs: Vec<(Option<Preset>, Option<BenchResult>)> = plan.done.clone();
@@ -1169,23 +1144,21 @@ impl App {
                 self.save_gfx(now, "Saved");
             }
         }
-        ui.add_space(10.0);
+        ui.add_space(16.0);
+        // (what stable and playable mean is on each verdict's hover)
         let history = self.cfg.bench.clone();
-        style::card(ui, |ui| {
-            style::heading(ui, "Earlier results");
-            ui.add_space(4.0);
-            if history.is_empty() {
-                style::note(ui, "None yet.");
-            }
-            for r in history.iter().rev().take(8) {
-                result_row(ui, &r.preset, Some(r));
-            }
-            ui.add_space(6.0);
-            style::note(ui, "Stable: the slowest 1% of frames stay above 50 fps. Playable: above 30 fps. Results depend on the weather, the scenery loaded and what else the PC is doing.");
-        });
+        if !history.is_empty() {
+            style::card(ui, |ui| {
+                style::heading(ui, "Earlier results");
+                ui.add_space(4.0);
+                for r in history.iter().rev().take(8) {
+                    result_row(ui, &r.preset, Some(r));
+                }
+            });
+        }
         if let Some((_, true)) = &self.ended {
             if !self.log.is_empty() {
-                ui.add_space(10.0);
+                ui.add_space(16.0);
                 self.log_card(ui);
             }
         }
@@ -1194,7 +1167,7 @@ impl App {
     fn updates_page(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         ui.add_space(14.0);
-        style::page_title(ui, "Updates", "New versions come straight from the FableFlight releases on GitHub: no need to download anything by hand.");
+        style::page_title(ui, "Updates");
         style::card(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
@@ -1244,7 +1217,7 @@ impl App {
         if let Releases::Ready(list) | Releases::Checking(_, list) = &self.releases {
             let list = list.clone();
             for r in &list {
-                ui.add_space(10.0);
+                ui.add_space(16.0);
                 style::card(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&r.name).font(style::semibold(20.0)).color(Color32::WHITE));
@@ -1263,27 +1236,27 @@ impl App {
 
     fn settings_page(&mut self, ui: &mut egui::Ui) {
         ui.add_space(14.0);
-        style::page_title(ui, "Settings", "How the launcher behaves. The game's own settings are in the game, under Esc and then Settings.");
+        style::page_title(ui, "Settings");
         style::card(ui, |ui| {
             style::heading(ui, "Launcher");
             ui.add_space(4.0);
-            style::row(ui, "Minimise when the game is ready", "Out of the way once the game's window is up; back when you quit", |ui| {
+            style::row(ui, "Minimise when the game is ready", "", |ui| {
                 if style::switch(ui, &mut self.cfg.minimize_on_ready) {
                     self.cfg.save();
                 }
             });
-            style::row(ui, "Check for updates on start", "Asks GitHub for new releases at most every half hour", |ui| {
+            style::row(ui, "Check for updates on start", "", |ui| {
                 if style::switch(ui, &mut self.cfg.check_updates) {
                     self.cfg.save();
                 }
             });
         });
-        ui.add_space(10.0);
+        ui.add_space(16.0);
         let log = run::log_path();
         style::card(ui, |ui| {
             style::heading(ui, "Game files");
             ui.add_space(4.0);
-            style::row(ui, "Game folder", "Where the game and the launcher are installed", |ui| {
+            style::row(ui, "Game folder", "", |ui| {
                 if style::button(ui, "Open folder", None, Kind::Plain, vec2(0.0, 32.0)).clicked() {
                     open_path(&self.dir);
                 }
@@ -1296,7 +1269,7 @@ impl App {
                 }
             });
         });
-        ui.add_space(10.0);
+        ui.add_space(16.0);
         style::card(ui, |ui| {
             style::heading(ui, "About");
             ui.add_space(4.0);
@@ -1305,12 +1278,10 @@ impl App {
             if let Some(g) = &self.gpu {
                 style::fact(ui, "Graphics", RichText::new(format!("{} · {}", gpu::short(&g.name), g.backend)).color(Color32::WHITE));
             }
-            ui.add_space(4.0);
-            style::note(ui, "FableFlight is open source: the code, the issues and the releases are on GitHub.");
         });
         if let Some((_, true)) = &self.ended {
             if !self.log.is_empty() {
-                ui.add_space(10.0);
+                ui.add_space(16.0);
                 self.log_card(ui);
             }
         }
@@ -1358,7 +1329,9 @@ fn notes(ui: &mut egui::Ui, body: &str, max_lines: Option<usize>) {
     let mut shown = 0;
     for raw in body.lines() {
         let line = raw.trim_end();
-        if line.trim().is_empty() {
+        // (github's own heading and changelog link say nothing here)
+        let bare = line.trim().trim_start_matches('#').trim().replace("**", "");
+        if line.trim().is_empty() || bare.eq_ignore_ascii_case("What's Changed") || bare.starts_with("Full Changelog") || bare.starts_with("New Contributors") {
             continue;
         }
         if max_lines.is_some_and(|m| shown >= m) {
