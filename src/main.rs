@@ -8887,9 +8887,9 @@ impl Game {
         let mut out = vec![(format!("{}  {}", a.code(), a.name), 0u8)];
         let wind_kt = self.wx.wind * 1.94384;
         let wind = if wind_kt < 1.0 { t!("game.calm").to_string() } else { format!("{:03.0}°/{:.0} kt", self.wx.wind_from, wind_kt) };
-        let moving = f.traffic.movers.len();
-        let active = f.traffic.active.map(|(ri, e)| t!("game.runway_in_use", g.runways[ri].ident[e])).unwrap_or_else(|| t!("game.no_runway_on_the_map").into());
-        out.push((t!("game.wind_elevation_ft_aircraft_moving", g.elev * 3.28084, moving, active = active, wind = wind), 0));
+        // the runway in use and the wind, nothing more.
+        let active = f.traffic.active.map(|(ri, e)| t!("game.runway_in_use", g.runways[ri].ident[e]));
+        out.push((active.map_or(wind.clone(), |a| format!("{a}  ·  {wind}")), 0));
         let p = g.local(self.plane.pos);
         let alt = geo::pos_to_lla(self.plane.pos).2 as f32;
         let fw = self.plane.forward();

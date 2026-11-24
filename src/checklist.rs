@@ -494,70 +494,80 @@ impl Game {
         Ctx { plane: &self.plane, ap: self.ap.on }
     }
 
-    /// the checklist page of the flight panel.
+    /// the checklist page of the flight panel: the lists down the left, the
+    /// one open on the right with the next item to do lit.
     pub(crate) fn checklist_page(&mut self, ui: &mut egui::Ui) {
-        use flightui::{key, note, tag, LIT, SOFT};
+        use flightui::{key, note, LIT};
         let lists = lists(self.spec);
         self.checks.sync(lists);
         if lists.is_empty() {
             note(ui, tr_en("This aircraft flies without a checklist here."));
             return;
         }
+        let ctx = self.check_ctx();
+        // what is done in every list, for the sidebar's counts.
+        let state: Vec<Vec<(bool, bool)>> = lists.iter().enumerate().map(|(l, list)| {
+            list.items.iter().enumerate().map(|(k, it)| {
+                let met = it.is.met(&ctx);
+                (met == Some(true) || self.checks.ticked(l, k), met.is_some())
+            }).collect()
+        }).collect();
         let l = self.checks.list;
         let list = &lists[l];
-        let ctx = self.check_ctx();
-        let done: Vec<(bool, Option<bool>)> = list.items.iter().enumerate().map(|(k, it)| {
-            let met = it.is.met(&ctx);
-            (met == Some(true) || self.checks.ticked(l, k), met)
-        }).collect();
+        let done = &state[l];
         let n_done = done.iter().filter(|d| d.0).count();
+        let next = done.iter().position(|d| !d.0);
         let mut go: Option<usize> = None;
         let mut flip: Option<usize> = None;
         let mut reset = false;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            if key(ui, "‹", false, 30.0, 26.0).clicked() && l > 0 {
-                go = Some(l - 1);
-            }
+        let side_w = 210.0;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            ui.allocate_ui_with_layout(vec2(side_w, 10.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for (j, li) in lists.iter().enumerate() {
+                    let n = state[j].iter().filter(|d| d.0).count();
+                    if list_row(ui, tr_en(li.name), n, li.items.len(), j == l, side_w).clicked() {
+                        go = Some(j);
+                    }
+                }
+            });
             ui.vertical(|ui| {
-                tag(ui, &format!("{} {} / {}", tr_en("CHECKLIST"), l + 1, lists.len()));
-                ui.label(egui::RichText::new(tr_en(list.name)).font(menu::semibold(17.0)).color(Color32::WHITE));
+                ui.spacing_mut().item_spacing.y = 2.0;
+                // the list's name, how far along, and a bar.
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tr_en(list.name)).font(menu::semibold(20.0)).color(Color32::WHITE));
+                    menu::at_right(ui, "check_n", |ui| {
+                        let col = if n_done == list.items.len() { LIT } else { DIM };
+                        ui.label(egui::RichText::new(format!("{n_done} / {}", list.items.len())).font(menu::label()).color(col));
+                    });
+                });
+                ui.add_space(4.0);
+                flightui::meter(ui, n_done as f32 / list.items.len().max(1) as f32, if n_done == list.items.len() { GOOD } else { LIT });
+                ui.add_space(8.0);
+                for (k, it) in list.items.iter().enumerate() {
+                    let r = item_row(ui, tr_en(it.what), tr_en(it.state), done[k].0, Some(k) == next);
+                    let r = if done[k].1 { r.on_hover_text(tr_en("Ticks itself from the cockpit")) } else { r };
+                    if r.clicked() {
+                        flip = Some(k);
+                    }
+                }
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if flightui::text_link(ui, tr_en("Reset")).clicked() {
+                        reset = true;
+                    }
+                    if l + 1 < lists.len() {
+                        menu::at_right(ui, "check_next", |ui| {
+                            let all = n_done == list.items.len();
+                            let word = format!("{}  ›", tr_en(lists[l + 1].name));
+                            if key(ui, &word, all, 210.0, 30.0).clicked() {
+                                go = Some(l + 1);
+                            }
+                        });
+                    }
+                });
             });
-            menu::at_right(ui, "check_nav", |ui| {
-                if key(ui, "›", false, 30.0, 26.0).clicked() && l + 1 < lists.len() {
-                    go = Some(l + 1);
-                }
-                if key(ui, tr_en("Reset"), false, 64.0, 26.0).clicked() {
-                    reset = true;
-                }
-                let col = if n_done == list.items.len() { LIT } else { SOFT };
-                ui.label(egui::RichText::new(format!("{n_done}/{}", list.items.len())).font(menu::semibold(14.0)).color(col));
-            });
-        });
-        ui.add_space(6.0);
-        for (k, it) in list.items.iter().enumerate() {
-            if item_row(ui, tr_en(it.what), tr_en(it.state), done[k].0, done[k].1.is_some()).clicked() {
-                flip = Some(k);
-            }
-        }
-        ui.add_space(6.0);
-        if n_done == list.items.len() && l + 1 < lists.len() {
-            let next = format!("{}  ›  {}", tr_en("Complete"), tr_en(lists[l + 1].name));
-            if key(ui, &next, true, ui.available_width(), 30.0).clicked() {
-                go = Some(l + 1);
-            }
-        } else {
-            note(ui, tr_en("Items with a dot tick themselves from the cockpit; click any item to tick it by hand."));
-        }
-        // every list at a glance, to jump to one.
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-            for (j, li) in lists.iter().enumerate() {
-                if flightui::chip(ui, tr_en(li.name), false, j == l).clicked() {
-                    go = Some(j);
-                }
-            }
         });
         if let Some(k) = flip {
             self.checks.toggle(l, k);
@@ -571,43 +581,80 @@ impl Game {
     }
 }
 
-/// one item: a tick box, the item, what it should be; a dot where the sim checks it.
-fn item_row(ui: &mut egui::Ui, what: &str, state: &str, done: bool, sim: bool) -> egui::Response {
+/// the green of a done item.
+const GOOD: Color32 = Color32::from_rgb(110, 210, 130);
+const DIM: Color32 = menu::DIM;
+
+/// a list in the sidebar: its name and how many of its items are done, a tick when all are.
+fn list_row(ui: &mut egui::Ui, name: &str, done: usize, of: usize, on: bool, w: f32) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, name));
+    let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
+    let p = ui.painter();
+    if on {
+        p.rect_filled(r, 0.0, Color32::from_white_alpha(14));
+        p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, flightui::LIT);
+    } else if lit > 0.0 {
+        p.rect_filled(r, 0.0, Color32::from_white_alpha((8.0 * lit) as u8));
+    }
+    let all = done == of && of > 0;
+    let col = if on { Color32::WHITE } else if all { DIM } else { menu::TEXT };
+    let right = if all { String::new() } else { format!("{done}/{of}") };
+    let rg = p.layout_no_wrap(right, menu::caption(), DIM);
+    let ng = menu::one_line(p, name, menu::label(), col, w - 50.0);
+    p.galley(pos2(r.left() + 14.0, r.center().y - ng.size().y * 0.5), ng, col);
+    if all {
+        tick(p, pos2(r.right() - 16.0, r.center().y), GOOD);
+    } else {
+        p.galley(pos2(r.right() - 10.0 - rg.size().x, r.center().y - rg.size().y * 0.5), rg, DIM);
+    }
+    resp
+}
+
+/// a tick mark centred at `c`.
+fn tick(p: &egui::Painter, c: egui::Pos2, col: Color32) {
+    p.line(vec![c + vec2(-5.0, 0.0), c + vec2(-1.5, 3.5), c + vec2(5.0, -4.0)], Stroke::new(2.0, col));
+}
+
+/// one item: a tick box, the item, a dotted leader and what it should be.
+/// the next item to do is lit; done ones step back.
+fn item_row(ui: &mut egui::Ui, what: &str, state: &str, done: bool, next: bool) -> egui::Response {
     let w = ui.available_width();
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 34.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, done, what));
     let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
     let p = ui.painter();
+    if next {
+        p.rect_filled(r, 0.0, flightui::LIT.gamma_multiply(0.10));
+        p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, flightui::LIT);
+    }
     if lit > 0.0 {
-        p.rect_filled(r, 4.0, Color32::from_white_alpha((14.0 * lit) as u8));
+        p.rect_filled(r, 0.0, Color32::from_white_alpha((10.0 * lit) as u8));
     }
-    let good = Color32::from_rgb(120, 220, 140);
-    let bx = Rect::from_center_size(pos2(r.left() + 16.0, r.center().y), vec2(16.0, 16.0));
+    let bx = Rect::from_center_size(pos2(r.left() + 22.0, r.center().y), vec2(18.0, 18.0));
     if done {
-        p.rect_filled(bx, 4.0, good.gamma_multiply(0.25));
-        p.rect_stroke(bx, 4.0, Stroke::new(1.4, good), egui::StrokeKind::Inside);
-        p.line(vec![bx.left_center() + vec2(3.5, 0.0), bx.center_bottom() + vec2(-1.0, -4.0), bx.right_top() + vec2(-3.5, 4.0)], Stroke::new(1.8, good));
+        p.rect_filled(bx, 3.0, GOOD.gamma_multiply(0.22));
+        p.rect_stroke(bx, 3.0, Stroke::new(1.4, GOOD), egui::StrokeKind::Inside);
+        tick(p, bx.center(), GOOD);
     } else {
-        p.rect_stroke(bx, 4.0, Stroke::new(1.2, Color32::from_white_alpha(120)), egui::StrokeKind::Inside);
+        p.rect_stroke(bx, 3.0, Stroke::new(1.3, Color32::from_white_alpha(if next { 200 } else { 110 })), egui::StrokeKind::Inside);
     }
-    let col = if done { flightui::SOFT } else { Color32::WHITE };
-    let right = p.layout_no_wrap(state.to_string(), menu::semibold(13.0), if done { good } else { flightui::LIT });
-    let room = (r.width() - 40.0 - right.size().x - 30.0).max(40.0);
-    let left = menu::one_line(p, what, menu::caption(), col, room);
-    p.galley(pos2(r.left() + 32.0, r.center().y - left.size().y * 0.5), left, col);
-    // dotted leader between the item and its state.
-    let x0 = r.left() + 32.0 + room.min(p.layout_no_wrap(what.to_string(), menu::caption(), col).size().x) + 8.0;
-    let x1 = r.right() - 14.0 - right.size().x - 8.0;
-    let mut x = x0;
+    let col = if done { DIM } else { Color32::WHITE };
+    let scol = if done { GOOD.gamma_multiply(0.8) } else if next { flightui::LIT } else { menu::TEXT };
+    let right = p.layout_no_wrap(state.to_uppercase(), menu::semibold(14.0), scol);
+    let room = (r.width() - 44.0 - right.size().x - 30.0).max(40.0);
+    let left = menu::one_line(p, what, menu::label(), col, room);
+    let lw = left.size().x;
+    p.galley(pos2(r.left() + 42.0, r.center().y - left.size().y * 0.5), left, col);
+    // the dotted leader between the item and its state.
+    let x1 = r.right() - 12.0 - right.size().x - 10.0;
+    let mut x = r.left() + 42.0 + lw + 10.0;
     while x < x1 {
-        p.circle_filled(pos2(x, r.center().y + 4.0), 0.8, Color32::from_white_alpha(60));
-        x += 5.0;
+        p.circle_filled(pos2(x, r.center().y + 5.0), 0.9, Color32::from_white_alpha(if done { 30 } else { 60 }));
+        x += 6.0;
     }
     let rw = right.size();
-    p.galley(pos2(r.right() - 10.0 - rw.x, r.center().y - rw.y * 0.5), right, col);
-    if sim {
-        p.circle_filled(pos2(r.right() - 4.0, r.center().y), 2.2, Color32::from_rgb(120, 180, 255));
-    }
+    p.galley(pos2(r.right() - 12.0 - rw.x, r.center().y - rw.y * 0.5), right, scol);
     resp
 }
 

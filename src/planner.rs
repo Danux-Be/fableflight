@@ -494,10 +494,7 @@ impl Game {
         if menu::wide_button(ui, label, Hint::None, false, ready).on_hover_text(tip).on_disabled_hover_text(tip).clicked() {
             self.planner_make();
         }
-        for n in &self.planner.notes {
-            ui.add_space(6.0);
-            ui.label(RichText::new(n).font(menu::caption()).color(Color32::from_rgb(255, 190, 110)));
-        }
+        // (a missing procedure shows as none in the grid below: no note for it here)
     }
 
     /// simbrief: username, import the latest plan, or plan a new one there.

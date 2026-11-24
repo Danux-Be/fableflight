@@ -467,31 +467,30 @@ impl Game {
                         }
                     });
                 }
-                // the reputation in each line of work.
-                card(ui, 0.0, |ui| {
-                    widgets::title(ui, tr_en("REPUTATION"));
-                    let cols = 2;
-                    let cw = (ui.available_width() - 20.0) / cols as f32;
-                    let kinds: Vec<Kind> = KINDS.iter().copied().filter(|k| self.career.has(k.lic()) || self.career.rep_of(*k) > 0.0).collect();
-                    if kinds.is_empty() {
-                        widgets::empty(ui, tr_en("Each kind of work earns its own reputation. Your first licence opens ferry flights, tours and aerial photography."));
-                    }
-                    for row in kinds.chunks(cols) {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 20.0;
-                            for k in row {
-                                let (r, _) = ui.allocate_exact_size(vec2(cw, 46.0), Sense::hover());
-                                let p = ui.painter();
-                                let rep = self.career.rep_of(*k);
-                                let (t, f) = tier(rep);
-                                p.circle_filled(pos2(r.left() + 5.0, r.top() + 11.0), 4.0, k.colour());
-                                p.text(pos2(r.left() + 16.0, r.top() + 11.0), Align2::LEFT_CENTER, tr_en(k.name()), menu::medium(14.5), Color32::WHITE);
-                                p.text(pos2(r.right(), r.top() + 11.0), Align2::RIGHT_CENTER, format!("{}  ·  {:.0}", tr_en(TIERS[t].1), rep), menu::caption(), DIM);
-                                meter(p, Rect::from_min_size(pos2(r.left() + 16.0, r.top() + 28.0), vec2(r.width() - 16.0, 5.0)), f, k.colour());
-                            }
-                        });
-                    }
-                });
+                // the reputation in each line of work, once there is some work.
+                let kinds: Vec<Kind> = KINDS.iter().copied().filter(|k| self.career.has(k.lic()) || self.career.rep_of(*k) > 0.0).collect();
+                if !kinds.is_empty() {
+                    card(ui, 0.0, |ui| {
+                        widgets::title(ui, tr_en("REPUTATION"));
+                        let cols = 2;
+                        let cw = (ui.available_width() - 20.0) / cols as f32;
+                        for row in kinds.chunks(cols) {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 20.0;
+                                for k in row {
+                                    let (r, _) = ui.allocate_exact_size(vec2(cw, 46.0), Sense::hover());
+                                    let p = ui.painter();
+                                    let rep = self.career.rep_of(*k);
+                                    let (t, f) = tier(rep);
+                                    p.circle_filled(pos2(r.left() + 5.0, r.top() + 11.0), 4.0, k.colour());
+                                    p.text(pos2(r.left() + 16.0, r.top() + 11.0), Align2::LEFT_CENTER, tr_en(k.name()), menu::medium(14.5), Color32::WHITE);
+                                    p.text(pos2(r.right(), r.top() + 11.0), Align2::RIGHT_CENTER, format!("{}  ·  {:.0}", tr_en(TIERS[t].1), rep), menu::caption(), DIM);
+                                    meter(p, Rect::from_min_size(pos2(r.left() + 16.0, r.top() + 28.0), vec2(r.width() - 16.0, 5.0)), f, k.colour());
+                                }
+                            });
+                        }
+                    });
+                }
                 // the licences held, as badges.
                 card(ui, 0.0, |ui| {
                     widgets::title(ui, tr_en("LICENCES AND RATINGS"));
@@ -533,7 +532,6 @@ impl Game {
                 card(ui, 0.0, |ui| {
                     widgets::title(ui, tr_en("BASE"));
                     ui.label(RichText::new(format!("{}  {}", self.career.base, apt_name(&self.career.base))).font(menu::semibold(17.0)).color(Color32::WHITE));
-                    ui.label(RichText::new(tr_en("Jobs start where you are. Fly a job to move, or buy an airline ticket.")).font(menu::caption()).color(DIM));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         ui.add(egui::TextEdit::singleline(&mut self.career.view.move_to).desired_width(90.0).hint_text("ICAO").font(menu::label()).margin(vec2(8.0, 6.0)));
@@ -555,17 +553,16 @@ impl Game {
                         }
                     });
                 });
-                // the latest money in and out.
-                card(ui, 0.0, |ui| {
-                    widgets::title(ui, tr_en("RECENT"));
-                    let rows: Vec<_> = self.career.ledger.iter().rev().filter(|e| e.amount != 0.0).take(6).cloned().collect();
-                    if rows.is_empty() {
-                        widgets::empty(ui, tr_en("Nothing yet."));
-                    }
-                    for e in rows {
-                        widgets::line(ui, &e.what, &money(e.amount), if e.amount < 0.0 { BAD } else { OK });
-                    }
-                });
+                // the latest money in and out, once there is any.
+                let rows: Vec<_> = self.career.ledger.iter().rev().filter(|e| e.amount != 0.0).take(6).cloned().collect();
+                if !rows.is_empty() {
+                    card(ui, 0.0, |ui| {
+                        widgets::title(ui, tr_en("RECENT"));
+                        for e in rows {
+                            widgets::line(ui, &e.what, &money(e.amount), if e.amount < 0.0 { BAD } else { OK });
+                        }
+                    });
+                }
             });
         });
         act

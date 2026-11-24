@@ -54,6 +54,8 @@ Or build the release binaries (`target/release/fablegame`, `target/release/fable
 cargo build --release --locked
 ```
 
+The release profile uses thin LTO and incremental builds so a change rebuilds quickly. The published downloads are built with `cargo build --profile dist` (full LTO, one codegen unit, into `target/dist`), which takes much longer and runs a few percent faster.
+
 ## Features
 
 - **Aircraft:** Cessna 172RG, Robin DR400, Beechcraft A36 Bonanza, Boeing 747, Gulfstream G650, F/A-18, F-4, F-22, Concorde, SR-71, Starship, downloadable [FlightGear aircraft](https://wiki.flightgear.org/FGAddon) (or imported from a FlightGear folder on your computer), and your own aircraft from a JSON file and a glTF model, see [docs/custom-aircraft.md](docs/custom-aircraft.md).

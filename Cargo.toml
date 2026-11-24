@@ -58,10 +58,20 @@ ash = "0.38"
 # Keep in step with wgpu's naga version when upgrading wgpu.
 naga = { version = "=30.0.1", features = ["wgsl-in", "msl-out"] }
 
-# full lto and one codegen unit for faster release builds.
+# the release you build and play: thin lto over many codegen units, kept
+# between builds, so a change relinks in a fraction of the time.
 [profile.release]
+lto = "thin"
+codegen-units = 16
+incremental = true
+
+# the build that ships (release.yml): full lto and one codegen unit, a few
+# percent faster and far slower to build. cargo build --profile dist.
+[profile.dist]
+inherits = "release"
 lto = "fat"
 codegen-units = 1
+incremental = false
 
 # optimised dependencies so debug builds stay playable.
 # line numbers only, not full debug info: a fraction of the size and much faster to link.
@@ -72,10 +82,3 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 3
 debug = false
-
-# local testing at release speed without the long fat lto link: cargo run --profile fast.
-[profile.fast]
-inherits = "release"
-lto = "thin"
-codegen-units = 16
-incremental = true
