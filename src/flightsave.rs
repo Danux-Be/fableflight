@@ -230,7 +230,7 @@ impl Game {
                 if menu::choice(ui, tr_en("Load"), false, 90.0).clicked() {
                     load = Some(s.clone());
                 }
-                if menu::choice(ui, "×", false, 36.0).clicked() {
+                if menu::close_button(ui, 32.0, "").clicked() {
                     gone = Some(s.name.clone());
                 }
             });

@@ -423,11 +423,11 @@ impl Game {
                 p.rect_filled(r, menu::R_PANEL, Color32::from_rgb(20, 18, 8));
                 p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, ACCENT.gamma_multiply(0.45)), egui::StrokeKind::Inside);
                 menu::glow(p, r.right_top() + vec2(-80.0, 30.0), vec2(260.0, 160.0), Color32::from_rgba_premultiplied(60, 48, 6, 40));
-                p.text(r.left_top() + vec2(24.0, 22.0), Align2::LEFT_TOP, tr_en("NEXT STEP"), menu::semibold(12.5), ACCENT);
-                let hg = menu::one_line(p, &head, menu::bold(30.0), Color32::WHITE, r.width() - 260.0);
-                p.galley(r.left_top() + vec2(24.0, 42.0), hg, Color32::WHITE);
+                let hg = menu::one_line(p, &head, menu::bold(32.0), Color32::WHITE, r.width() - 260.0);
+                let hh = hg.size().y;
+                p.galley(pos2(r.left() + 24.0, r.center().y - hh + 2.0), hg, Color32::WHITE);
                 let lg = menu::one_line(p, &line, menu::label(), TEXT, r.width() - 260.0);
-                p.galley(r.left_top() + vec2(24.0, 86.0), lg, TEXT);
+                p.galley(pos2(r.left() + 24.0, r.center().y + 10.0), lg, TEXT);
                 let br = Rect::from_min_size(pos2(r.right() - 214.0, r.center().y - 22.0), vec2(190.0, 44.0));
                 let mut bu = ui.new_child(egui::UiBuilder::new().max_rect(br));
                 let label = match next {
@@ -560,8 +560,6 @@ impl Game {
                     } else if lit > 0.0 {
                         p.rect_filled(r, menu::R_WIDGET, Color32::from_white_alpha((10.0 * lit) as u8));
                     }
-                    let col = k.map_or(ACCENT, |k| k.colour());
-                    p.rect_filled(Rect::from_min_size(pos2(r.left(), r.top() + 9.0), vec2(3.0, 20.0)), 1.0, if on { col } else { col.gamma_multiply(0.5) });
                     let name = k.map_or(tr_en("All work"), |k| tr_en(k.name()));
                     let locked = k.is_some_and(|k| !self.career.has(k.lic()));
                     let g = menu::one_line(p, name, menu::medium(14.5), if locked { DIM } else { Color32::WHITE }, fw - 60.0);
@@ -1164,7 +1162,6 @@ fn job_row(ui: &mut egui::Ui, j: &Job, on: bool, locked: Option<&String>) -> egu
     p.rect_filled(r, menu::R_PANEL, if on { menu::mix(menu::PANEL, menu::CHOSEN, 0.6) } else { menu::mix(menu::PANEL, menu::RAISED, lit) });
     p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, if on { ACCENT.gamma_multiply(0.7) } else { menu::LINE_HI }), egui::StrokeKind::Inside);
     let col = j.kind.colour();
-    p.rect_filled(Rect::from_min_size(r.min, vec2(4.0, r.height())), 0.0, if locked.is_some() { col.gamma_multiply(0.35) } else { col });
     let fade = if locked.is_some() { 0.5 } else { 1.0 };
     let cr = chip(p, pos2(r.left() + 18.0, r.top() + 20.0), &tr_en(j.kind.name()).to_uppercase(), col.gamma_multiply(fade));
     tier_dots(p, pos2(cr.right() + 12.0, r.top() + 20.0), j.tier, col.gamma_multiply(fade));

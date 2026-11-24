@@ -560,7 +560,7 @@ impl Game {
                     if l + 1 < lists.len() {
                         menu::at_right(ui, "check_next", |ui| {
                             let all = n_done == list.items.len();
-                            let word = format!("{}  ›", tr_en(lists[l + 1].name));
+                            let word = format!("{}: {}", tr_en("Next"), tr_en(lists[l + 1].name));
                             if key(ui, &word, all, 210.0, 30.0).clicked() {
                                 go = Some(l + 1);
                             }

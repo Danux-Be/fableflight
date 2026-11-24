@@ -1095,6 +1095,20 @@ pub enum Icon {
     Checklist,
     Atc,
     Ground,
+    /// a cross: close or remove.
+    Close,
+}
+
+/// a small square button with a drawn cross: close, remove, clear.
+pub fn close_button(ui: &mut egui::Ui, size: f32, hint: &str) -> egui::Response {
+    let (r, resp) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, hint));
+    let lit = ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
+    let p = ui.painter();
+    p.rect_filled(r, R_WIDGET, mix(RAISED, RAISED_HI, lit));
+    p.rect_stroke(r, R_WIDGET, Stroke::new(1.0, LINE_HI), egui::StrokeKind::Inside);
+    icon(p, Icon::Close, r.center(), size * 0.5, mix(TEXT, Color32::WHITE, lit));
+    if hint.is_empty() { resp } else { resp.on_hover_text(hint) }
 }
 
 /// draws an icon `s` across, centred on `c`.
@@ -1104,6 +1118,11 @@ pub fn icon(p: &egui::Painter, which: Icon, c: egui::Pos2, s: f32, col: Color32)
     let u = s * 0.5;
     let arc = |c: egui::Pos2, r: f32, a0: f32, a1: f32| -> Vec<egui::Pos2> { (0..=16).map(|i| { let a = a0 + (a1 - a0) * i as f32 / 16.0; c + vec2(a.cos(), a.sin()) * r }).collect() };
     match which {
+        Icon::Close => {
+            let d = u * 0.55;
+            p.line_segment([c + vec2(-d, -d), c + vec2(d, d)], st);
+            p.line_segment([c + vec2(-d, d), c + vec2(d, -d)], st);
+        }
         // an aircraft from above.
         Icon::Flight => {
             let pts = [(0.0, -1.0), (0.12, -0.75), (0.12, -0.2), (0.95, 0.2), (0.95, 0.35), (0.12, 0.15), (0.1, 0.65), (0.4, 0.85), (0.4, 0.95), (0.0, 0.85)];
@@ -1404,7 +1423,7 @@ pub fn search_box(ui: &mut egui::Ui, id: &str, hint: &str, width: f32) -> Vec<St
         if r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             text.clear();
         }
-        if !text.is_empty() && ui.add(egui::Button::new("×").min_size(egui::vec2(28.0, 28.0))).on_hover_text(t!("menu.clear_search")).clicked() {
+        if !text.is_empty() && close_button(ui, 28.0, t!("menu.clear_search")).clicked() {
             text.clear();
         }
     });
@@ -1595,12 +1614,8 @@ pub fn big_button(ui: &mut egui::Ui, text: &str, hint: Hint, primary: bool, chos
     };
     p.rect_filled(rect, R_WIDGET, fill);
     if !primary {
-        // a short accent mark for the page showing.
-        if pick > 0.0 {
-            let h = rect.height() * 0.5 * pick;
-            p.rect_filled(egui::Rect::from_center_size(egui::pos2(rect.left() + 1.5, rect.center().y), egui::vec2(3.0, h)), 1.0, ACCENT);
-        }
-        p.rect_stroke(rect, R_WIDGET, Stroke::new(1.0, mix(LINE, Color32::from_white_alpha(40), lit)), egui::StrokeKind::Inside);
+        // the page showing gets a lit outline all round.
+        p.rect_stroke(rect, R_WIDGET, Stroke::new(1.0, mix(mix(LINE, Color32::from_white_alpha(40), lit), ACCENT.gamma_multiply(0.8), pick)), egui::StrokeKind::Inside);
     }
     let font = if primary { bold(22.0) } else { item_title() };
     let x = rect.left() + 20.0 + 4.0 * lit * (!primary as u8 as f32);

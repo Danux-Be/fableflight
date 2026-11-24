@@ -159,9 +159,8 @@ impl Game {
                 let name = if p.name.trim().is_empty() { tr_en("Pilot").to_string() } else { p.name.clone() };
                 widgets::avatar(pa, pos2(r.left() + 100.0, r.center().y), 62.0, &name, lvl.frac());
                 let tx = r.left() + 200.0;
-                pa.text(pos2(tx, r.top() + 30.0), Align2::LEFT_TOP, tr_en(pilot::rank(lvl.n)).to_uppercase(), menu::semibold(13.0), ACCENT);
-                pa.text(pos2(tx, r.top() + 48.0), Align2::LEFT_TOP, &name, menu::bold(36.0), Color32::WHITE);
-                pa.text(pos2(tx, r.top() + 94.0), Align2::LEFT_TOP, format!("{} {}", tr_en("Level"), lvl.n), menu::semibold(18.0), TEXT);
+                pa.text(pos2(tx, r.top() + 36.0), Align2::LEFT_TOP, &name, menu::bold(40.0), Color32::WHITE);
+                pa.text(pos2(tx, r.top() + 90.0), Align2::LEFT_TOP, format!("{} {}  ·  {}", tr_en("Level"), lvl.n, tr_en(pilot::rank(lvl.n))), menu::semibold(18.0), TEXT);
                 // the bar, and how far along it right beside it.
                 let next = if lvl.span == 0 { tr_en("Highest level").to_string() } else { format!("{} / {} XP", lvl.into, lvl.span) };
                 let ng = pa.layout_no_wrap(next, menu::label(), TEXT);

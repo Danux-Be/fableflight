@@ -189,7 +189,7 @@ impl crate::Game {
                         p.rect_filled(rect, menu::R_WIDGET, Color32::from_white_alpha(a as u8));
                     }
                     if pick > 0.0 {
-                        p.rect_filled(Rect::from_center_size(pos2(rect.left() + 1.5, rect.center().y), vec2(3.0, rect.height() * 0.5 * pick)), 1.0, ACCENT);
+                        p.rect_stroke(rect, menu::R_WIDGET, Stroke::new(1.0, ACCENT.gamma_multiply(0.7 * pick)), egui::StrokeKind::Inside);
                     }
                     let pic = Rect::from_min_size(pos2(rect.left() + 12.0 + 3.0 * lit, rect.center().y - 23.0), vec2(80.0, 46.0));
                     egui::Image::new(&texs[k]).paint_at(ui, pic);
@@ -225,7 +225,7 @@ impl crate::Game {
                 let p = ui.painter();
                 p.rect_filled(rect, menu::R_WIDGET, Color32::from_white_alpha(if on { 16 } else { (4.0 + 6.0 * lit) as u8 }));
                 if on {
-                    p.rect_filled(Rect::from_center_size(pos2(rect.left() + 1.5, rect.center().y), vec2(3.0, rect.height() * 0.5)), 1.0, ACCENT);
+                    p.rect_stroke(rect, menu::R_WIDGET, Stroke::new(1.0, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Inside);
                 } else {
                     p.rect_stroke(rect, menu::R_WIDGET, Stroke::new(1.0, menu::mix(menu::LINE_HI, Color32::from_white_alpha(60), lit)), egui::StrokeKind::Inside);
                 }
@@ -528,10 +528,10 @@ impl crate::Game {
                         let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 40.0), egui::Sense::click());
                         let lit = menu::ease(ui.ctx(), resp.id, resp.hovered() || resp.has_focus());
                         let p = ui.painter();
-                        // chosen: raised, with the accent mark at its left.
+                        // chosen: raised, with a lit outline.
                         p.rect_filled(rect, menu::R_WIDGET, Color32::from_white_alpha(if sel { 16 } else { (4.0 + 8.0 * lit) as u8 }));
                         if sel {
-                            p.rect_filled(egui::Rect::from_center_size(egui::pos2(rect.left() + 1.5, rect.center().y), egui::vec2(3.0, rect.height() * 0.5)), 1.0, ACCENT);
+                            p.rect_stroke(rect, menu::R_WIDGET, egui::Stroke::new(1.0, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Inside);
                         }
                         let name_col = if can || matches!(e.state, State::Pending) { Color32::WHITE } else { DIM };
                         p.text(rect.left_center() + egui::vec2(10.0, -7.0), Align2::LEFT_CENTER, &name, menu::body(), name_col);

@@ -962,7 +962,7 @@ impl App {
                 (Some(r), _) => {
                     ui.label(RichText::new(&r.name).font(style::semibold(18.0)).color(Color32::WHITE));
                     notes(ui, &r.body, Some(6));
-                    if ui.link(RichText::new("All release notes →").color(style::LINK)).clicked() {
+                    if ui.link(RichText::new("All release notes").color(style::LINK)).clicked() {
                         self.page = Page::Updates;
                     }
                 }

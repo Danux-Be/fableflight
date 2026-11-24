@@ -773,19 +773,17 @@ impl Game {
                 if resp.hovered() {
                     let bw = 24.0;
                     let mut x = r.right() - bw;
-                    for (k, sym, en) in [(0i8, "", true), (1, "▼", i + 1 < n), (-1, "▲", i > 0)] {
+                    for (k, turn, en) in [(0i8, 0.0f32, true), (1, 1.0, i + 1 < n), (-1, -1.0, i > 0)] {
                         let b = Rect::from_min_size(pos2(x, r.top() + 3.0), vec2(bw - 3.0, r.height() - 6.0));
                         let br = ui.interact(b, resp.id.with(k), Sense::click());
                         let p = ui.painter();
                         let hot = br.hovered();
                         p.rect_filled(b, 3.0, if hot { Color32::from_rgb(64, 70, 80) } else { Color32::from_rgb(40, 45, 54) });
                         let c = if en { Color32::WHITE } else { DIM };
-                        if sym.is_empty() {
-                            for d in [vec2(3.5, 3.5), vec2(3.5, -3.5)] {
-                                p.line_segment([b.center() - d, b.center() + d], Stroke::new(1.5, c));
-                            }
+                        if k == 0 {
+                            menu::icon(p, menu::Icon::Close, b.center(), 12.0, c);
                         } else {
-                            p.text(b.center(), Align2::CENTER_CENTER, sym, menu::caption(), c);
+                            menu::chevron(p, b.center(), 7.0, turn, c);
                         }
                         if en && br.clicked() {
                             act = Some((i, k));

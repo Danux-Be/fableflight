@@ -353,8 +353,7 @@ impl Game {
                 let y = ctx.animate_value_with_time(s.scope_id().with("tab_marker"), r.top(), 0.2);
                 let m = Rect::from_min_size(pos2(r.left(), y), r.size());
                 s.painter().set(marker, egui::Shape::rect_filled(m, menu::R_WIDGET, Color32::from_white_alpha(14)));
-                let bar = Rect::from_center_size(pos2(m.left() + 1.5, m.center().y), vec2(3.0, m.height() * 0.5));
-                s.painter().add(egui::Shape::rect_filled(bar, 1.0, ACCENT));
+                s.painter().add(egui::Shape::rect_stroke(m, menu::R_WIDGET, egui::Stroke::new(1.0, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Inside));
             }
             let foot = Rect::from_min_max(pos2(side.left() + 16.0, side.bottom() - 100.0), pos2(side.right() - 16.0, side.bottom() - 24.0));
             let mut f = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(Layout::bottom_up(Align::Min)));

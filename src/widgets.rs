@@ -164,7 +164,6 @@ pub fn figures(ui: &mut egui::Ui, items: &[(String, &str)]) {
     let p = ui.painter();
     p.rect_filled(r, menu::R_PANEL, menu::PANEL);
     p.rect_stroke(r, menu::R_PANEL, Stroke::new(1.0, menu::LINE_HI), egui::StrokeKind::Inside);
-    p.rect_filled(Rect::from_min_size(r.min, vec2(3.0, r.height())), 0.0, ACCENT);
     let step = (r.width() - 36.0) / items.len().max(1) as f32;
     for (k, (v, l)) in items.iter().enumerate() {
         let left = r.left() + 26.0 + step * k as f32;

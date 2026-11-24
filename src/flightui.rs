@@ -140,7 +140,7 @@ pub fn card_header(ui: &mut egui::Ui, page: Page) -> (Option<Page>, bool, egui::
         ui.label(RichText::new(page.label()).font(menu::page_title()).color(Color32::WHITE));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let x = icon_key(ui, None, "×", false, t!("flight.close_tab"));
+            let x = icon_key(ui, Some(Icon::Close), "", false, t!("flight.close_tab"));
             if x.clicked() {
                 close = true;
             }
