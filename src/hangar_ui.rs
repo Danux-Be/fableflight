@@ -92,7 +92,7 @@ impl crate::Game {
                 ui.painter().rect_filled(pic, 0.0, Color32::from_black_alpha(90));
                 ui.painter().text(pic.center(), Align2::CENTER_CENTER, t!("hangar.see_all_aircraft"), egui::FontId::proportional(16.0), Color32::WHITE);
             }
-            let resp = resp.on_hover_text(tr_en(spec.blurb));
+            let resp = resp.on_hover_text(first_sentence(tr_en(spec.blurb)));
             if resp.clicked() {
                 open = Some(Tab::Mine);
             }
@@ -370,7 +370,7 @@ impl crate::Game {
             });
         });
         ui.add_space(8.0);
-        ui.add(egui::Label::new(RichText::new(tr_en(spec.blurb)).size(16.0).color(TEXT)).wrap());
+        ui.add(egui::Label::new(RichText::new(first_sentence(tr_en(spec.blurb))).size(16.0).color(TEXT)).wrap());
         let liveries = crate::aircraft::liveries(spec);
         if !liveries.is_empty() {
             ui.add_space(18.0);
@@ -824,4 +824,9 @@ fn badge(p: &egui::Painter, at: egui::Pos2, text: &str) {
 /// made from files in the custom folder (custom.rs), not downloaded.
 fn is_custom(spec: &Spec) -> bool {
     spec.keys.first().is_some_and(|k| k.starts_with("custom:"))
+}
+
+/// a description's first sentence: what the aircraft is, without the keys that follow.
+fn first_sentence(s: &str) -> &str {
+    s.find(". ").map_or(s, |i| &s[..=i])
 }

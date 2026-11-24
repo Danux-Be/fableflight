@@ -61,18 +61,6 @@ impl Section {
         }
     }
 
-    fn blurb(self) -> &'static str {
-        match self {
-            Section::General => t!("settings.language_the_hud_the_minimap"),
-            Section::Graphics => t!("settings.how_hard_the_renderer_works"),
-            Section::Sound => t!("settings.engine_wind_warnings_and_the"),
-            Section::Camera => t!("settings.where_the_camera_starts_and"),
-            Section::Controls => t!("settings.mouse_joysticks_pedals_gamepads_and"),
-            Section::Map => t!("settings.map_imagery_googles_3d_cities"),
-            Section::Multiplayer => t!("settings.fly_with_the_other_players"),
-        }
-    }
-
     pub fn parse(s: &str) -> Option<Section> {
         Some(match s.trim().to_lowercase().as_str() {
             "general" | "game" | "hud" | "language" => Section::General,
@@ -384,7 +372,7 @@ impl Game {
                         ui.spacing_mut().slider_width = (col_w * 0.32).clamp(160.0, 280.0);
                         if q.is_empty() {
                             let sec = self.settings_sec;
-                            menu::page_heading(ui, sec.label(), sec.blurb());
+                            menu::page_heading(ui, sec.label(), "");
                             ui.add_space(24.0);
                             self.settings_section(ui, sec, in_flight);
                         } else {
