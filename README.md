@@ -89,7 +89,7 @@ All bindings can be customized in **Settings → Controls**. In cockpit view, ho
 | Speedbrake / Braking chute | `/` |
 | Thrust reversers (hold) | `Z` |
 | Canopy open / close | `6` |
-| Boost / Afterburner | `Space` |
+| Boost / Afterburner (or hold throttle up past full power) | `Space` |
 | Auto-start / stop engine | `F4` |
 | Battery master / Magnetos / Starter | `Insert` / `I` / `O` |
 | Mixture richer / leaner | `Page Up` / `Page Down` |

@@ -108,6 +108,8 @@ enum Nav {
 
 /// the fewest points of height the ui is laid out for.
 pub const UI_MIN_H: f32 = 860.0;
+/// where the military detent sits on a throttle axis (fraction of its travel): beyond it, reheat.
+const AB_GATE: f64 = 0.92;
 /// how long a damage or failure flash stays at full strength, then how long it fades (s).
 const FLASH_HOLD: f64 = 1.2;
 const FLASH_FADE: f64 = 0.8;
@@ -3020,6 +3022,7 @@ impl Game {
             "ap_at" | "ap_spd_up" => format!("A/T {} · {:.0} kt", on_off(self.ap.at), self.ap.spd * 1.943_84),
             "parking_brake" => on_off(p.parking_brake).into(),
             "mixture_rich" => format!("{:.0} %", p.mixture * 100.0),
+            "throttle_up" if p.reheat > 0.0 => format!("{} {:.0} %", t!("game.reheat"), p.reheat * 100.0),
             "throttle_up" => format!("{:.0} %", p.throttle * 100.0),
             "flaps_up" if self.spec.lever.is_some() => self.spec.lever.as_ref()?.notch(p.flap_set).into(),
             "speedbrake" if self.spec.chute.is_some() => if p.chute_spent { "JETTISONED" } else if p.speedbrake > 0.0 { "DEPLOYED" } else { "PACKED" }.into(),
@@ -3163,6 +3166,7 @@ impl Game {
             boost: k(KeyCode::Space) && (self.arcade || self.spec.real_boost()),
             reverse: k(KeyCode::KeyZ),
             throttle_set: None,
+            reheat_set: None,
             starter: k(KeyCode::KeyO),
         };
         let mix = ax(k(KeyCode::PageUp), k(KeyCode::PageDown));
@@ -3675,7 +3679,13 @@ impl Game {
             if let Some(t) = self.mcp_throttle {
                 c.throttle_set = Some(t);
             } else if c.throttle == 0.0 {
-                c.throttle_set = Some(t);
+                // with real reheat the top of the lever's travel is the afterburner range.
+                if self.spec.real_boost() {
+                    c.throttle_set = Some((t / AB_GATE).min(1.0));
+                    c.reheat_set = Some(((t - AB_GATE) / (1.0 - AB_GATE)).max(0.0));
+                } else {
+                    c.throttle_set = Some(t);
+                }
             }
         } else {
             self.throttle_axis = None;
@@ -8245,6 +8255,8 @@ impl Game {
                 big(ui, state, "", col);
                 let detail = if let Some((_, lit, n)) = p.engines() {
                     t!("game.of_lit_0", lit, n, p.throttle * 100.0)
+                } else if p.spec.is_jet() && p.reheat > 0.0 {
+                    format!("N1 {:.0}%  ·  {} {:.0}%", p.n1 * 100.0, t!("game.reheat"), p.reheat * 100.0)
                 } else if p.spec.is_jet() {
                     format!("N1 {:.0}%  ·  {} {:.0}%", p.n1 * 100.0, t!("game.thrust_2"), p.throttle * 100.0)
                 } else {

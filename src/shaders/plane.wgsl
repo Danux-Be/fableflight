@@ -1582,8 +1582,10 @@ fn plume(in: VOut) -> vec4f {
   let ab = burner();
   let dry = dry_power();
   let L = in.L;
-  // (how far aft of the nozzle, in the Hornet's plume's lengths)
-  let z = (L.z - nozzle_at(L).z) / select(plume_scale(), SR71_PLUME.y, kind() == 7u);
+  // (how far aft of the nozzle, in the Hornet's plume's lengths; min reheat
+  // burns a shorter flame than max, which reaches the full length)
+  let reach = select(1.0, mix(0.55, 1.0, sat((ab - 0.3) / 0.7)), ab > 0.01);
+  let z = (L.z - nozzle_at(L).z) / select(plume_scale(), SR71_PLUME.y, kind() == 7u) / reach;
   let V = normalize(in.P);
   let ndv = abs(dot(normalize(in.N), V));
   let t = G.time.x;

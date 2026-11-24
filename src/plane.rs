@@ -40,6 +40,9 @@ pub struct Controls {
     /// a throttle lever's position (0..1), which then sets the power
     /// outright instead of `throttle` moving it
     pub throttle_set: Option<f64>,
+    /// a lever's position past the military detent (0..1 of the afterburner
+    /// range), from a throttle axis; none: the keys push it through the detent.
+    pub reheat_set: Option<f64>,
 }
 
 /// An aircraft ploughing into a building after hitting its wall. It does not
@@ -158,8 +161,12 @@ pub struct Plane {
     pub payload: f64,
     /// a jet's fan speed, fraction of 100% N1
     pub n1: f64,
-    /// how far the afterburners are lit, 0..1 (what is seen and heard of them; the thrust is immediate)
+    /// how far the afterburners are lit, 0..1: min reheat lights them at 0.3, max at 1.
     pub burner: f64,
+    /// the throttle past the military detent, 0..1 of the afterburner range (types with real reheat).
+    pub reheat: f64,
+    /// how long the throttle has been pushed against the detent (s).
+    detent: f64,
     /// which wing a stall would rather drop (slowly wandering, -1..1)
     drop: f64,
     pub rot: DQuat,
@@ -329,6 +336,8 @@ impl Plane {
             payload: spec.payload[0],
             n1: 0.0,
             burner: 0.0,
+            reheat: 0.0,
+            detent: 0.0,
             drop: 0.0,
             rot: DQuat::IDENTITY,
             omega: DVec3::ZERO,
@@ -672,6 +681,8 @@ impl Plane {
             Input::Wheel(k) => self.wheel_rot[k as usize] as f32,
             Input::Steer => self.steer_angle() as f32,
             Input::Prop => (self.prop % std::f64::consts::TAU) as f32,
+            // (a fighter's lever reaches the military detent short of the stop; reheat is the travel past it)
+            Input::Throttle if matches!(self.spec.id, 2 | 3 | 4 | 7) => (self.throttle * 0.88 + self.reheat * 0.12) as f32,
             Input::Throttle => self.throttle as f32,
             Input::Trim => self.trim as f32,
             Input::Master => self.sys.elec.master as u8 as f32,
@@ -1526,6 +1537,32 @@ impl Plane {
             Some(t) => t.clamp(0.0, 1.0),
             None => (self.throttle + c.throttle * dt * 0.6).clamp(0.0, 1.0),
         };
+        // past the military detent the lever works the afterburners: pushed on
+        // against the stop for a moment with the keys, or the top of a throttle axis.
+        if spec.real_boost() {
+            match (c.reheat_set, c.throttle_set) {
+                (Some(r), _) => self.reheat = r.clamp(0.0, 1.0),
+                // (the autothrottle, the copilot and the mouse yoke set dry power only)
+                (None, Some(_)) => self.reheat = 0.0,
+                (None, None) if c.throttle > 0.0 && self.throttle >= 1.0 => {
+                    self.detent += dt;
+                    if self.detent > 0.4 {
+                        self.reheat = (self.reheat + c.throttle * dt * 0.5).min(1.0);
+                    }
+                }
+                (None, None) if c.throttle < 0.0 => {
+                    self.reheat = (self.reheat + c.throttle * dt * 1.5).max(0.0);
+                    self.detent = 0.0;
+                }
+                _ => self.detent = 0.0,
+            }
+            // the lever comes back out of reheat before it leaves military power.
+            if self.reheat > 0.0 {
+                self.throttle = 1.0;
+            }
+        } else {
+            self.reheat = 0.0;
+        }
         // Control surfaces do not snap.
         let target = DVec3::new(c.pitch, c.yaw, c.roll);
         self.stick += (target - self.stick) * (dt * 7.0).min(1.0);
@@ -1851,16 +1888,23 @@ impl Plane {
                 let kr = if up { fe.spool_up * (0.3 + 0.7 * self.n1) } else { fe.spool_down };
                 self.n1 += (target - self.n1) * (dt * kr).min(1.0);
                 self.prop_rate = self.n1 * fe.n1_rpm * std::f64::consts::TAU / 60.0;
-                let mut thrust = Self::fan_thrust(fe, self.n1, v.max(0.0), h) * self.inlet(mach) * if c.boost { fe.boost } else { self.dry_fade(fe, mach) };
                 // An afterburner (not an airliner's take-off bump) lights with a
                 // thump a moment after it is asked for and dies away as quickly.
-                let lit = c.boost && fe.boost > 1.2 && self.dmg.engine > 0.0 && self.n1 > fe.idle * 0.9;
-                self.burner += ((if lit { 1.0 } else { 0.0 }) - self.burner) * (dt * if lit { 5.0 } else { 8.0 }).min(1.0);
+                // min reheat lights the whole ring, the stages past it add fuel
+                // and thrust up to max (the boost key: max at once).
+                let real = fe.boost > 1.2;
+                let stage = if c.boost { 1.0 } else { self.reheat };
+                let lit = real && stage > 0.0 && self.dmg.engine > 0.0 && self.n1 > fe.idle * 0.9;
+                let want = if lit { 0.3 + 0.7 * stage } else { 0.0 };
+                self.burner += (want - self.burner) * (dt * if want > self.burner { 5.0 } else { 8.0 }).min(1.0);
+                let dry_k = self.dry_fade(fe, mach);
+                let k = if real { dry_k + (fe.boost - dry_k) * self.burner } else if c.boost { fe.boost } else { dry_k };
+                let mut thrust = Self::fan_thrust(fe, self.n1, v.max(0.0), h) * self.inlet(mach) * k;
                 self.power = thrust / (fe.n as f64 * fe.thrust);
                 // The burn follows the thrust made (it lapses with height as the
                 // thrust does): idle to full rated thrust, then the afterburners.
                 let ff = spec.fuel_flow;
-                let dry = (self.power / if c.boost { fe.boost } else { 1.0 }).clamp(0.0, 1.2);
+                let dry = (self.power / k * (dry_k + (1.0 - dry_k) * self.burner)).clamp(0.0, 1.2);
                 // (A turbo-ramjet's afterburners are fed by the air it swallows: their flow lapses with the thrust.)
                 let wet = if spec.inlet_mach > 0.0 { dry.min(1.0) } else { 1.0 };
                 self.fuel_flow = if self.running { ff[0] + (ff[1] - ff[0]) * dry + (ff[2] - ff[1]) * self.burner * wet } else { 0.0 };
