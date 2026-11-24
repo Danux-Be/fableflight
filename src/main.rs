@@ -24,6 +24,7 @@ mod fsr3;
 mod fsr4;
 mod fgmodel;
 mod flightplan;
+mod flightsave;
 mod navdata;
 mod fluid;
 mod dynamic;
@@ -63,6 +64,7 @@ mod padui;
 mod pave;
 mod photonight;
 mod relight;
+mod replay;
 mod rain;
 mod storm;
 mod contrails;
@@ -79,6 +81,7 @@ mod single_sample;
 mod stroke_font;
 mod roads;
 mod route;
+mod season;
 mod skin;
 mod sources;
 mod traffic;
@@ -1572,6 +1575,10 @@ struct Game {
     atc: atc::Atc,
     /// when the next word on the ice may go out (icing.rs)
     ice_note_t: f64,
+    /// the flight as recorded, the replay being watched (replay.rs), and the name a save is to get
+    rec: replay::Recorder,
+    replay: Option<replay::Playback>,
+    save_name: String,
 }
 
 /// The launcher's graphics test (`--bench SECONDS`): after a settling time
@@ -1887,7 +1894,7 @@ impl Game {
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
-            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0,
+            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(),
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
             live: live::Live::new(prefs.live_traffic),
@@ -2360,6 +2367,8 @@ impl Game {
 
     fn respawn_at(&mut self, lat: f64, lon: f64, alt: f64, heading: f64, speed: f64) {
         self.log_close(false);
+        self.rec.clear();
+        self.replay = None;
         self.cancel_cockpit_input();
         self.ap.disengage();
         self.hold_spot = None;
@@ -6067,7 +6076,8 @@ impl Game {
         let scale = if self.paused || in_menu || self.pause_open || self.real < self.hold || loading { 0.0 } else { 1.0 };
         let dt = dt_real * scale;
         self.time += dt;
-        if !in_menu && !self.crashed && dt > 0.0 {
+        if !in_menu && !self.crashed && dt > 0.0 && self.replay.is_none() {
+            self.rec.push(self.time, &self.plane);
             self.log_step(dt);
             self.atc_step(dt);
             self.ice_notes();
@@ -6113,12 +6123,15 @@ impl Game {
         }
 
         crate::gputime::cpu("sim.weather+controls");
-        // Physics at a fixed step.
+        // Physics at a fixed step (none while the replay plays: it poses the aircraft instead).
+        if self.replay.is_some() && !in_menu && !self.pause_open {
+            self.replay_step(dt_real);
+        }
         let c = self.controls(dt_real);
         let mut emit = Vec::new();
         let mut femit: Vec<(DVec3, render::Particle)> = Vec::new();
         let (mut scrape_n, mut steps) = (0usize, 0usize);
-        if !self.crashed && !in_menu {
+        if !self.crashed && !in_menu && self.replay.is_none() {
             let weapon_targets = if !self.missiles_ok() {
                 Vec::new()
             } else {
@@ -6923,7 +6936,10 @@ impl Game {
             cut: [[0.0; 4]; 3 * tiles3d::MAX_CUTS],
             cut_v: [[0.0; 4]; tiles3d::MAX_CUT_V / 2],
             cs: [[0.0; 4]; 2 * render::CS_MAP],
-            alto: [if in_menu { 0.0 } else { self.wx.alto }, 4800f32.max(self.wx.base() + 0.4 * self.wx.depth() + 800.0), 0.0, 0.0],
+            alto: {
+                let (turn, dorm) = if in_menu { (0.0, 0.0) } else { season::at(geo::pos_to_lla(self.cam_pos).0.to_degrees(), self.doy) };
+                [if in_menu { 0.0 } else { self.wx.alto }, 4800f32.max(self.wx.base() + 0.4 * self.wx.depth() + 800.0), turn, dorm]
+            },
             ocean: self.world.ocean.globals(),
             shore_vp: [[0.0; 4]; 4],
             shore: [0.0; 4],
@@ -8161,7 +8177,7 @@ impl Game {
                 self.pad_home_focus(&resume);
             }
             ui.add_space(8.0);
-            for (p, text) in [(Page::Settings, t!("game.settings")), (Page::Controls, t!("game.controls_reference")), (Page::Failures, t!("game.failures_2"))] {
+            for (p, text) in [(Page::Settings, t!("game.settings")), (Page::Flights, tr_en("Flights and replay")), (Page::Controls, t!("game.controls_reference")), (Page::Failures, t!("game.failures_2"))] {
                 let b = menu::big_button(ui, text, Hint::None, false, page == p);
                 if b.clicked() {
                     self.pause_page = if page == p && p != Page::Settings { Page::Game } else { p };
@@ -8205,7 +8221,7 @@ impl Game {
         });
 
         // The key list or the failures, beside the buttons.
-        if matches!(self.pause_page, Page::Controls | Page::Failures) {
+        if matches!(self.pause_page, Page::Controls | Page::Failures | Page::Flights) {
             let x = margin + col_w + 48.0;
             let w = (screen.width() - x - margin).clamp(300.0, 820.0);
             let h = screen.height() - 2.0 * margin.max(64.0);
@@ -8213,11 +8229,15 @@ impl Game {
                 menu::panel().inner_margin(24.0).show(ui, |ui| {
                     ui.set_width(w - 48.0);
                     ui.set_max_height(h - 48.0);
-                    let title = if self.pause_page == Page::Controls { t!("game.controls_reference") } else { t!("game.failures_2") };
+                    let title = match self.pause_page { Page::Controls => t!("game.controls_reference"), Page::Flights => tr_en("Flights and replay"), _ => t!("game.failures_2") };
                     ui.label(RichText::new(title).font(menu::page_title()).color(Color32::WHITE));
                     ui.add_space(10.0);
                     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
-                        if self.pause_page == Page::Controls {
+                        if self.pause_page == Page::Flights {
+                            if self.flights_page(ui) {
+                                *act = Some(PauseAct::Resume);
+                            }
+                        } else if self.pause_page == Page::Controls {
                             if !self.binds.keys.is_empty() {
                                 ui.label(RichText::new(t!("game.some_keys_have_been_moved")).font(menu::caption()).color(ACCENT));
                             }
@@ -8645,6 +8665,9 @@ impl Game {
             }
             self.hotspot_overlay(ctx);
             self.atc_subtitles(ctx);
+            if self.replay.is_some() {
+                self.replay_bar(ctx);
+            }
             // a ring on each aircraft in range, tags on the nearest that do not overlap.
             if let (true, Some((vp, cam))) = (self.hud_on() && self.live.enabled(), self.live_view) {
                 let screen = ctx.content_rect();

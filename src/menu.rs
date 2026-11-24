@@ -831,11 +831,13 @@ pub enum Page {
     Checklist,
     /// the com radio and the controllers (atc.rs)
     Atc,
+    /// saved flights and the replay (flightsave.rs, replay.rs)
+    Flights,
 }
 
 impl Page {
     pub const INFO: [Page; 7] = [Page::Flight, Page::Places, Page::Radio, Page::Autopilot, Page::Weather, Page::Checklist, Page::Atc];
-    pub const PAUSE: [Page; 4] = [Page::Game, Page::Settings, Page::Controls, Page::Failures];
+    pub const PAUSE: [Page; 5] = [Page::Game, Page::Settings, Page::Controls, Page::Failures, Page::Flights];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -850,6 +852,7 @@ impl Page {
             Page::Failures => "Failures",
             Page::Checklist => "Checklist",
             Page::Atc => "ATC",
+            Page::Flights => "Flights",
         }
     }
 
