@@ -38,6 +38,8 @@ pub enum Is {
     Airborne,
     Stopped,
     ReversersStowed,
+    CarbHeat(bool),
+    PitotHeat(bool),
 }
 
 /// what an item is checked against.
@@ -76,6 +78,8 @@ impl Is {
             Is::Airborne => !p.on_ground,
             Is::Stopped => p.on_ground && p.vel.length() < 0.5,
             Is::ReversersStowed => p.reverser < 0.05,
+            Is::CarbHeat(on) => p.carb_heat == on,
+            Is::PitotHeat(on) => p.pitot_heat == on,
         })
     }
 }
@@ -126,6 +130,7 @@ static PISTON_RG: &[List] = &[
         i("Propeller", "HIGH RPM", Is::PropHigh),
         i("Cowl flaps", "OPEN", Is::CowlOpen),
         i("Wing flaps", "UP to 10°", Is::Hand),
+        i("Pitot heat", "ON in visible moisture", Is::Hand),
         i("Landing light", "ON", Is::Lights(true)),
     ] },
     List { name: "Takeoff", items: &[
@@ -191,7 +196,7 @@ static PISTON_FIXED: &[List] = &[
     ] },
     List { name: "Before takeoff", items: &[
         i("Run up, magnetos", "CHECK at 2000 RPM", Is::Hand),
-        i("Carburettor heat", "CHECK, then COLD", Is::Hand),
+        i("Carburettor heat", "CHECK, then COLD", Is::CarbHeat(false)),
         i("Flaps", "TAKEOFF", Is::FlapsTakeoff),
         i("Trim", "TAKEOFF", Is::Hand),
         i("Fuel pump", "ON", Is::Hand),
@@ -208,12 +213,12 @@ static PISTON_FIXED: &[List] = &[
         i("Fuel selector", "FULLEST TANK", Is::FuelOn),
         i("Fuel pump", "ON", Is::Hand),
         i("Mixture", "RICH", Is::MixtureRich),
-        i("Carburettor heat", "HOT", Is::Hand),
+        i("Carburettor heat", "HOT", Is::CarbHeat(true)),
         i("Flaps", "LANDING", Is::FlapsFull),
     ] },
     List { name: "After landing", items: &[
         i("Flaps", "UP", Is::FlapsUp),
-        i("Carburettor heat", "COLD", Is::Hand),
+        i("Carburettor heat", "COLD", Is::CarbHeat(false)),
         i("Fuel pump", "OFF", Is::Hand),
     ] },
     List { name: "Engine shutdown", items: &[
@@ -247,6 +252,8 @@ static JET: &[List] = &[
         i("Transponder", "TA/RA", Is::Hand),
     ] },
     List { name: "Before takeoff", items: &[
+        i("Probe heat", "ON", Is::PitotHeat(true)),
+        i("Anti ice", "AS REQUIRED", Is::Hand),
         i("Speedbrake", "DOWN", Is::SpeedbrakeIn),
         i("Landing lights", "ON", Is::Lights(true)),
         i("Parking brake", "RELEASED", Is::ParkingBrake(false)),

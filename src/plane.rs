@@ -143,6 +143,12 @@ pub struct Plane {
     pub parking_brake: bool,
     pub toe_brake: [f64; 2],
     pub landing_lights: bool,
+    /// ice on the airframe, the air it builds in, and the heat against it (icing.rs)
+    pub ice: crate::icing::Ice,
+    pub ice_env: crate::icing::Env,
+    pub pitot_heat: bool,
+    pub anti_ice: bool,
+    pub carb_heat: bool,
     /// A two-engine jet's L and R fuel control switches ([0]) and battery
     /// switches ([1]) work the one shared `ignition` / `sys.elec.master`:
     /// the shared state is on while either switch of its pair is. True: that
@@ -325,6 +331,11 @@ impl Plane {
             parking_brake: false,
             toe_brake: [0.0; 2],
             landing_lights: true,
+            ice: Default::default(),
+            ice_env: Default::default(),
+            pitot_heat: false,
+            anti_ice: false,
+            carb_heat: false,
             pair_off: [[false; 2]; 2],
             fuel_selector: FuelSelector::Center,
             engine_hours: 1834.6,
@@ -483,7 +494,7 @@ impl Plane {
         if let Some(rk) = self.spec.rocket() {
             return self.rocket_mass(rk).0;
         }
-        self.spec.mass + self.fuel - 0.5 * self.spec.fuel_kg + self.payload - self.spec.payload[0]
+        self.spec.mass + self.fuel - 0.5 * self.spec.fuel_kg + self.payload - self.spec.payload[0] + self.ice.mass(self.spec.wing_area)
     }
 
     /// Centre of gravity, as a fraction of the mean aerodynamic chord: where
@@ -547,7 +558,7 @@ impl Plane {
 
     pub fn stall_alpha(&self) -> f64 {
         let s = self.spec;
-        s.stall_alpha - s.stall_flap * self.flaps + s.stall_slat * self.slats
+        s.stall_alpha - s.stall_flap * self.flaps + s.stall_slat * self.slats - self.ice.stall_loss()
     }
     pub fn flap_deg(&self) -> f64 {
         self.flaps * self.spec.flaps.last().copied().unwrap_or(0.0)
@@ -1563,6 +1574,9 @@ impl Plane {
         } else {
             self.reheat = 0.0;
         }
+        let heat = crate::icing::Heat { pitot: self.pitot_heat, anti_ice: self.anti_ice, carb: self.carb_heat };
+        let tas = self.airspeed().length();
+        self.ice.step(dt, &self.ice_env, heat, tas, matches!(spec.engine, Engine::Piston(_)), self.throttle, !self.on_ground);
         // Control surfaces do not snap.
         let target = DVec3::new(c.pitch, c.yaw, c.roll);
         self.stick += (target - self.stick) * (dt * 7.0).min(1.0);
@@ -1658,9 +1672,12 @@ impl Plane {
                 _ => 1.0,
             };
             let (cl, cd) = lift_drag(spec, alpha, beta, flap_cl, stall, self.flaps, self.gear, self.spoilers, ge);
+            // ice spoils the leading edges: less lift, more drag.
+            let cl = cl * self.ice.lift_k();
             // Ragged stumps and missing fairings all drag.
             let rag = ((spec.span - dm.wing[0]) + (spec.span - dm.wing[1])) as f64 / k as f64;
             let cd = cd
+                + self.ice.drag_add()
                 // An open canopy: the cockpit is a hole in the airframe.
                 + 0.03 * self.canopy
                 + spec.chute.as_ref().map_or(0.0, |ch| ch.cda * self.spoilers / area)
@@ -1794,7 +1811,7 @@ impl Plane {
                 self.cranking = cranking;
                 self.running = self.ignition && self.fuel_selector != FuelSelector::Off && self.fuel > 0.0 && self.mixture > 0.08 && w > 8.0 && eng > 0.0 && !self.sys.fail.engine;
                 let mix = smooth(0.08, 0.45, self.mixture);
-                let q_eng = if self.running { Self::engine_torque(pe, self.charge, rho, c.boost, eng) * mix } else { 0.0 } + if cranking { 120.0 * (1.0 - w / 25.0).max(0.0) } else { 0.0 };
+                let q_eng = if self.running { Self::engine_torque(pe, self.charge, rho, c.boost, eng) * mix * self.ice.engine_k(self.carb_heat) } else { 0.0 } + if cranking { 120.0 * (1.0 - w / 25.0).max(0.0) } else { 0.0 };
                 if self.auto_start > 0.0 {
                     self.auto_start = if self.running && w > 50.0 { 0.0 } else { self.auto_start - dt };
                 }

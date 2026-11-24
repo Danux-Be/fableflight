@@ -34,6 +34,7 @@ mod hangar;
 mod hangar_ui;
 mod bind;
 mod i18n;
+mod icing;
 mod jsbsim;
 mod live;
 mod radar;
@@ -1569,6 +1570,8 @@ struct Game {
     /// the checklists' ticks (checklist.rs), and the controllers (atc.rs)
     checks: checklist::Checklists,
     atc: atc::Atc,
+    /// when the next word on the ice may go out (icing.rs)
+    ice_note_t: f64,
 }
 
 /// The launcher's graphics test (`--bench SECONDS`): after a settling time
@@ -1884,7 +1887,7 @@ impl Game {
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
-            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(),
+            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0,
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
             live: live::Live::new(prefs.live_traffic),
@@ -3038,6 +3041,9 @@ impl Game {
             "prop_up" => format!("{:.0} RPM", 1800.0 + 900.0 * p.propeller),
             "cowl_open" => format!("{:.0} %", p.cowl_flaps * 100.0),
             "landing_lights" => on_off(p.landing_lights).into(),
+            "carb_heat" => on_off(p.carb_heat).into(),
+            "pitot_heat" => on_off(p.pitot_heat).into(),
+            "anti_ice" => on_off(p.anti_ice).into(),
             "fuel_valve" | "fuel_next" => match p.fuel_selector {
                 plane::FuelSelector::Center if std::ptr::eq(self.spec, &aircraft::dr400::SPEC) => "MAIN",
                 plane::FuelSelector::Center => "BOTH",
@@ -4910,6 +4916,21 @@ impl Game {
             KeyCode::KeyH if self.cam_mode == 1 => self.hud_cockpit = !self.hud_cockpit,
             KeyCode::KeyH => self.show_hud = !self.show_hud,
             KeyCode::Backquote => self.minimap.visible = !self.minimap.visible,
+            KeyCode::F7 if !self.spec.is_jet() => {
+                self.plane.carb_heat = !self.plane.carb_heat;
+                self.status = format!("{} {}", tr_en("Carburettor heat"), if self.plane.carb_heat { tr_en("on") } else { tr_en("off") });
+                self.status_until = self.real + 3.0;
+            }
+            KeyCode::F8 => {
+                self.plane.pitot_heat = !self.plane.pitot_heat;
+                self.status = format!("{} {}", tr_en("Pitot heat"), if self.plane.pitot_heat { tr_en("on") } else { tr_en("off") });
+                self.status_until = self.real + 3.0;
+            }
+            KeyCode::Home => {
+                self.plane.anti_ice = !self.plane.anti_ice;
+                self.status = format!("{} {}", tr_en("Anti ice"), if self.plane.anti_ice { tr_en("on") } else { tr_en("off") });
+                self.status_until = self.real + 3.0;
+            }
             KeyCode::Insert => {
                 self.plane.pair_off[1] = [false; 2];
                 let m = &mut self.plane.sys.elec.master;
@@ -6049,6 +6070,7 @@ impl Game {
         if !in_menu && !self.crashed && dt > 0.0 {
             self.log_step(dt);
             self.atc_step(dt);
+            self.ice_notes();
         }
         let mut glass_rain = 0.0f32;
         if !in_menu {
@@ -6082,6 +6104,11 @@ impl Game {
                 (_, Some(f)) => f,
             };
             glass_rain = self.wx.rain * (1.0 - snow::snow_share(h, fz) as f32);
+            // the air as icing goes: in the cloud layer, in rain, and how cold.
+            let (base, top) = (self.wx.cloud_base as f64, (self.wx.cloud_base + self.wx.cloud_depth) as f64);
+            let layer = smoothstep(base - 120.0, base + 60.0, h) * (1.0 - smoothstep(top - 60.0, top + 120.0, h));
+            let wet = (layer * (self.wx.clouds as f64).powf(1.5) + self.wx.rain as f64).min(1.0);
+            self.plane.ice_env = icing::Env { oat_c: icing::oat_at(h, fz), wet, humidity: self.wx.humidity.map(f64::from).unwrap_or(0.45 + 0.5 * wet) };
             self.glass.step(dt, glass_rain, self.plane.ias() * 1.94384);
         }
 

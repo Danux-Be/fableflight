@@ -102,6 +102,7 @@ All bindings can be customized in **Settings → Controls**. In cockpit view, ho
 | Sound toggle / Screenshot | `U` / `F12` |
 | Full screen / window | `F11` or `Alt+Enter` |
 | Mouse yoke | `J` |
+| Carburettor heat / Pitot heat / Anti ice | `F7` / `F8` / `Home` |
 
 The game starts in borderless full screen. Turn this off in **Settings → General**, or pass `--windowed` (or `--width`/`--height`) for a single run.
 

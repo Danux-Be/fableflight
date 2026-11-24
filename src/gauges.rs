@@ -179,7 +179,7 @@ impl Gauges {
         } else {
             self.static_hold = None;
         }
-        if p.sys.fail.pitot {
+        if p.sys.fail.pitot || p.ice.pitot_blocked() {
             let (a0, h0) = *self.pitot_hold.get_or_insert((self.asi, alt));
             ias = (a0 + (alt - h0) / 100.0).max(0.0);
         } else {
