@@ -119,7 +119,7 @@ jobs:
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
           $dir = "fableflight-$env:TAG-${{ matrix.name }}"
           $ver = "$env:TAG".TrimStart('v')
-          & $iscc "/DAppVersion=$ver" "/DSrcDir=$PWD\$dir" "/DOutName=$dir-setup" "/O$PWD" installerableflight.iss
+          & $iscc "/DAppVersion=$ver" "/DSrcDir=$PWD\$dir" "/DOutName=$dir-setup" "/O$PWD" installer/fableflight.iss
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
