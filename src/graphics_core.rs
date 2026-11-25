@@ -175,6 +175,9 @@ pub struct Graphics {
     pub cars: Level,
     /// birds in the air (birds.rs; Off, or Low to High; Ultra is High)
     pub birds: Level,
+    /// hot-air balloons at the places known for them (balloons.rs; Off, or
+    /// Low to High; Ultra is High)
+    pub balloons: Level,
     /// ambient occlusion (GTAO)
     pub ao: bool,
     /// water: Low plain (a flat sea bed, simple foam, one reflected cloud
@@ -214,7 +217,7 @@ pub const SCALE_MAX: f32 = 2.0;
 impl Graphics {
     /// One of the presets (taa and vsync on).
     pub fn preset(p: Preset) -> Self {
-        let mut g = Graphics { scale: 1.0, shadows: Level::High, clouds: Level::High, cloud_shadows: true, storms: Level::High, contrails: true, terrain: Level::High, scenery: Level::High, city: Level::High, trees: Level::High, cars: Level::High, birds: Level::High, ao: true, water: Level::High, msaa: 4, taa: true, upscaler: Upscaler::Bilinear, vsync: true, fps_cap: 0, dynamic: false, dyn_fps: 0 };
+        let mut g = Graphics { scale: 1.0, shadows: Level::High, clouds: Level::High, cloud_shadows: true, storms: Level::High, contrails: true, terrain: Level::High, scenery: Level::High, city: Level::High, trees: Level::High, cars: Level::High, birds: Level::High, balloons: Level::High, ao: true, water: Level::High, msaa: 4, taa: true, upscaler: Upscaler::Bilinear, vsync: true, fps_cap: 0, dynamic: false, dyn_fps: 0 };
         g.apply(p);
         g
     }
@@ -241,6 +244,7 @@ impl Graphics {
         let capped = if l == Level::Ultra { Level::High } else { l };
         self.cars = if very_low { Level::Off } else { capped };
         self.birds = if very_low { Level::Off } else { capped };
+        self.balloons = if very_low { Level::Low } else { capped };
         self.ao = matches!(l, Level::High | Level::Ultra);
         // (Low has always gone without the reflections on screen)
         self.water = match p {
@@ -316,6 +320,7 @@ impl Graphics {
         g.trees = lvl("trees", g.trees);
         g.cars = j["cars"].as_str().and_then(Level::parse).map(|l| if l == Level::Ultra { Level::High } else { l }).unwrap_or(g.cars);
         g.birds = j["birds"].as_str().and_then(Level::parse).map(|l| if l == Level::Ultra { Level::High } else { l }).unwrap_or(g.birds);
+        g.balloons = j["balloons"].as_str().and_then(Level::parse).map(|l| if l == Level::Ultra { Level::High } else { l }).unwrap_or(g.balloons);
         g.ao = j["ao"].as_bool().unwrap_or(g.ao);
         g.water = lvl("water", g.water).min_high();
         g.msaa = j["msaa"].as_u64().filter(|n| [1, 2, 4].contains(n)).map(|n| n as u8).unwrap_or(g.msaa);
@@ -340,6 +345,7 @@ impl Graphics {
             "trees": self.trees.name(),
             "cars": self.cars.name(),
             "birds": self.birds.name(),
+            "balloons": self.balloons.name(),
             "ao": self.ao,
             "water": self.water.name(),
             "msaa": self.msaa,

@@ -103,6 +103,16 @@ fn world(p: vec3f, w: f32, m0: vec4f, m1: vec4f, m2: vec4f) -> vec3f {
     // Lights come on at dusk.
     let night = 1.0 - smoothstep(-0.05, 0.12, dot(l.upn, G.sun_dir.xyz));
     c += (head * vec3f(1.0, 0.95, 0.8) * 3.0 + tail * vec3f(1.0, 0.04, 0.02) * 0.9) * G.sun_dir.w * 0.06 * (0.15 + night);
+    // Balloon fabric (m = 1.5, balloons.rs): thin nylon the sun shines
+    // through, so the side away from the sun still glows in its own colours.
+    if (m > 1.4 && m < 1.6) {
+      let back = max(dot(-N, G.sun_dir.xyz), 0.0) * smoothstep(-0.05, 0.1, dot(l.upn, G.sun_dir.xyz));
+      c += in.col.rgb * l.sun * back * 0.3 * sh;
+    }
+    // A burner flame (m = 2): bright whatever the light, brighter at night.
+    if (m > 1.9) {
+      c = in.col.rgb * (4.0 + 6.0 * night);
+    }
   }
   return GOut(vec4f(c, 1.0), vec4f(Nout, -mirror), amb_share(c));
 }

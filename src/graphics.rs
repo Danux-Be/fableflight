@@ -300,6 +300,15 @@ impl Graphics {
             let (flocks, birds) = crate::birds::caps(self.birds);
             dim(ui, if flocks > 0 { t!("graphics.birds_caps", flocks, birds) } else { t!("graphics.no_birds").to_string() });
         });
+        row(ui, t!("graphics.balloons"), t!("graphics.balloons_hint"), |ui| {
+            menu::segments(ui, |ui| {
+                for l in [Level::Off, Level::Low, Level::Medium, Level::High] {
+                    menu::seg(ui, &mut self.balloons, l, l.label());
+                }
+            });
+            let n = crate::balloons::cap(self.balloons);
+            dim(ui, if n > 0 { t!("graphics.balloons_caps", n) } else { t!("graphics.no_balloons").to_string() });
+        });
         row(ui, t!("graphics.ambient_occlusion"), t!("graphics.ambient_occlusion_hint"), |ui| {
             menu::switch(ui, &mut self.ao);
         });
