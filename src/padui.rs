@@ -467,8 +467,9 @@ pub fn focus_ring(ctx: &egui::Context, col: Color32) {
     if rect.width() < 2.0 || rect.height() < 2.0 {
         return;
     }
+    // on the widget's own edge, where its lit border already is, so the two read as one.
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("pad_focus")));
-    p.rect_stroke(rect.expand(2.0), crate::menu::R_WIDGET, Stroke::new(2.0, col), egui::StrokeKind::Outside);
+    p.rect_stroke(rect, crate::menu::R_WIDGET, Stroke::new(2.0, col), egui::StrokeKind::Inside);
 }
 
 /// The scroll areas and the gamepad. The right stick's scrolling: how far
