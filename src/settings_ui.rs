@@ -556,6 +556,37 @@ impl Game {
                 ui.add_enabled(self.sound_on, egui::Slider::new(&mut self.volume, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
             });
         });
+        // the controllers heard on the radio, with the voice pack downloaded on request (atc/install.rs).
+        card(ui, t!("settings.atc"), |ui| {
+            row(ui, t!("settings.atc_voices"), t!("settings.atc_voices_hint"), |ui| {
+                menu::switch(ui, &mut self.atc_voices);
+            });
+            row_help(ui, t!("settings.atc_voice_pack"), t!("settings.atc_voices_about"), |ui| {
+                use crate::atc::install::{self, State};
+                let caption = |ui: &mut Ui, s: &str| {
+                    ui.label(RichText::new(s).font(menu::caption()).color(DIM));
+                };
+                match install::state() {
+                    State::Unsupported => caption(ui, t!("settings.atc_voices_unsupported")),
+                    State::NotInstalled | State::Failed(_) => {
+                        if ui.button(t!("settings.atc_voices_download", crate::bytes(install::download_size()))).clicked() {
+                            install::install();
+                        }
+                        if let State::Failed(e) = install::state() {
+                            caption(ui, &t!("settings.atc_voices_failed", e));
+                        }
+                    }
+                    State::Downloading(a, b) => {
+                        ui.add(egui::ProgressBar::new(a as f32 / b.max(1) as f32).desired_width(200.0).text(format!("{} / {}", crate::bytes(a), crate::bytes(b))));
+                    }
+                    State::Installed => {
+                        if ui.button(t!("settings.atc_voices_remove")).clicked() {
+                            install::remove();
+                        }
+                    }
+                }
+            });
+        });
     }
 
     fn set_camera(&mut self, ui: &mut Ui, in_flight: bool) {

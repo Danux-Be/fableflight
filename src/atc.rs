@@ -9,6 +9,7 @@
 pub mod install;
 pub mod lexicon;
 pub mod tts;
+pub mod voice;
 
 use crate::airports::{self, Apt, Db};
 use crate::{flightui, geo, menu, tr_en, Game};
@@ -331,11 +332,18 @@ pub struct Atc {
     up_for: f64,
     /// stopped on the ground this long (s).
     still: f64,
+    /// the calls said out loud, when on; the tuned station's strength (0..1).
+    pub voice: voice::Voice,
+    pub speak: bool,
+    signal: f32,
+    /// when the signal was last worked out, and when the atis last began (game s).
+    t_signal: f64,
+    t_atis: f64,
 }
 
 impl Default for Atc {
     fn default() -> Self {
-        Self { on: true, com: 122.800, standby: 121.500, phase: Phase::Ground, log: Vec::new(), pending: Vec::new(), from: None, rwy: None, alt_ft: None, squawk: 1200, atis: HashMap::new(), violations: 0, ifr: false, t_phase: 0.0, t_nag: 0.0, ground: true, up_for: 0.0, still: 0.0 }
+        Self { on: true, com: 122.800, standby: 121.500, phase: Phase::Ground, log: Vec::new(), pending: Vec::new(), from: None, rwy: None, alt_ft: None, squawk: 1200, atis: HashMap::new(), violations: 0, ifr: false, t_phase: 0.0, t_nag: 0.0, ground: true, up_for: 0.0, still: 0.0, voice: voice::Voice::default(), speak: false, signal: 1.0, t_signal: -10.0, t_atis: -1e9 }
     }
 }
 
@@ -351,8 +359,8 @@ fn dist_nm(a: &Apt, lat: f64, lon: f64) -> f64 {
 impl Atc {
     /// starts over for a new flight, keeping the radio as tuned.
     pub fn reset(&mut self) {
-        let (on, com, standby) = (self.on, self.com, self.standby);
-        *self = Self { on, com, standby, ..Default::default() };
+        let (on, com, standby, speak) = (self.on, self.com, self.standby, self.speak);
+        *self = Self { on, com, standby, speak, ..Default::default() };
     }
 
     fn set(&mut self, p: Phase, now: f64) {
@@ -361,6 +369,9 @@ impl Atc {
     }
 
     fn say(&mut self, now: f64, who: Who, station: &str, text: String) {
+        if self.speak && who != Who::Info {
+            self.voice.speak(who == Who::Pilot, station, &text, self.signal);
+        }
         self.log.push(Line { t: now, who, station: station.into(), text });
         if self.log.len() > 60 {
             self.log.remove(0);
@@ -622,6 +633,26 @@ impl Atc {
         if !self.on {
             return;
         }
+        if self.speak && c.now - self.t_signal > 1.0 {
+            self.t_signal = c.now;
+            let tuned = self.tuned(c);
+            // weaker towards the edge of the radio horizon.
+            if let Some(f) = &tuned {
+                let d = dist_nm(&Db::get().apts[f.apt as usize], c.lat, c.lon);
+                self.signal = (1.0 - 0.75 * (d / reach_nm(c.agl_ft)).powi(2)).clamp(0.2, 1.0) as f32;
+            }
+            // the atis is a recording that goes round while it is tuned.
+            match tuned {
+                Some(f) if f.kind == Kind::Atis => {
+                    if c.now - self.t_atis > 50.0 {
+                        self.t_atis = c.now;
+                        let text = self.atis_text(f.apt, c);
+                        self.voice.speak(false, &f.name(), &text, self.signal);
+                    }
+                }
+                _ => self.t_atis = -1e9,
+            }
+        }
         // the replies due.
         let mut due: Vec<(f64, Who, String, String)> = Vec::new();
         self.pending.retain(|p| {
@@ -777,7 +808,12 @@ impl Game {
     pub(crate) fn atc_step(&mut self, dt: f64) {
         let c = self.atc_ctx();
         let cs = self.callsign();
+        self.atc.speak = self.atc_voices && self.sound_on && self.audio.is_some() && tts::Tts::available();
+        if !self.atc.speak {
+            self.atc.voice.clear();
+        }
         self.atc.step(dt, &cs, &c);
+        self.atc.voice.pump(self.audio.as_ref());
     }
 
     /// the atc page of the flight panel: the com radio, the calls, what was said.
