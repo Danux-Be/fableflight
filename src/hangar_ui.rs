@@ -176,6 +176,12 @@ impl crate::Game {
                     if on {
                         self.pad_home_focus(&resp);
                     }
+                    // with a pad the aircraft picked out is the one shown, and A takes it.
+                    let pad = crate::padui::active() && resp.has_focus();
+                    if pad && !on {
+                        self.menu.air_view = k;
+                        tab = Tab::Mine;
+                    }
                     let lit = menu::ease(ui.ctx(), resp.id, (resp.hovered() || resp.has_focus()) && !on);
                     let pick = ui.ctx().animate_bool_with_time(resp.id.with("on"), on, 0.18);
                     let p = ui.painter();
@@ -204,7 +210,7 @@ impl crate::Game {
                         self.menu.air_view = k;
                         tab = Tab::Mine;
                     }
-                    if resp.double_clicked() {
+                    if resp.double_clicked() || (pad && on && resp.clicked()) {
                         select = Some(k);
                     }
                 }

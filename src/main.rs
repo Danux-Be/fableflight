@@ -131,6 +131,16 @@ enum Nav {
     Panel,
 }
 
+/// what the gamepad's buttons work: the menus, the pause menu, an open flight panel, or none.
+fn nav_of(mode: Mode, paused: bool, panel: bool) -> Nav {
+    match mode {
+        Mode::Menu => Nav::Globe,
+        _ if paused => Nav::Pause,
+        _ if panel => Nav::Panel,
+        _ => Nav::Off,
+    }
+}
+
 /// the fewest points of height the ui is laid out for.
 pub const UI_MIN_H: f32 = 860.0;
 /// where the military detent sits on a throttle axis (fraction of its travel): beyond it, reheat.
@@ -1449,15 +1459,19 @@ struct Game {
     ap: autopilot::Autopilot,
     ap_off_t: f64,
     ap_script: Vec<(f64, String)>,
-    /// gamepad input for the menus: key events for the next UI pass, a focus
-    /// move out of a text box, a d-pad direction held (and when it repeats),
+    /// gamepad input for the menus: key events for the next UI pass, a d-pad
+    /// move for the next pass, a d-pad direction held (and when it repeats),
     /// and a request to pick out the screen's first choice
     pad_events: Vec<egui::Event>,
-    pad_move: Option<egui::FocusDirection>,
+    pad_step: Option<padui::Dir>,
     /// moving on past text boxes: direction, passes since the last move, moves made
-    pad_skip: Option<(egui::FocusDirection, u8, u8)>,
+    pad_skip: Option<(padui::Dir, u8, u8)>,
     pad_rep: Option<(egui::Key, f64)>,
     pad_home: bool,
+    /// passes the request for a first choice has waited for a screen to take it.
+    pad_home_age: u8,
+    /// `FABLE_PAD="Down@2;A@2.5"`: gamepad buttons at seconds, for scripted shots of the menus.
+    pad_script: Option<Vec<(f64, String)>>,
     /// Y (North) held on the gamepad, and whether it has been used with
     /// another button since: a Y chord arms or locks; Y alone fires.
     pad_y: bool,
@@ -2021,7 +2035,7 @@ impl Game {
             cam_yaw: cy.to_radians(), cam_pitch: cp, cam_dist: cd, cam_mode: args.start_view.unwrap_or(prefs.cam_mode), view_before_tail: 0, cam_pos, cam_dir: -plane.forward(), cam_look: plane.pos, orbit: 0.0, cam_rise: 0.0, cam_clear_t: 0.0, cam_ang: None, cam_hold: 0.0,
             utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, shown_at: 0, dyn_k: 1.0, dyn_ms: 0.0, dyn_seen: 0, dyn_skip: 0, dyn_t: 0.0, gfx_eff: gfx, dynq: dynamic::Dynamic::default(), storms_seen: false, topple_buildings: prefs.topple_buildings, casc_keep: [([[0.0; 4]; 4], DVec3::ZERO); 2], casc_ok: 0, casc_res: 0, dyn_cli: args.dynamic.is_some(), prev_plane: Mat4::IDENTITY, plane_box, lamps,
             frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, planner: Default::default(), ap_bar_on: false, warp: 1, ap_alt_seen: (0.0, 0.0), ils_auto: None, prefs_simbrief: prefs.simbrief.clone(), profile: profile::Profile::load(), toasts: Vec::new(), pilot_tab: 0, activity_tab: 0, arcade: args.arcade || prefs.arcade, goto_open: false, goto_text: String::new(), goto_rx: None,
-            status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, pad_y: false, pad_y_combo: false, pad_held: Vec::new(), pad_note: (String::new(), 0.0), pad_aim: false, pad_live: None, ap: autopilot::Autopilot::default(), ap_off_t: -100.0, ap_script: args.ap_script.clone(), cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
+            status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_step: None, pad_skip: None, pad_rep: None, pad_home: false, pad_home_age: 0, pad_script: pad_script_from_env(), pad_y: false, pad_y_combo: false, pad_held: Vec::new(), pad_note: (String::new(), 0.0), pad_aim: false, pad_live: None, ap: autopilot::Autopilot::default(), ap_off_t: -100.0, ap_script: args.ap_script.clone(), cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
             record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, snow: args.snow.unwrap_or(prefs.snow), info_open: args.weather_panel, radial: Default::default(), info_page: if args.weather_panel { menu::Page::Weather } else { menu::Page::Flight }, pause_open: false, pause_page: menu::Page::Game, flight: None, logbook: flightlog::Logbook::load(), challenge: None, challenge_records: challenge::Records::load(), pending_challenge: args.challenge.as_deref().and_then(challenge::by_id), pending_mission: args.mission.as_deref().and_then(missions::by_id), logbook_saves: !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench"), pause_at: args.pause_menu, radial_at: args.flight_menu, settings_sec: args.settings.unwrap_or(settings_ui::Section::General), settings_find: String::new(), look_sens: prefs.look_sens, invert_look_cockpit: prefs.invert_look_cockpit, invert_look_outside_x: prefs.invert_look_outside_x, invert_look_outside_y: prefs.invert_look_outside_y, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
             quit_why: "", g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
@@ -3452,6 +3466,10 @@ impl Game {
     fn gamepad(&mut self, dt: f64, c: &mut Controls) {
         use gilrs::{Axis, Button, EventType};
         padmap::publish(&self.binds.pad);
+        if self.pad_script.is_some() {
+            self.scripted_pad();
+            return;
+        }
         let Some(g) = self.gilrs.as_mut() else { return };
         let (mut pressed, mut released, mut relayout) = (Vec::new(), Vec::new(), false);
         // A joystick capture (Settings › Controls › Buttons, Axes) takes every device but the pads.
@@ -3582,15 +3600,7 @@ impl Game {
         }
         // Where the pad's buttons go: the globe, the pause menu, the flight
         // panel (which then has the d-pad, A, B and the bumpers), or the aircraft.
-        let nav = if self.mode == Mode::Menu {
-            Nav::Globe
-        } else if self.pause_open {
-            Nav::Pause
-        } else if self.info_open || self.radial.open {
-            Nav::Panel
-        } else {
-            Nav::Off
-        };
+        let nav = nav_of(self.mode, self.pause_open, self.info_open || self.radial.open);
         // Each thumbstick's dead zone (Settings › Controls › Gamepad), the rest
         // of the travel rescaled so there is no step out of it.
         let pm = &self.binds.pad;
@@ -4873,25 +4883,55 @@ impl Game {
         }
     }
 
+    /// what the gamepad's buttons work at the moment, besides flying.
+    fn nav(&self) -> Nav {
+        nav_of(self.mode, self.pause_open, self.info_open || self.radial.open)
+    }
+
+    /// the scripted pad (`FABLE_PAD`): its buttons as they come due, as a real pad's presses.
+    fn scripted_pad(&mut self) {
+        use gilrs::Button;
+        padui::set_active(true);
+        let Some(script) = self.pad_script.as_mut() else { return };
+        let due: Vec<String> = script.iter().take_while(|p| self.real >= p.0).map(|p| p.1.clone()).collect();
+        script.drain(..due.len());
+        for b in due {
+            let nav = self.nav();
+            match b.as_str() {
+                "Up" => self.pad_key(egui::Key::ArrowUp),
+                "Down" => self.pad_key(egui::Key::ArrowDown),
+                "Left" => self.pad_key(egui::Key::ArrowLeft),
+                "Right" => self.pad_key(egui::Key::ArrowRight),
+                "A" => self.pad_button(nav, Button::South, false),
+                "B" => self.pad_button(nav, Button::East, false),
+                "X" => self.pad_button(nav, Button::West, false),
+                "LB" => self.pad_button(nav, Button::LeftTrigger, false),
+                "RB" => self.pad_button(nav, Button::RightTrigger, false),
+                "Menu" => self.pad_button(nav, Button::Start, false),
+                _ => log::warn!("FABLE_PAD: no button {b}"),
+            }
+        }
+    }
+
     /// A key for the menus from the gamepad (d-pad arrows, A as Enter). With
-    /// nothing picked out yet it picks out the screen's first choice instead;
-    /// in a text box the arrows move on rather than along the text.
+    /// nothing picked out yet it picks out the screen's first choice instead.
+    /// the d-pad moves by where the widgets are (`padui::step`), except left
+    /// and right on a slider, which move the slider.
     fn pad_key(&mut self, key: egui::Key) {
         if self.egui_ctx.memory(|m| m.focused()).is_none() {
             self.pad_home = true;
             return;
         }
         let dir = match key {
-            egui::Key::ArrowUp => Some(egui::FocusDirection::Up),
-            egui::Key::ArrowDown => Some(egui::FocusDirection::Down),
-            egui::Key::ArrowLeft => Some(egui::FocusDirection::Left),
-            egui::Key::ArrowRight => Some(egui::FocusDirection::Right),
+            egui::Key::ArrowUp => Some(padui::Dir::Up),
+            egui::Key::ArrowDown => Some(padui::Dir::Down),
+            egui::Key::ArrowLeft => Some(padui::Dir::Left),
+            egui::Key::ArrowRight => Some(padui::Dir::Right),
             _ => None,
         };
         if let Some(d) = dir {
-            self.pad_skip = Some((d, 0, 0));
-            if self.egui_ctx.text_edit_focused() {
-                self.pad_move = Some(d);
+            if !(matches!(d, padui::Dir::Left | padui::Dir::Right) && padui::sideways(&self.egui_ctx)) {
+                self.pad_step = Some(d);
                 return;
             }
         }
@@ -5445,25 +5485,45 @@ impl Game {
         raw
     }
 
-    /// At the start of a UI pass: a gamepad move out of a text box (the box
-    /// itself would keep the arrow keys).
-    /// Text boxes are passed over: a pad cannot type, and a slider's number
-    /// box would otherwise keep left and right from the slider. (A widget
-    /// only shows as a text box the pass after it takes the focus.)
+    /// At the start of a UI pass: the d-pad's move, by the last pass's layout.
+    /// Text boxes are passed over: a pad cannot type. (A widget only shows
+    /// as a text box the pass after it takes the focus.) A screen that picks
+    /// out no first choice of its own gets the first widget on it.
     fn pad_pass(&mut self, ctx: &egui::Context) {
         padui::begin_pass();
-        if let Some(d) = self.pad_move.take() {
-            ctx.memory_mut(|m| m.move_focus(d));
-        }
-        if let Some((d, stage, hops)) = self.pad_skip {
-            self.pad_skip = if stage < 2 {
+        let go = |d| {
+            if let Some(id) = padui::step(ctx, d) {
+                ctx.memory_mut(|m| m.request_focus(id));
+            }
+        };
+        if let Some(d) = self.pad_step.take() {
+            go(d);
+            self.pad_skip = Some((d, 0, 0));
+        } else if let Some((d, stage, hops)) = self.pad_skip {
+            self.pad_skip = if stage < 1 {
                 Some((d, stage + 1, hops))
             } else if ctx.text_edit_focused() && hops < 6 {
-                ctx.memory_mut(|m| m.move_focus(d));
-                Some((d, 1, hops + 1))
+                go(d);
+                Some((d, 0, hops + 1))
             } else {
                 None
             };
+        }
+        // with a pad in the menus something is always picked out, so no press is spent
+        // finding it, and never something under a pop up that has come over it.
+        if padui::active() && matches!(self.nav(), Nav::Globe | Nav::Pause) && !padui::focus_usable(ctx) {
+            self.pad_home = true;
+        }
+        if self.pad_home && padui::active() {
+            self.pad_home_age += 1;
+            if self.pad_home_age > 2 {
+                if let Some(id) = padui::home(ctx) {
+                    ctx.memory_mut(|m| m.request_focus(id));
+                }
+                self.pad_home = false;
+            }
+        } else {
+            self.pad_home_age = 0;
         }
     }
 
@@ -9842,6 +9902,14 @@ impl App {
             std::process::exit(0);
         }
     }
+}
+
+/// `FABLE_PAD="Down@2;A@2.5"`: gamepad buttons (Up Down Left Right A B X LB RB Menu) at seconds.
+fn pad_script_from_env() -> Option<Vec<(f64, String)>> {
+    let s = std::env::var("FABLE_PAD").ok()?;
+    let mut v: Vec<(f64, String)> = s.split(';').filter_map(|c| c.trim().split_once('@').and_then(|(b, t)| Some((t.parse().ok()?, b.to_string())))).collect();
+    v.sort_by(|a, b| a.0.total_cmp(&b.0));
+    Some(v)
 }
 
 /// `FABLE_UI_CLICKS="x,y@sec;x,y@sec"`, in the order they come.
