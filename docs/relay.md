@@ -40,6 +40,7 @@ The relay is configured through environment variables. Add them to your Compose 
 | `FFMP_PEERS` | Additional relay addresses to connect to directly. |
 | `FFMP_MAX_PER_IP` | Players at most from one address (default `32`). |
 | `FFMP_BANS` | A file of banned addresses, networks and names (see Moderation). |
+| `FFMP_STATUS_POSITIONS` | `1` to show the pilots' positions on the status page (off by default). |
 
 For example, give your relay a recognizable identity:
 
@@ -55,9 +56,11 @@ Replace `relay.example.com` with a hostname that resolves to your server. If you
 
 ## Status page
 
-The relay exposes `/` and `/status.json` on its HTTP status port (`7481` by default). The page reports connected pilots and start-screen watchers, without publishing aircraft positions. To access it outside the server, expose that port only as needed; for a public status page, put it behind an HTTPS reverse proxy.
+The relay exposes `/` and `/status.json` on its HTTP status port (`7481` by default). The page reports connected pilots and start-screen watchers. It shows no aircraft positions unless `FFMP_STATUS_POSITIONS` is on. To access it outside the server, expose that port only as needed; for a public status page, put it behind an HTTPS reverse proxy.
 
 The directory endpoint `/servers.json` is also used for relay discovery.
+
+With `FFMP_STATUS_POSITIONS=1`, the page also shows where each pilot is, on an OpenStreetMap world map and in the list (position and heading). Positions are rounded to about a kilometre, as on the game's world map. This is off by default: without it, the page shows no positions.
 
 `/healthz` answers `ok` while the relay runs, for health checks. `/metrics` gives this relay's counts in Prometheus' text format: players, start-screen watchers, players on the other relays, relays up and down, packets, and what was turned away (banned, full, too many from one address, over the packet rate). It holds no names or positions.
 

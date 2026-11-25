@@ -33,7 +33,10 @@
 //!   a club or a mobile carrier's NAT shares one; one address flooding the
 //!   relay with players is held to this);
 //! - `FFMP_BANS` (none): a file of banned addresses, networks and names
-//!   (`bans.rs`), read again whenever it changes.
+//!   (`bans.rs`), read again whenever it changes;
+//! - `FFMP_STATUS_POSITIONS` (off): the status page also shows where each
+//!   pilot is (to about a kilometre, as the game's world map does) and their
+//!   heading, on a map and in the list. Off, it shows no positions.
 //!
 //! Besides the status page, the HTTP port answers `/healthz` (`ok`, for
 //! health checks) and `/metrics`: this relay's counts in Prometheus' text
@@ -93,6 +96,8 @@ struct Config {
     max_per_ip: usize,
     /// the bans file (bans.rs)
     bans: Option<std::path::PathBuf>,
+    /// the status page shows the pilots' positions (coarse, as `proto::Spot`)
+    positions: bool,
 }
 
 /// What was turned away, for /metrics.
@@ -493,14 +498,23 @@ impl Relay {
                 let r = (s.pos[0] * s.pos[0] + s.pos[1] * s.pos[1] + s.pos[2] * s.pos[2]).sqrt();
                 let v = s.vel.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
                 let ac = proto::AIRCRAFT.get(s.aircraft as usize).copied().unwrap_or("?");
+                // (Where, only when the operator chose to show it, and only as
+                // coarsely as the game's world map: about a kilometre.)
+                let at = if self.cfg.positions {
+                    let sp = proto::Spot::of(0, "", s);
+                    format!(",\"lat\":{:.2},\"lon\":{:.2},\"heading\":{:.0}", sp.lat_deg(), sp.lon_deg(), sp.heading_deg())
+                } else {
+                    String::new()
+                };
                 format!(
-                    "{{\"relay\":{},\"name\":{},\"aircraft\":{},\"alt_ft\":{:.0},\"speed_kt\":{:.0},\"on_ground\":{}}}",
+                    "{{\"relay\":{},\"name\":{},\"aircraft\":{},\"alt_ft\":{:.0},\"speed_kt\":{:.0},\"on_ground\":{}{}}}",
                     json_str(relay),
                     json_str(name),
                     json_str(ac),
                     (r - proto::PLANET_R) * 3.28084,
                     v * 1.94384,
-                    s.flags & proto::F_GROUND != 0
+                    s.flags & proto::F_GROUND != 0,
+                    at
                 )
             })
             .collect();
@@ -514,7 +528,7 @@ impl Relay {
             format!("{{\"name\":{},\"up\":{},\"self\":false,\"flying\":{}}}", json_str(name), up, if up { n } else { 0 })
         }));
         format!(
-            "{{\"version\":{},\"relay\":{},\"uptime_s\":{},\"max_players\":{},\"range_km\":{:.0},\"packets\":{},\"flying\":{},\"here\":{},\"watching\":{},\"network\":[{}],\"players\":[{}]}}",
+            "{{\"version\":{},\"relay\":{},\"uptime_s\":{},\"max_players\":{},\"range_km\":{:.0},\"packets\":{},\"flying\":{},\"here\":{},\"watching\":{},\"positions\":{},\"network\":[{}],\"players\":[{}]}}",
             json_str(env!("CARGO_PKG_VERSION")),
             json_str(&self.cfg.name),
             started.elapsed().as_secs(),
@@ -524,6 +538,7 @@ impl Relay {
             list.len(),
             here,
             self.watchers.len(),
+            self.cfg.positions,
             network.join(","),
             players.join(",")
         )
@@ -667,13 +682,18 @@ fn answer(c: &mut TcpStream, status: &Mutex<(String, String, String)>) -> std::i
         "/healthz" => ("200 OK", "text/plain; charset=utf-8", "ok\n".to_string()),
         _ => ("404 Not Found", "text/plain; charset=utf-8", "not found\n".to_string()),
     };
-    let head = format!("HTTP/1.1 {code}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'\r\nConnection: close\r\n\r\n", body.len());
+    let head = format!("HTTP/1.1 {code}\r\nContent-Type: {kind}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' https://tile.openstreetmap.org\r\nConnection: close\r\n\r\n", body.len());
     c.write_all(head.as_bytes())?;
     c.write_all(body.as_bytes())
 }
 
 fn env<T: std::str::FromStr>(k: &str, d: T) -> T {
     std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d)
+}
+
+/// A switch from the environment: 1, true, yes or on.
+fn env_on(k: &str) -> bool {
+    std::env::var(k).is_ok_and(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
 }
 
 fn unix_now() -> u64 {
@@ -711,7 +731,7 @@ fn main() -> std::io::Result<()> {
         secret = None;
     }
     let bans = std::env::var("FFMP_BANS").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).map(std::path::PathBuf::from);
-    let cfg = Config { max_players: env("FFMP_MAX_PLAYERS", 64usize).clamp(1, 10_000), range_m: env("FFMP_RANGE_KM", 150.0f64).clamp(1.0, 20_000.0) * 1000.0, name, secret, public, max_per_ip: env("FFMP_MAX_PER_IP", 32usize).max(1), bans };
+    let cfg = Config { max_players: env("FFMP_MAX_PLAYERS", 64usize).clamp(1, 10_000), range_m: env("FFMP_RANGE_KM", 150.0f64).clamp(1.0, 20_000.0) * 1000.0, name, secret, public, max_per_ip: env("FFMP_MAX_PER_IP", 32usize).max(1), bans, positions: env_on("FFMP_STATUS_POSITIONS") };
     let sock = UdpSocket::bind(("0.0.0.0", port))?;
     sock.set_read_timeout(Some(Duration::from_millis(20)))?;
     println!("fableflight-relay {} on udp/{port}: up to {} players, {} km", env!("CARGO_PKG_VERSION"), cfg.max_players, cfg.range_m / 1000.0);
@@ -791,13 +811,13 @@ mod tests {
         PlayerState { seq, aircraft: 0, pos: [6_371_000.0 + 1000.0, x, 0.0], rot: [0.0, 0.0, 0.0, 1.0], ..Default::default() }
     }
     fn relay() -> Relay {
-        Relay::new(Config { max_players: 3, range_m: 150_000.0, name: "here".into(), secret: None, public: Some("here.example:7480".into()), max_per_ip: 8, bans: None })
+        Relay::new(Config { max_players: 3, range_m: 150_000.0, name: "here".into(), secret: None, public: Some("here.example:7480".into()), max_per_ip: 8, bans: None, positions: false })
     }
     const SECRET: &str = "a secret for the tests";
     const T: u64 = 1_800_000_000;
     /// Relay `name` at 10.0.0.<ip>, federated with the relays at the other ips.
     fn fed_relay(name: &str, peers: &[u8]) -> Relay {
-        let mut r = Relay::new(Config { max_players: 10, range_m: 150_000.0, name: name.into(), secret: Some(SECRET.into()), public: None, max_per_ip: 8, bans: None });
+        let mut r = Relay::new(Config { max_players: 10, range_m: 150_000.0, name: name.into(), secret: Some(SECRET.into()), public: None, max_per_ip: 8, bans: None, positions: false });
         r.peers = peers.iter().map(|ip| PeerRelay { host: format!("10.0.0.{ip}:7480"), addrs: vec![SocketAddr::from(([10, 0, 0, *ip], 7480))], name: String::new(), relay: 0, last_seq: 0, heard: None, found: None }).collect();
         r
     }
@@ -998,7 +1018,7 @@ mod tests {
         let j = b.servers_json();
         assert!(j.contains(r#""address":"10.0.0.1:7480""#) && j.contains(r#"{"name":"C","address":"10.0.0.3:7480","up":true,"flying":1}"#), "{j}");
         // Without the secret, nobody joins.
-        let mut stranger = Relay::new(Config { max_players: 3, range_m: 150_000.0, name: "X".into(), secret: Some("not the network's secret".into()), public: None, max_per_ip: 8, bans: None });
+        let mut stranger = Relay::new(Config { max_players: 3, range_m: 150_000.0, name: "X".into(), secret: Some("not the network's secret".into()), public: None, max_per_ip: 8, bans: None, positions: false });
         stranger.peers = vec![PeerRelay { host: "hub".into(), addrs: vec![from(1)], name: String::new(), relay: 0, last_seq: 0, heard: None, found: None }];
         for (_, d) in stranger.fed_packets(T) {
             hub.receive(from(9), &d, now, T);
@@ -1079,7 +1099,7 @@ mod tests {
 
     #[test]
     fn one_address_takes_so_many_places() {
-        let mut r = Relay::new(Config { max_players: 10, range_m: 150_000.0, name: "here".into(), secret: None, public: None, max_per_ip: 2, bans: None });
+        let mut r = Relay::new(Config { max_players: 10, range_m: 150_000.0, name: "here".into(), secret: None, public: None, max_per_ip: 2, bans: None, positions: false });
         let now = Instant::now();
         for n in 1..=3 {
             join(&mut r, addr(n), &format!("p{n}"), 0.0, now);
@@ -1097,7 +1117,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("bans.txt");
         let _ = std::fs::remove_file(&path);
-        let mut r = Relay::new(Config { max_players: 10, range_m: 150_000.0, name: "here".into(), secret: None, public: None, max_per_ip: 8, bans: Some(path.clone()) });
+        let mut r = Relay::new(Config { max_players: 10, range_m: 150_000.0, name: "here".into(), secret: None, public: None, max_per_ip: 8, bans: Some(path.clone()), positions: false });
         let now = Instant::now();
         let far = SocketAddr::from(([192, 0, 2, 9], 5000));
         join(&mut r, addr(1), "Griefer", 0.0, now);
@@ -1136,4 +1156,16 @@ mod tests {
             assert!(l.starts_with("fableflight_relay_") && v.parse::<f64>().is_ok(), "{l}");
         }
     }
+
+    #[test]
+    fn positions_only_when_the_operator_shows_them() {
+        let (mut r, now) = (relay(), Instant::now());
+        join(&mut r, addr(1), "Dany", 0.0, now);
+        let off = r.status_json(now, 0);
+        assert!(off.contains("\"positions\":false") && !off.contains("\"lat\""), "{off}");
+        r.cfg.positions = true;
+        let on = r.status_json(now, 0);
+        assert!(on.contains("\"positions\":true") && on.contains("\"lat\":") && on.contains("\"heading\":"), "{on}");
+    }
 }
+

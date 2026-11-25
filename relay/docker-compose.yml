@@ -41,6 +41,8 @@ services:
       # A file of banned addresses, networks and names, read again when it
       # changes (see docs/relay.md); mount it, e.g. ./bans.txt:/bans.txt:ro.
       FFMP_BANS: ""
+      # "1": the status page also shows where the pilots are (to about a km).
+      FFMP_STATUS_POSITIONS: ""
     ports:
       - "7480:7480/udp"
       - "127.0.0.1:7481:7481/tcp"
