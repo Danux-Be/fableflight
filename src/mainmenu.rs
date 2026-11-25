@@ -107,7 +107,10 @@ impl Game {
             }
             let r = ui.interact(fly, ui.scope_id().with("tile_fly"), Sense::click());
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t!("menu.fly")));
-            self.pad_home_focus(&r);
+            // (while fly asks, its first card is the one picked out.)
+            if !picking {
+                self.pad_home_focus(&r);
+            }
             let mut pf = p.clone();
             pf.set_opacity(rise(0));
             fly_tile(&pf, fly, &r, k, &globe);

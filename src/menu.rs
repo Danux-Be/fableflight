@@ -730,6 +730,7 @@ fn track<N: egui::emath::Numeric>(ui: &mut egui::Ui, rect: egui::Rect, mut resp:
         }
         if resp.has_focus() {
             ui.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { horizontal_arrows: true, ..Default::default() }));
+            crate::padui::takes_sideways(resp.id);
             let (l, r) = ui.input(|i| (i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::ArrowRight)));
             if l || r {
                 let t = scale.to_t(x);
