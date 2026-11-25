@@ -908,6 +908,7 @@ dependencies = [
  "anyhow",
  "ash",
  "bytemuck",
+ "cpal",
  "crossbeam-channel",
  "dirs",
  "earcutr",

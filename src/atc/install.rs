@@ -9,13 +9,16 @@
 //!   builds pick the CPU's instruction set at run time; the prebuilt ones
 //!   other projects publish need AVX2 and crash without it.
 //!
+//! - Whisper tiny.en (openai, mit) as int8 onnx from sherpa-onnx's export,
+//!   for the pilot's own calls by push to talk (listen.rs).
+//!
 //! Every download is pinned by size and SHA-256.
 
 use parking_lot::Mutex;
 use std::path::PathBuf;
 
 /// The pack's folder name: bump it when a file changes.
-const PACK: &str = "atc-voices-1";
+const PACK: &str = "atc-voices-2";
 pub const ORT_VERSION: &str = "1.31.1";
 
 pub struct File {
@@ -38,6 +41,17 @@ macro_rules! pypi {
 }
 
 pub const MODEL: File = File { url: kokoro!("kokoro-v1.0.onnx"), name: "kokoro-v1.0.onnx", size: 325_532_387, sha256: "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5" };
+/// sherpa-onnx's whisper export, pinned to one commit.
+macro_rules! whisper {
+    ($f:literal) => {
+        concat!("https://huggingface.co/csukuangfj/sherpa-onnx-whisper-tiny.en/resolve/d026532c022fa99fd789d6b32446a1df7b6bfc43/", $f)
+    };
+}
+
+pub const EARS_ENC: File = File { url: whisper!("tiny.en-encoder.int8.onnx"), name: "tiny.en-encoder.int8.onnx", size: 12_937_772, sha256: "0ce578b827c94a961aacb8fa14b02f096504b337e5c94be37c36238cbe3e8bc6" };
+pub const EARS_DEC: File = File { url: whisper!("tiny.en-decoder.int8.onnx"), name: "tiny.en-decoder.int8.onnx", size: 89_853_865, sha256: "06c0e6ff6348d427e51839219d1c886c18cfdf411e629e33f5e1679bff9c1527" };
+pub const EARS_TOKENS: File = File { url: whisper!("tiny.en-tokens.txt"), name: "tiny.en-tokens.txt", size: 835_554, sha256: "306cd27f03c1a714eca7108e03d66b7dc042abe8c258b44c199a7ed9838dd930" };
+
 pub const VOICES: File = File { url: kokoro!("voices-v1.0.bin"), name: "voices-v1.0.bin", size: 28_214_398, sha256: "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d" };
 
 /// ONNX Runtime for this platform: the wheel, and the library inside it.
@@ -91,7 +105,7 @@ const RUNTIME_NOTICES: [&str; 2] = ["onnxruntime/LICENSE", "onnxruntime/ThirdPar
 
 /// Bytes to download in all.
 pub fn download_size() -> u64 {
-    MODEL.size + VOICES.size + RUNTIME.as_ref().map_or(0, |r| r.wheel.size)
+    [&MODEL, &VOICES, &EARS_ENC, &EARS_DEC, &EARS_TOKENS].iter().map(|f| f.size).sum::<u64>() + RUNTIME.as_ref().map_or(0, |r| r.wheel.size)
 }
 
 /// `<data>/fablegame/atc-voices-1/`.
@@ -131,7 +145,7 @@ fn set(st: State) {
 
 fn on_disk() -> bool {
     let (Some(d), Some(rt)) = (dir(), RUNTIME.as_ref()) else { return false };
-    [&MODEL, &VOICES].iter().all(|f| std::fs::metadata(d.join(f.name)).is_ok_and(|m| m.len() == f.size)) && d.join(rt.lib_name).is_file()
+    [&MODEL, &VOICES, &EARS_ENC, &EARS_DEC, &EARS_TOKENS].iter().all(|f| std::fs::metadata(d.join(f.name)).is_ok_and(|m| m.len() == f.size)) && d.join(rt.lib_name).is_file()
 }
 
 /// Where everything is once installed: the model, the voices, the library.
@@ -139,11 +153,14 @@ pub struct Paths {
     pub model: PathBuf,
     pub voices: PathBuf,
     pub runtime: PathBuf,
+    pub ears_enc: PathBuf,
+    pub ears_dec: PathBuf,
+    pub ears_tokens: PathBuf,
 }
 
 pub fn paths() -> Option<Paths> {
     let (d, rt) = (dir()?, RUNTIME.as_ref()?);
-    on_disk().then(|| Paths { model: d.join(MODEL.name), voices: d.join(VOICES.name), runtime: d.join(rt.lib_name) })
+    on_disk().then(|| Paths { model: d.join(MODEL.name), voices: d.join(VOICES.name), runtime: d.join(rt.lib_name), ears_enc: d.join(EARS_ENC.name), ears_dec: d.join(EARS_DEC.name), ears_tokens: d.join(EARS_TOKENS.name) })
 }
 
 /// Starts downloading the pack on a thread.
@@ -185,7 +202,7 @@ pub fn download(progress: &dyn Fn(u64, u64)) -> Result<(), String> {
         .into();
     let total = download_size();
     let mut done = 0u64;
-    for f in [&MODEL, &VOICES, &rt.wheel] {
+    for f in [&MODEL, &VOICES, &EARS_ENC, &EARS_DEC, &EARS_TOKENS, &rt.wheel] {
         let mut r = agent.get(f.url).call().map_err(|e| fail(format!("{}: {e}", f.name)))?;
         let mut rd = r.body_mut().with_config().limit(f.size + 1).reader();
         let mut out = std::fs::File::create(tmp.join(f.name)).map_err(|e| fail(e.to_string()))?;
@@ -227,8 +244,21 @@ pub fn download(progress: &dyn Fn(u64, u64)) -> Result<(), String> {
     Ok(())
 }
 
-/// Deletes the pack.
+/// loads onnx runtime from the pack, once a run (the voices and the ears share it).
+pub fn runtime(p: &Paths) -> Result<(), String> {
+    static RT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    RT.get_or_init(|| {
+        ort::init_from(&p.runtime).map_err(|e| format!("ONNX Runtime ({}): {e}", p.runtime.display()))?.with_name("fablegame-atc").commit();
+        Ok(())
+    })
+    .clone()
+}
+
+/// Deletes the pack, and the one before it if left behind.
 pub fn remove() {
+    if let Some(d) = dirs::data_dir() {
+        let _ = std::fs::remove_dir_all(d.join("fablegame").join("atc-voices-1"));
+    }
     if let Some(d) = dir() {
         let _ = std::fs::remove_dir_all(d);
     }

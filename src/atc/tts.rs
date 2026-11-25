@@ -135,13 +135,7 @@ fn speak(engine: &mut Option<Engine>, job: &Job) -> Result<Speech, String> {
 /// Loads ONNX Runtime (once per run) and the model.
 fn load() -> Result<Engine, String> {
     let p = install::paths().ok_or("the ATC voice pack isn't installed")?;
-    static RUNTIME: OnceLock<Result<(), String>> = OnceLock::new();
-    RUNTIME
-        .get_or_init(|| {
-            ort::init_from(&p.runtime).map_err(|e| format!("ONNX Runtime ({}): {e}", p.runtime.display()))?.with_name("fablegame-atc").commit();
-            Ok(())
-        })
-        .clone()?;
+    install::runtime(&p)?;
     let t = std::time::Instant::now();
     let session = ort::session::Session::builder()
         .and_then(|b| b.with_intra_threads(THREADS).map_err(Into::into))

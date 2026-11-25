@@ -1685,6 +1685,7 @@ struct Game {
     /// the checklists' ticks (checklist.rs), and the controllers (atc.rs)
     checks: checklist::Checklists,
     atc: atc::Atc,
+    ptt: atc::Ptt,
     /// when the next word on the ice may go out (icing.rs)
     ice_note_t: f64,
     /// the flight as recorded, the replay being watched (replay.rs), and the name a save is to get
@@ -2029,7 +2030,7 @@ impl Game {
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, n_scenery: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
-            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None, ai: Default::default(),
+            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ptt: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None, ai: Default::default(),
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
             live: live::Live::new(prefs.live_traffic),

@@ -8,6 +8,7 @@
 
 pub mod install;
 pub mod lexicon;
+pub mod listen;
 pub mod tts;
 pub mod voice;
 
@@ -332,6 +333,8 @@ pub struct Atc {
     up_for: f64,
     /// stopped on the ground this long (s).
     still: f64,
+    /// what the pilot said into the mic, logged in place of the made up call.
+    heard: Option<String>,
     /// the calls said out loud, when on; the tuned station's strength (0..1).
     pub voice: voice::Voice,
     pub speak: bool,
@@ -343,7 +346,27 @@ pub struct Atc {
 
 impl Default for Atc {
     fn default() -> Self {
-        Self { on: true, com: 122.800, standby: 121.500, phase: Phase::Ground, log: Vec::new(), pending: Vec::new(), from: None, rwy: None, alt_ft: None, squawk: 1200, atis: HashMap::new(), violations: 0, ifr: false, t_phase: 0.0, t_nag: 0.0, ground: true, up_for: 0.0, still: 0.0, voice: voice::Voice::default(), speak: false, signal: 1.0, t_signal: -10.0, t_atis: -1e9 }
+        Self { on: true, com: 122.800, standby: 121.500, phase: Phase::Ground, log: Vec::new(), pending: Vec::new(), from: None, rwy: None, alt_ft: None, squawk: 1200, atis: HashMap::new(), violations: 0, ifr: false, t_phase: 0.0, t_nag: 0.0, ground: true, up_for: 0.0, still: 0.0, heard: None, voice: voice::Voice::default(), speak: false, signal: 1.0, t_signal: -10.0, t_atis: -1e9 }
+    }
+}
+
+/// the last controller call gave a squawk (a clearance that wants a full readback).
+fn last_has_squawk(log: &[Line]) -> bool {
+    log.iter().rev().find(|l| l.who == Who::Atc).is_some_and(|l| l.text.contains("squawk"))
+}
+
+/// push to talk's state in the game: the mic, the words on their way back.
+#[derive(Default)]
+pub struct Ptt {
+    mic: Option<listen::Mic>,
+    ears: Option<crossbeam_channel::Receiver<Result<String, String>>>,
+    warned: bool,
+}
+
+impl Ptt {
+    /// on the air now, or the call being written down.
+    pub fn busy(&self) -> (bool, bool) {
+        (self.mic.as_ref().is_some_and(|m| m.on), self.ears.is_some())
     }
 }
 
@@ -369,7 +392,10 @@ impl Atc {
     }
 
     fn say(&mut self, now: f64, who: Who, station: &str, text: String) {
-        if self.speak && who != Who::Info {
+        // the pilot's own words when they spoke the call, and then not said again.
+        let spoke = who == Who::Pilot && self.heard.is_some();
+        let text = if who == Who::Pilot { self.heard.take().unwrap_or(text) } else { text };
+        if self.speak && who != Who::Info && !spoke {
             self.voice.speak(who == Who::Pilot, station, &text, self.signal);
         }
         self.log.push(Line { t: now, who, station: station.into(), text });
@@ -628,6 +654,37 @@ impl Atc {
         }
     }
 
+    /// the pilot spoke on the frequency (push to talk): the call it sounds
+    /// like is made, a readback is taken, anything else gets a say again.
+    pub fn heard(&mut self, words: &str, cs: &str, c: &Ctx) {
+        let words = words.trim();
+        if words.is_empty() {
+            return;
+        }
+        let Some(f) = self.tuned(c) else {
+            self.say(c.now, Who::Pilot, "", words.to_string());
+            return;
+        };
+        let st = f.name();
+        if let Some(r) = listen::intent(words, &self.requests(c)) {
+            self.heard = Some(words.to_string());
+            self.call(r, cs, c);
+            return;
+        }
+        let last = self.log.iter().rev().find(|l| l.who == Who::Atc && c.now - l.t < 60.0).map(|l| l.text.clone());
+        self.heard = Some(words.to_string());
+        self.say(c.now, Who::Pilot, &st, String::new());
+        let you = say(cs);
+        if last.is_some_and(|l| listen::readback(words, &l)) {
+            // a clearance read back is confirmed, the rest is just taken.
+            if last_has_squawk(&self.log) {
+                self.reply(c.now + 1.5, &st, format!("{you}, readback correct."));
+            }
+        } else if !matches!(f.kind, Kind::Ctaf | Kind::Unic | Kind::Atis) {
+            self.reply(c.now + 1.5, &st, format!("{you}, say again."));
+        }
+    }
+
     /// once a step: replies come in, takeoffs and landings are seen, handoffs given.
     pub fn step(&mut self, dt: f64, cs: &str, c: &Ctx) {
         if !self.on {
@@ -814,6 +871,42 @@ impl Game {
         }
         self.atc.step(dt, &cs, &c);
         self.atc.voice.pump(self.audio.as_ref());
+        self.atc_ptt(&cs, &c);
+    }
+
+    /// push to talk: the mic records while the key is held, whisper writes the
+    /// call down, and the controller on the frequency answers it.
+    fn atc_ptt(&mut self, cs: &str, c: &Ctx) {
+        let talk = self.keys.contains(&winit::keyboard::KeyCode::CapsLock) && self.atc.on && !self.pause_open;
+        if talk && !tts::Tts::available() {
+            if !self.ptt.warned {
+                self.ptt.warned = true;
+                self.status = crate::t!("game.atc_needs_voice_pack").into();
+            }
+            return;
+        }
+        if talk || self.ptt.mic.is_some() {
+            self.ptt.mic.get_or_insert_with(listen::Mic::new).set(talk);
+        }
+        if let Some((rec, rate)) = self.ptt.mic.as_ref().and_then(|m| m.take()) {
+            // a click of the key, not a call.
+            if rec.len() as f32 > 0.35 * rate as f32 {
+                self.ptt.ears = Some(listen::Ears::get().hear(listen::resample(&rec, rate)));
+            }
+        }
+        if let Some(rx) = &self.ptt.ears {
+            match rx.try_recv() {
+                Ok(r) => {
+                    self.ptt.ears = None;
+                    match r {
+                        Ok(words) => self.atc.heard(&words, cs, c),
+                        Err(e) => log::warn!("push to talk: {e}"),
+                    }
+                }
+                Err(crossbeam_channel::TryRecvError::Disconnected) => self.ptt.ears = None,
+                Err(crossbeam_channel::TryRecvError::Empty) => {}
+            }
+        }
     }
 
     /// the atc page of the flight panel: the com radio, the calls, what was said.
@@ -958,6 +1051,22 @@ impl Game {
         if !self.atc.on || self.info_open {
             return;
         }
+        let (tx, rx) = self.ptt.busy();
+        if tx || rx {
+            // on the air: the station called, the pilot's words to come.
+            let station = self.atc.tuned(&self.atc_ctx()).map(|f| f.name()).unwrap_or_default();
+            let lift = flightui::bottom_stack(ctx, "atc_sub");
+            egui::Area::new(egui::Id::unique("atc_sub")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_BOTTOM, [0.0, -lift]).interactable(false).show(ctx, |ui| {
+                flightui::panel(ui, flightui::glass().inner_margin(12.0), |ui| {
+                    ui.horizontal(|ui| {
+                        let (tag, col) = if tx { ("TX", egui::Color32::from_rgb(255, 90, 80)) } else { ("…", flightui::SOFT) };
+                        ui.label(egui::RichText::new(tag).font(menu::semibold(12.0)).color(col));
+                        ui.label(egui::RichText::new(station).font(menu::semibold(11.5)).color(flightui::SOFT));
+                    });
+                });
+            });
+            return;
+        }
         let Some(l) = self.atc.log.last() else { return };
         let age = self.time - l.t;
         if !(0.0..9.0).contains(&age) {
@@ -989,6 +1098,30 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_spoken_call_gets_its_answer() {
+        let db = Db::get();
+        let sfo = &db.apts[db.find("KSFO").expect("sfo") as usize];
+        let gnd = stations(db.find("KSFO").unwrap()).into_iter().find(|f| f.kind == Kind::Gnd).expect("ground");
+        let c = Ctx { now: 100.0, lat: sfo.lat, lon: sfo.lon, alt_ft: 13.0, agl_ft: 0.0, on_ground: true, kt: 0.0, wind_from: 280.0, wind_kt: 10.0, qnh: 1013.0, utc: 12.0, dest: None, cruise_ft: None, runway_busy: false, jet: false };
+        let mut a = Atc { com: gnd.mhz, ..Default::default() };
+        let said = "San Francisco Ground, Fable 123, at the ramp, request taxi with information alpha.";
+        a.heard(said, "FABLE 123", &c);
+        let l = a.log.last().expect("the call");
+        assert_eq!((l.who, l.text.as_str()), (Who::Pilot, said), "the pilot's own words are logged");
+        assert_eq!(a.phase, Phase::Taxi);
+        a.step(0.1, "FABLE 123", &Ctx { now: 103.0, ..c });
+        assert!(a.log.last().is_some_and(|l| l.who == Who::Atc && l.text.contains("taxi")), "ground answers");
+        // a readback is taken without a say again; mumbling gets one.
+        let n = a.log.len();
+        a.heard("taxi to holding point runway two eight right fable one two three", "FABLE 123", &Ctx { now: 105.0, ..c });
+        a.step(0.1, "FABLE 123", &Ctx { now: 110.0, ..c });
+        assert!(a.log[n..].iter().all(|l| !l.text.contains("say again")));
+        a.heard("uh hello", "FABLE 123", &Ctx { now: 120.0, ..c });
+        a.step(0.1, "FABLE 123", &Ctx { now: 125.0, ..c });
+        assert!(a.log.last().is_some_and(|l| l.text.ends_with("say again.")));
+    }
 
     #[test]
     fn heathrow_has_a_tower_and_callsigns_read_out() {
