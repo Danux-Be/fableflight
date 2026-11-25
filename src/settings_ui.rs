@@ -504,6 +504,9 @@ impl Game {
             row_help(ui, t!("settings.arcade_mode"), t!("settings.missiles_boost_on_any_aircraft"), |ui| {
                 menu::switch(ui, &mut self.arcade);
             });
+            row(ui, t!("settings.topple_buildings"), t!("settings.a_building_you_crash_into"), |ui| {
+                menu::switch(ui, &mut self.topple_buildings);
+            });
         });
         card(ui, t!("settings.air_traffic"), |ui| {
             row(ui, t!("settings.live_air_traffic"), t!("settings.real_aircraft_around_you_from"), |ui| {
