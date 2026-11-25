@@ -8996,7 +8996,8 @@ impl Game {
                 }
             }
             self.hotspot_overlay(ctx);
-            if self.atc_on && self.mode == Mode::Fly {
+            // (not over the flight panel: its Radio page keeps the calls)
+            if self.atc_on && self.mode == Mode::Fly && !self.info_open {
                 self.atc_caption(ctx);
             }
             // a ring on each aircraft in range, tags on the nearest that do not overlap.
