@@ -6,7 +6,7 @@
 //! Prompts are written as short specs: button names separated by spaces,
 //! with `+` and `/` drawn as text between them, e.g. `"Y + View"`, `"LT / RT"`.
 
-use egui::{pos2, vec2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Ui};
+use egui::{pos2, vec2, Color32, CornerRadius, Painter, Pos2, Rect, Stroke, Ui};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -84,13 +84,14 @@ impl Btn {
 
 const BODY: Color32 = Color32::from_rgb(46, 52, 62);
 const RIM: Color32 = Color32::from_rgb(196, 202, 212);
-const INK: Color32 = Color32::from_rgb(240, 242, 245);
+const LIGHT: Color32 = Color32::from_rgb(240, 242, 245);
 
-/// Text drawn twice, a hair apart: the only font has no bold face.
-fn bold(p: &Painter, at: Pos2, s: &str, size: f32, col: Color32) {
-    let f = FontId::proportional(size);
-    p.text(at, egui::Align2::CENTER_CENTER, s, f.clone(), col);
-    p.text(at + vec2(0.45, 0.0), egui::Align2::CENTER_CENTER, s, f, col);
+/// a word in the display face, centred on its letters themselves rather
+/// than on the font's line box, so a and lb sit dead in the middle.
+fn word(p: &Painter, at: Pos2, s: &str, size: f32, col: Color32) {
+    let g = p.layout_no_wrap(s.to_string(), crate::menu::bold(size), col);
+    let off = at - g.mesh_bounds.center();
+    p.galley(off.to_pos2(), g, col);
 }
 
 /// Draw one button glyph filling `r` (its height sets the size).
@@ -98,29 +99,29 @@ pub fn paint(p: &Painter, r: Rect, b: Btn) {
     let h = r.height();
     let c = r.center();
     let rad = h * 0.5 - 0.5;
-    // the letters sit a touch low in the font's box
-    let text_at = c + vec2(0.0, h * 0.02);
-    let face = |col: Color32, ink: Color32, s: &str| {
-        p.circle_filled(c + vec2(0.0, 1.0), rad, Color32::from_black_alpha(90));
-        p.circle_filled(c, rad, col);
-        p.circle_stroke(c, rad - 0.5, Stroke::new(1.0, Color32::from_white_alpha(60)));
-        bold(p, text_at, s, h * 0.6, ink);
-    };
+    let shadow = |rad: f32| p.circle_filled(c + vec2(0.0, 1.0), rad, Color32::from_black_alpha(90));
+    let ink = Stroke::new((h * 0.07).max(1.0), LIGHT);
     match b {
-        Btn::A => face(Color32::from_rgb(84, 168, 58), Color32::WHITE, "A"),
-        Btn::B => face(Color32::from_rgb(212, 52, 48), Color32::WHITE, "B"),
-        Btn::X => face(Color32::from_rgb(38, 112, 214), Color32::WHITE, "X"),
-        Btn::Y => face(Color32::from_rgb(236, 182, 24), Color32::from_rgb(40, 30, 0), "Y"),
-        Btn::LB | Btn::RB | Btn::LT | Btn::RT => {
-            let big = (h * 0.5) as u8;
-            let small = (h * 0.16) as u8;
-            // Bumpers sweep up to the outer corner; triggers are rounded over the top.
-            let cr = match b {
-                Btn::LB => CornerRadius { nw: big, ne: small, sw: small, se: small },
-                Btn::RB => CornerRadius { nw: small, ne: big, sw: small, se: small },
-                _ => CornerRadius { nw: big, ne: big, sw: small, se: small },
+        Btn::A | Btn::B | Btn::X | Btn::Y => {
+            let (fill, ink, s) = match b {
+                Btn::A => (Color32::from_rgb(84, 168, 58), Color32::WHITE, "A"),
+                Btn::B => (Color32::from_rgb(212, 52, 48), Color32::WHITE, "B"),
+                Btn::X => (Color32::from_rgb(38, 112, 214), Color32::WHITE, "X"),
+                _ => (Color32::from_rgb(236, 182, 24), Color32::from_rgb(40, 30, 0), "Y"),
             };
-            let body = if matches!(b, Btn::LB | Btn::RB) { r.shrink2(vec2(0.0, h * 0.06)) } else { r };
+            shadow(rad);
+            p.circle_filled(c, rad, fill);
+            word(p, c, s, h * 0.56, ink);
+        }
+        Btn::LB | Btn::RB | Btn::LT | Btn::RT => {
+            // bumpers are flat pills; triggers are rounded over the top.
+            let body = if matches!(b, Btn::LB | Btn::RB) { r.shrink2(vec2(0.0, h * 0.1)) } else { r };
+            let round = (body.height() * 0.5) as u8;
+            let small = (h * 0.18) as u8;
+            let cr = match b {
+                Btn::LB | Btn::RB => CornerRadius::same(round),
+                _ => CornerRadius { nw: round, ne: round, sw: small, se: small },
+            };
             p.rect_filled(body.translate(vec2(0.0, 1.0)), cr, Color32::from_black_alpha(90));
             p.rect_filled(body, cr, BODY);
             p.rect_stroke(body, cr, Stroke::new(1.0, RIM), egui::StrokeKind::Inside);
@@ -130,52 +131,51 @@ pub fn paint(p: &Painter, r: Rect, b: Btn) {
                 Btn::LT => "LT",
                 _ => "RT",
             };
-            p.text(body.center() + vec2(0.0, h * 0.03), egui::Align2::CENTER_CENTER, s, FontId::proportional(h * 0.54), INK);
+            word(p, body.center(), s, body.height() * 0.6, LIGHT);
         }
         Btn::View | Btn::Menu => {
-            p.circle_filled(c + vec2(0.0, 1.0), rad, Color32::from_black_alpha(90));
+            shadow(rad);
             p.circle_filled(c, rad, BODY);
             p.circle_stroke(c, rad - 0.5, Stroke::new(1.0, RIM));
             let u = h * 0.11;
-            let st = Stroke::new((h * 0.07).max(1.0), INK);
             if b == Btn::Menu {
                 for k in -1..=1 {
                     let y = c.y + k as f32 * u * 1.5;
-                    p.line_segment([pos2(c.x - u * 2.2, y), pos2(c.x + u * 2.2, y)], st);
+                    p.line_segment([pos2(c.x - u * 2.2, y), pos2(c.x + u * 2.2, y)], ink);
                 }
             } else {
                 // two windows, one over the other
                 let a = Rect::from_min_size(c + vec2(-u * 2.3, -u * 1.9), vec2(u * 3.0, u * 2.4));
                 let b2 = a.translate(vec2(u * 1.5, u * 1.4));
-                p.rect_stroke(a, 1.0, st, egui::StrokeKind::Middle);
+                p.rect_stroke(a, 1.0, ink, egui::StrokeKind::Middle);
                 p.rect_filled(b2, 1.0, BODY);
-                p.rect_stroke(b2, 1.0, st, egui::StrokeKind::Middle);
+                p.rect_stroke(b2, 1.0, ink, egui::StrokeKind::Middle);
             }
         }
         Btn::LS | Btn::RS | Btn::L3 | Btn::R3 => {
             let click = matches!(b, Btn::L3 | Btn::R3);
-            p.circle_filled(c + vec2(0.0, 1.0), rad, Color32::from_black_alpha(90));
+            shadow(rad);
             p.circle_filled(c, rad, BODY);
             p.circle_stroke(c, rad - 0.5, Stroke::new(if click { 2.0 } else { 1.0 }, RIM));
             p.circle_stroke(c, rad * 0.62, Stroke::new(1.0, Color32::from_white_alpha(70)));
             let letter = if matches!(b, Btn::LS | Btn::L3) { "L" } else { "R" };
             if click {
-                p.text(text_at, egui::Align2::CENTER_CENTER, format!("{letter}S"), FontId::proportional(h * 0.42), INK);
+                word(p, c, &format!("{letter}S"), h * 0.4, LIGHT);
             } else {
-                bold(p, text_at, letter, h * 0.5, INK);
-                // arrow ticks all round: the stick is moved
-                let t = h * 0.09;
+                word(p, c, letter, h * 0.46, LIGHT);
+                // ticks all round: the stick is moved.
+                let t = h * 0.08;
                 for (dx, dy) in [(0.0, -1.0), (0.0, 1.0), (-1.0, 0.0), (1.0, 0.0)] {
                     let d = vec2(dx, dy);
-                    let tip = c + d * (rad - 1.2);
+                    let tip = c + d * (rad - 1.0);
                     let back = tip - d * t * 1.3;
                     let side = vec2(-dy, dx) * t;
-                    p.add(egui::Shape::convex_polygon(vec![tip, back + side, back - side], INK, Stroke::NONE));
+                    p.add(egui::Shape::convex_polygon(vec![tip, back + side, back - side], LIGHT, Stroke::NONE));
                 }
             }
         }
         Btn::Dpad | Btn::Up | Btn::Down | Btn::Left | Btn::Right => {
-            let arm = h * 0.4;
+            let arm = h * 0.36;
             let len = h * 0.5 - 0.5;
             let v = Rect::from_center_size(c, vec2(arm, len * 2.0));
             let hz = Rect::from_center_size(c, vec2(len * 2.0, arm));
@@ -185,18 +185,16 @@ pub fn paint(p: &Painter, r: Rect, b: Btn) {
             for rr in [v, hz] {
                 p.rect_filled(rr, 2.0, BODY);
             }
-            // the direction meant is lit; the whole pad has every arm lit
-            let lit = |d: Btn| b == Btn::Dpad || b == d;
-            // (each arm from the middle out)
             let arms = [
-                (Btn::Up, Rect::from_min_max(pos2(v.left(), v.top()), pos2(v.right(), c.y))),
-                (Btn::Down, Rect::from_min_max(pos2(v.left(), c.y), pos2(v.right(), v.bottom()))),
-                (Btn::Left, Rect::from_min_max(pos2(hz.left(), hz.top()), pos2(c.x, hz.bottom()))),
-                (Btn::Right, Rect::from_min_max(pos2(c.x, hz.top()), pos2(hz.right(), hz.bottom()))),
+                (Btn::Up, Rect::from_min_max(v.min, pos2(v.right(), c.y))),
+                (Btn::Down, Rect::from_min_max(pos2(v.left(), c.y), v.max)),
+                (Btn::Left, Rect::from_min_max(hz.min, pos2(c.x, hz.bottom()))),
+                (Btn::Right, Rect::from_min_max(pos2(c.x, hz.top()), hz.max)),
             ];
+            // the direction meant is lit; the whole pad has every arm lit, softer.
             for (d, rr) in arms {
-                if lit(d) {
-                    p.rect_filled(rr.shrink(1.0), 1.5, if b == Btn::Dpad { Color32::from_rgb(120, 128, 140) } else { INK });
+                if b == Btn::Dpad || b == d {
+                    p.rect_filled(rr.shrink(1.0), 1.5, if b == Btn::Dpad { Color32::from_rgb(120, 128, 140) } else { LIGHT });
                 }
             }
             for rr in [v, hz] {
@@ -218,7 +216,7 @@ fn tokens(spec: &str) -> impl Iterator<Item = Tok<'_>> {
 const GAP: f32 = 3.0;
 
 fn text_w(p: &Painter, s: &str, size: f32) -> f32 {
-    p.layout_no_wrap(s.to_string(), FontId::proportional(size), Color32::WHITE).size().x
+    p.layout_no_wrap(s.to_string(), crate::menu::medium(size), Color32::WHITE).size().x
 }
 
 /// Width of a whole spec at a glyph height.
@@ -250,7 +248,7 @@ pub fn paint_spec(p: &Painter, x: f32, y: f32, spec: &str, h: f32, text: Color32
                 x += w;
             }
             Tok::Text(s) => {
-                let g = p.layout_no_wrap(s.to_string(), FontId::proportional(h * 0.7), text);
+                let g = p.layout_no_wrap(s.to_string(), crate::menu::medium(h * 0.7), text);
                 let w = g.size().x;
                 p.galley(pos2(x, y - g.size().y * 0.5), g, text);
                 x += w;

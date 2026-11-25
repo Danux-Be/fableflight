@@ -654,7 +654,11 @@ impl Game {
             panel(ui, glass().inner_margin(egui::Margin::symmetric(12, 8)), |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    menu::key_cap(ui, &key);
+                    if padui::active() {
+                        padui::glyphs(ui, &key, 22.0);
+                    } else {
+                        menu::key_cap(ui, &key);
+                    }
                     ui.label(RichText::new(crate::tr_en("Flight menu")).font(menu::label()).color(TEXT));
                 });
             });
