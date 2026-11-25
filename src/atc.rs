@@ -6,6 +6,10 @@
 //! calls go out to the traffic on the ctaf. what was said is kept as a log
 //! and shown as subtitles. not real phraseology training, a game's version.
 
+pub mod install;
+pub mod lexicon;
+pub mod tts;
+
 use crate::airports::{self, Apt, Db};
 use crate::{flightui, geo, menu, tr_en, Game};
 use std::collections::HashMap;

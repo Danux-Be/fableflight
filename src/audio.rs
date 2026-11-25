@@ -26,6 +26,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+pub(crate) mod radio;
+
 /// The cockpit warnings that are sounding.
 #[derive(Clone, Copy, Default, Debug, PartialEq)]
 pub struct Warn {

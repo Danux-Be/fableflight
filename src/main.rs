@@ -484,7 +484,7 @@ struct Args {
     mcp_port: u16,
 }
 
-const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures|logbook|challenges[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--simbrief USER_OR_ID] [--challenge first|crosswind|night|mountain|rain|short|jumbo|paro] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--framegen-install] [--full-map] [--no-scenery] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
+const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures|logbook|challenges[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--simbrief USER_OR_ID] [--challenge first|crosswind|night|mountain|rain|short|jumbo|paro] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--atc-install] [--framegen-install] [--full-map] [--no-scenery] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
 
 fn parse_args() -> Args {
     let v: Vec<String> = std::env::args().skip(1).collect();
@@ -10167,6 +10167,25 @@ fn main() -> anyhow::Result<()> {
         eprintln!();
         match r.and_then(|_| fsr4::verify()) {
             Ok(dir) => println!("installed and verified in {}", dir.display()),
+            Err(e) => {
+                eprintln!("failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        std::process::exit(0);
+    }
+    if argv.iter().any(|a| a == "--atc-install") {
+        // The ATC voice pack (Kokoro and ONNX Runtime), as atc/install.rs fetches it.
+        let last = std::cell::Cell::new(0u64);
+        let r = atc::install::download(&|done, total| {
+            if done >= last.get() + (8 << 20) || done == total {
+                last.set(done);
+                eprint!("\rATC voices: {} / {}", bytes(done), bytes(total));
+            }
+        });
+        eprintln!();
+        match r {
+            Ok(()) => println!("installed in {}", atc::install::dir().unwrap_or_default().display()),
             Err(e) => {
                 eprintln!("failed: {e}");
                 std::process::exit(1);
