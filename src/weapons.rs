@@ -567,6 +567,7 @@ mod tests {
 
     fn sidewinder(name: &'static str, x: f32) -> Piece {
         Piece {
+            hotspot: None,
             name,
             group: crate::airframe::G_LWING,
             mesh: Mesh::default(),

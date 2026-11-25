@@ -38,6 +38,7 @@ pub struct Gauges {
     ball_v: f64,
     fuel: [f64; 2],
     oil_t: f64,
+    cht: f64,
     oil_p: f64,
     egt: f64,
     mp: f64,
@@ -72,6 +73,7 @@ struct Truth {
     rpm: f64,
     mp: f64,
     oil_t: f64,
+    cht: f64,
     oil_p: f64,
     egt: f64,
     suction: f64,
@@ -95,7 +97,10 @@ fn truth(p: &Plane) -> Truth {
         hdg: f.dot(e).atan2(f.dot(n)).to_degrees().rem_euclid(360.0),
         rpm,
         mp,
-        oil_t: 120.0 + (55.0 + 25.0 * thr + 90.0 * (1.0 - eng)) * running,
+        oil_t: 120.0 + (55.0 + 25.0 * thr + 90.0 * (1.0 - eng) + if p.spec.id == 0 { 20.0 * (1.0-p.cowl_flaps) } else { 0.0 }) * running,
+        // Cylinder heads answer combustion and cooling airflow faster than the oil.
+        cht: 60.0 + (220.0 + 110.0 * p.power.min(1.2) - 35.0 * (p.ias() / 55.0).min(1.5)
+            + 45.0 * (0.7 - p.mixture).max(0.0) + if p.spec.id == 0 { 60.0 * (1.0-p.cowl_flaps) } else { 0.0 }) * if p.running { 1.0 } else { 0.0 },
         oil_p: (22.0 + 58.0 * smooth(500.0, 2300.0, rpm)) * eng.sqrt() * running,
         egt: (0.45 + 0.3 * thr) * running,
         // The engine-driven vacuum pump: about 5 in. Hg from a fast idle up.
@@ -129,6 +134,7 @@ impl Gauges {
             ball_v: 0.0,
             fuel: [21.0, 19.5],
             oil_t: tr.oil_t,
+            cht: tr.cht,
             oil_p: tr.oil_p,
             egt: tr.egt,
             mp: tr.mp,
@@ -260,6 +266,7 @@ impl Gauges {
         // Engine: oil takes minutes, EGT seconds; pressure and revs follow at
         // once (the tach needle quivers a little).
         self.oil_t = lag(self.oil_t, tr.oil_t, 140.0, dt);
+        self.cht = lag(self.cht, tr.cht, 45.0, dt);
         self.oil_p = lag(self.oil_p, tr.oil_p, 0.6, dt);
         self.egt = lag(self.egt, tr.egt, 3.0, dt);
         self.mp = lag(self.mp, tr.mp, 0.25, dt);
@@ -271,6 +278,8 @@ impl Gauges {
 
     /// The instrument readings as plane.wgsl takes them (rows 0..4, and the
     /// compass card for row 5).
+    pub fn cylinder_head_f(&self) -> f32 { self.cht as f32 }
+
     pub fn readings(&self, p: &Plane) -> ([[f32; 4]; 5], f32) {
         let tr = truth(p);
         let f = p.forward();
@@ -312,6 +321,18 @@ mod tests {
             g.update(0.01, &p, 0.0);
         }
         assert!(wrap(g.card as f64 - 90.0).abs() < 1.0, "card {}", g.card);
+    }
+
+    #[test]
+    fn closing_cowl_flaps_heats_cylinder_heads_independently() {
+        let mut p = level(0.0);
+        p.running = true;
+        let mut g = Gauges::new(&p,3);
+        let before = g.cht;
+        p.cowl_flaps = 0.0;
+        for _ in 0..600 { g.update(0.1,&p,0.0); }
+        assert!(g.cht > before + 25.0);
+        assert!(g.cht != g.oil_t * 1.6 + 30.0);
     }
 
     #[test]

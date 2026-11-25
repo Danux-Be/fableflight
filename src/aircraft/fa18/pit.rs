@@ -13,6 +13,7 @@
 //! plane.wgsl / deck747.wgsl from `pat::LEGEND` quads, lit green at night); the
 //! displays and the HUD symbology are drawn in pit18.wgsl from the instrument
 //! readings. Everything here is body frame (+X right, +Y up, -Z forward).
+use crate::aircraft::Hotspot;
 use super::*;
 use crate::aircraft::b747::deck::{legend_mat, rect, screen_quad, sid, style, Face};
 use glam::{Quat, Vec2, Vec3};
@@ -324,11 +325,11 @@ pub fn build(b: &mut Builder) {
     upper_panel(&mut p, &up);
     hood(&mut p);
     hud(&mut p);
-    lower_panel(&mut p);
+    lower_panel(&mut p, b);
     b.fixed("instrument panel", G_ENGINE, p);
 
     let mut c = Mesh::default();
-    consoles(&mut c);
+    consoles(&mut c, b);
     b.fixed("consoles", G_ENGINE, c);
 
     let mut s = Mesh::default();
@@ -340,7 +341,7 @@ pub fn build(b: &mut Builder) {
     let k = b.fixed("hud combiner", G_ENGINE, g);
     b.pieces[k].glass = true;
 
-    controls(b);
+    controls(b, 0.12);
 }
 
 // ---------------------------------------------------------------- walls, floor, rear deck
@@ -744,7 +745,16 @@ fn combiner(m: &mut Mesh) {
     m.fan(&mt(mat::GLASS, 0.1, 0.1, 0.1), c, &ring, n);
 }
 
-fn lower_panel(m: &mut Mesh) {
+/// The left vertical console is aft of the lower instrument panel. The
+/// equipment face, flap switch and landing gear lever share this frame.
+fn gear_panel() -> (Face, f32) {
+    let f = lower_face();
+    let inner = f.at(-0.372, 0.04) + Vec3::new(0.0, 0.070, 0.215);
+    let outer = Vec3::new(-wall_x(inner.z + 0.07, inner.y), inner.y, inner.z + 0.07);
+    (Face::new((inner + outer) * 0.5, inner - outer, f.ay), inner.distance(outer) * 0.5 + 0.004)
+}
+
+fn lower_panel(m: &mut Mesh, b: &mut Builder) {
     let f = lower_face();
     // A grey sheet-metal panel, cut away below beside the console fronts.
     let outline = vec![
@@ -797,10 +807,7 @@ fn lower_panel(m: &mut Mesh) {
     m.rbox(&stripes(0.006, false), g.at_h(0.15, -0.125, 0.004), Vec3::new(0.026, 0.014, 0.004), 0.002, g.rot());
     // Left of the IFEI, on a wing turned toward the seat: the landing gear
     // and flap panel (position lights; the gear handle is a piece of its own).
-    let e = f.at(-0.372, 0.04);
-    let out = Vec3::new(-(wall_x(e.z, e.y) + 0.004), e.y, e.z + 0.07);
-    let wing = Face::new((e + out) * 0.5, e - out, f.ay);
-    let hw = (e - out).length() * 0.5 + 0.004;
+    let (wing, hw) = gear_panel();
     m.slab(&GREY, &rrect(hw, 0.078, 0.006), &[], wing.o, wing.ax, wing.ay, 0.02);
     let w = wing.sub(0.0, 0.0, 0.0);
     m.rbox(&BLK, w.at_h(0.0, 0.0, 0.003), Vec3::new(hw - 0.006, 0.074, 0.003), 0.003, w.rot());
@@ -812,7 +819,10 @@ fn lower_panel(m: &mut Mesh) {
     for (i, s) in ["HALF", "FULL"].iter().enumerate() {
         light(m, &w, 0.022, -0.020 - i as f32 * 0.018, 0.012, 0.0065, sid(s), &GREEN_LENS);
     }
-    toggle(m, &w, -0.022, -0.050, true);
+    let mut flap = Mesh::default();
+    toggle(&mut flap, &w, -0.022, -0.050, true);
+    let piece = b.add("flap switch", G_ENGINE, flap, Anim::hinge(Drive::new(Input::FlapLever, 0.74)), w.at(-0.022, -0.050), w.ax, None);
+    b.pieces[piece].hotspot = Some(Hotspot::wheel(w.n() * 0.0145 + w.ay * 0.0055, 0.012, "flaps_up", "flaps_down"));
     word(m, &w, -0.022, -0.034, 0.0026, "FLAPS");
     word(m, &w, 0.005, -0.068, 0.0024, "AUTO");
     // The gear handle's slot.
@@ -834,7 +844,7 @@ pub(crate) fn instrument(m: &mut Mesh, f: &Face, u: f32, v: f32, r: f32, id: f32
 
 // ---------------------------------------------------------------- side consoles
 
-fn consoles(m: &mut Mesh) {
+fn consoles(m: &mut Mesh, b: &mut Builder) {
     for s in [-1.0f32, 1.0] {
         // Inner side down to the floor, the front facing the pedals.
         quad_to(m, &GREY, [Vec3::new(s * CON_X, FLOOR - 0.01, CON_Z1), Vec3::new(s * CON_X, FLOOR - 0.01, CON_Z0), Vec3::new(s * CON_X, CON_Y, CON_Z0), Vec3::new(s * CON_X, CON_Y, CON_Z1)], Vec3::new(0.0, 0.3, -4.6));
@@ -888,7 +898,11 @@ fn consoles(m: &mut Mesh) {
     let wf = Face::new(Vec3::new(x - 0.001, 0.56, -4.50), Vec3::Z, Vec3::Y);
     word(m, &wf, 0.0, 0.0, 0.004, "CANOPY");
     m.rbox(&BLK, wf.at_h(0.0, -0.025, 0.004), Vec3::new(0.02, 0.015, 0.004), 0.003, wf.rot());
-    toggle(m, &wf.sub(0.0, -0.025, 0.008), 0.0, 0.0, true);
+    let mut canopy = Mesh::default();
+    toggle(&mut canopy, &wf.sub(0.0, -0.025, 0.008), 0.0, 0.0, true);
+    let pivot = wf.at_h(0.0, -0.025, 0.008);
+    let piece = b.add("canopy switch", G_ENGINE, canopy, Anim::hinge(Drive::new(Input::Canopy, 0.74)), pivot, wf.ax, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(wf.n() * 0.0145 + wf.ay * 0.0055, 0.012, "canopy"));
     // On the left wall forward: the yellow and black striped handle by the hood.
     let lz = -5.13;
     let lx = -(wall_x(lz, 0.6) - 0.012);
@@ -1031,7 +1045,7 @@ pub(crate) fn strap(m: &mut Mesh, mm: &Mat, pts: &[Vec3], w: f32, up: &dyn Fn(Ve
 pub(crate) const THR_X: [f32; 2] = [-0.352, -0.318];
 const THR_PIVOT: Vec3 = Vec3::new(0.0, CON_Y - 0.17, -4.70);
 
-pub(crate) fn controls(b: &mut Builder) {
+pub(crate) fn controls(b: &mut Builder, pedal_adjustment: f32) {
     // The stick: a gimbal ring at its foot turns fore and aft, the stick in it from side to side.
     let mut boot = Mesh::default();
     let prof: Vec<[f32; 2]> = (0..=12).map(|i| {
@@ -1050,40 +1064,42 @@ pub(crate) fn controls(b: &mut Builder) {
         let mut t = Mesh::default();
         throttle(&mut t, x, k == 0);
         let piv = Vec3::new(x, THR_PIVOT.y, THR_PIVOT.z);
-        b.add("throttle", G_ENGINE, t, Anim::hinge(Drive::new(Input::Throttle, -0.55).offset(0.30)), piv, Vec3::X, None);
+        let piece = b.add("throttle", G_ENGINE, t, Anim::hinge(Drive::new(Input::Throttle, -0.55).offset(0.30)), piv, Vec3::X, None);
+        b.pieces[piece].hotspot = Some(Hotspot::wheel(Vec3::new(0.0, 0.293, -0.010), 0.025, "throttle_up", "throttle_down"));
     }
 
     // The landing gear handle: a wheel-shaped knob (red light inside) on an arm moving up and down its slot.
-    let f = lower_face();
-    let e = f.at(-0.372, 0.04);
-    let out = Vec3::new(-(wall_x(e.z, e.y) + 0.004), e.y, e.z + 0.07);
-    let wing = Face::new((e + out) * 0.5, e - out, f.ay);
-    let w = wing.sub(-0.022, 0.030, 0.0);
+    let (wing, _) = gear_panel();
+    let w = wing.sub(-0.022, 0.030, 0.006);
     let mut gh = Mesh::default();
     let arm_top = w.at_h(0.0, 0.0, 0.05);
     gh.tube(&STEEL, &[w.at_h(0.0, 0.0, -0.01), arm_top], &|_| 0.0045, 10, false);
     let wheel_c = arm_top + w.n() * 0.004;
     gh.lathe(&mt(mat::PLASTIC, 0.75, 0.74, 0.70), wheel_c - w.ax * 0.012, w.ax, &[[0.0, 0.0], [0.016, 0.0], [0.019, 0.003], [0.019, 0.021], [0.016, 0.024], [0.0, 0.024]], 22, false);
     gh.lathe(&RED_LENS, wheel_c - w.ax * 0.013, w.ax, &[[0.0, 0.0], [0.009, 0.0], [0.009, 0.026], [0.0, 0.026]], 14, false);
-    b.add("gear handle", G_ENGINE, gh, Anim::slide(Drive::new(Input::GearHandle, 0.028), w.ay), w.o, Vec3::X, None);
+    let piece = b.add("gear handle", G_ENGINE, gh, Anim::slide(Drive::new(Input::GearHandle, -0.028), w.ay), w.o, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(wheel_c - w.o, 0.021, "gear"));
 
     // Rudder pedals, hinged at the top of their arms under the panel.
     for s in [-1.0f32, 1.0] {
         let mut p = Mesh::default();
-        let pv = Vec3::new(s * 0.125, 0.40, -5.66);
-        let pc = Vec3::new(s * 0.125, 0.235, -5.60);
+        let pv = Vec3::new(s * 0.125, 0.40, -5.66 + pedal_adjustment);
+        let pc = Vec3::new(s * 0.125, 0.235, -5.60 + pedal_adjustment);
         p.tube(&GREY_DK, &[pv, pc], &|_| 0.011, 10, true);
         let tilt = Quat::from_rotation_x(-0.42);
         p.rbox(&GREY_DK, pc + Vec3::new(0.0, 0.0, 0.012), Vec3::new(0.048, 0.075, 0.009), 0.006, tilt);
         p.rbox(&mt(mat::RUBBER, 0.03, 0.03, 0.032).pat(pat::KNURL), pc + Vec3::new(0.0, 0.003, 0.021), Vec3::new(0.042, 0.066, 0.002), 0.0015, tilt);
         // The heel guard.
         p.rbox(&GREY_DK, pc + Vec3::new(0.0, -0.075, 0.035), Vec3::new(0.05, 0.012, 0.006), 0.004, Quat::from_rotation_x(0.6));
-        b.add("rudder pedal", G_ENGINE, p, Anim::hinge(Drive::new(Input::Yaw, s * 0.16)), pv, Vec3::X, None);
+        let piece = b.add("rudder pedal", G_ENGINE, p, Anim::hinge2(Drive::new(Input::Yaw, s * 0.16), Drive::new(Input::Brake(s), 0.14)), pv, Vec3::X, None);
+        // The lower half of the rubber face is visible below the instrument panel lip.
+        let pad = pc + Vec3::new(0.0, 0.003, 0.021) + tilt * Vec3::new(0.0, -0.035, 0.002);
+        b.pieces[piece].hotspot = Some(Hotspot::hold(pad - pv, 0.038, if s < 0.0 { "brake_left" } else { "brake_right" }));
     }
     // The pedals' box and the cross-tube they hang from.
     let mut pb = Mesh::default();
-    pb.tube(&GREY_DK, &[Vec3::new(-0.20, 0.40, -5.66), Vec3::new(0.20, 0.40, -5.66)], &|_| 0.014, 12, true);
-    pb.rbox(&GREY_DK, Vec3::new(0.0, 0.42, -5.75), Vec3::new(0.22, 0.04, 0.10), 0.01, Quat::IDENTITY);
+    pb.tube(&GREY_DK, &[Vec3::new(-0.20, 0.40, -5.66 + pedal_adjustment), Vec3::new(0.20, 0.40, -5.66 + pedal_adjustment)], &|_| 0.014, 12, true);
+    pb.rbox(&GREY_DK, Vec3::new(0.0, 0.42, -5.75 + pedal_adjustment), Vec3::new(0.22, 0.04, 0.10), 0.01, Quat::IDENTITY);
     b.fixed("pedal box", G_ENGINE, pb);
 }
 

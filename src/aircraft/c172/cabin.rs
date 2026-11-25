@@ -1,11 +1,13 @@
 //! The cabin: lining and carpet, the instrument panel with its gauges, radios,
 //! switches and breakers, the moving controls, seats and belts, and the glass.
 use super::*;
+use crate::aircraft::Hotspot;
 use crate::airframe::*;
 use glam::{Mat3, Quat, Vec2, Vec3};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 pub const PANEL_Z: f32 = -1.30;
+pub const GEAR_PIVOT: Vec3 = Vec3::new(-0.185, -0.185, PANEL_Z);
 const FLOOR_Y: f32 = -0.585;
 
 /// Instrument ids (vertex `mat.w` on GAUGE); keep in step with plane.wgsl.
@@ -29,7 +31,11 @@ pub mod gauge {
     pub const EGT: f32 = 16.0;
     pub const COMPASS: f32 = 17.0;
     pub const CHT: f32 = 18.0;
+    pub const ADF: f32 = 30.0;
+    pub const TRIM_SCALE: f32 = 31.0;
+    pub const FLAP_SCALE: f32 = 32.0;
     pub const FUEL_SEL: f32 = 19.0;
+    pub const FUEL_SEL_MAIN: f32 = 33.0;
     pub const OAT: f32 = 20.0;
     /// (21 is the Hornet's brake accumulator pressure.) A jet fighter's engine
     /// instruments (the Phantom's): engine speed in percent, exhaust gas
@@ -62,6 +68,7 @@ pub fn build(b: &mut Builder) {
     extras(&mut m);
     b.fixed("cabin", G_FUSE, m);
     controls(b);
+    switches(b);
     glass(b);
 }
 
@@ -489,7 +496,8 @@ fn door_trim(m: &mut Mesh) {
     let rows: Vec<Vec<SP>> = (0..=16)
         .map(|i| {
             let z = zp0 + (zp1 - zp0) * i as f32 / 16.0;
-            let ends = (((z - zp0) / (zp1 - zp0) * PI).sin()).powf(0.3);
+            // (sin(PI) is a hair below zero in f32, and a negative to the 0.3 is NaN)
+            let ends = (((z - zp0) / (zp1 - zp0) * PI).sin()).max(0.0).powf(0.3);
             let bulge = 0.032 * ends;
             let x = |y: f32| inner_x(z, y);
             let prof = [(-0.40, 0.0015), (-0.385, bulge * 0.6), (-0.36, bulge), (-0.30, bulge), (-0.255, bulge * 0.95), (-0.25, bulge * 0.9), (-0.252, 0.004)];
@@ -503,10 +511,6 @@ fn door_trim(m: &mut Mesh) {
             v.nrm = (-Vec3::from(v.nrm)).into();
         }
     }
-    // A pen and a folded chart showing over the lip.
-    d.tube(&mt(mat::PLASTIC, 0.03, 0.06, 0.25), &[Vec3::new(inner_x(-1.1, -0.25) - 0.02, -0.255, -1.16), Vec3::new(inner_x(-1.0, -0.23) - 0.022, -0.225, -1.03)], &|_| 0.004, 8, true);
-    d.rbox(&mt(mat::PLASTIC, 0.62, 0.62, 0.55).pat(pat::PLACARD), Vec3::new(inner_x(-0.9, -0.27) - 0.017, -0.262, -0.90), Vec3::new(0.0015, 0.03, 0.09), 0.001, Quat::from_rotation_x(0.08));
-
     // Pull strap on the door just under the window, for closing it.
     let (a, an) = on_side(-0.82, 0.03, 1.0, -0.043);
     let (b, _) = on_side(-0.68, 0.03, 1.0, -0.043);
@@ -533,19 +537,19 @@ const GAUGES: [(f32, f32, f32, f32); 19] = [
     (gauge::TC, -0.365, -0.005, 0.040),
     (gauge::HI, -0.270, -0.005, 0.040),
     (gauge::VSI, -0.175, -0.005, 0.040),
-    (gauge::MP, -0.365, -0.100, 0.034),
-    (gauge::TACH, -0.270, -0.100, 0.040),
-    (gauge::EGT, -0.175, -0.100, 0.030),
+    (gauge::MP, 0.390, 0.100, 0.029),
+    (gauge::TACH, 0.460, 0.100, 0.029),
+    (gauge::EGT, 0.250, 0.035, 0.030),
     (gauge::CDI, -0.075, 0.090, 0.040),
-    (gauge::CDI, -0.075, -0.005, 0.040),
-    (gauge::CLOCK, -0.470, 0.095, 0.029),
-    (gauge::SUCTION, -0.470, 0.020, 0.026),
+    (gauge::ADF, -0.075, -0.005, 0.040),
+    (gauge::CLOCK, 0.250, 0.100, 0.029),
+    (gauge::SUCTION, 0.320, 0.100, 0.026),
     (gauge::AMPS, -0.470, -0.055, 0.026),
-    (gauge::FUEL_L, 0.250, 0.100, 0.029),
-    (gauge::FUEL_R, 0.320, 0.100, 0.029),
-    (gauge::OIL_T, 0.390, 0.100, 0.029),
-    (gauge::OIL_P, 0.460, 0.100, 0.029),
-    (gauge::CHT, 0.250, 0.035, 0.029),
+    (gauge::FUEL_L, -0.470, 0.095, 0.029),
+    (gauge::FUEL_R, -0.470, 0.020, 0.029),
+    (gauge::OIL_T, -0.365, -0.100, 0.029),
+    (gauge::OIL_P, -0.270, -0.125, 0.029),
+    (gauge::CHT, -0.175, -0.100, 0.029),
 ];
 const STACK: [f32; 4] = [-0.022, 0.162, -0.128, 0.152]; // x0, x1, y0, y1
 
@@ -620,40 +624,36 @@ fn panel(m: &mut Mesh) {
     // Ignition key, the rocker switch row, placards.
     let f = z + 0.0005;
     m.lathe(&CHROME, Vec3::new(-0.48, -0.15, f), Vec3::Z, &[[0.016, 0.0], [0.016, 0.004], [0.012, 0.007], [0.0, 0.007]], 24, false);
-    m.rbox(&mt(mat::STEEL, 0.6, 0.55, 0.4), Vec3::new(-0.48, -0.15, f + 0.014), Vec3::new(0.003, 0.009, 0.008), 0.0015, Quat::IDENTITY);
-    m.rbox(&BLACK, Vec3::new(-0.48, -0.15, f + 0.028), Vec3::new(0.004, 0.012, 0.009), 0.003, Quat::IDENTITY);
     for i in 0..9 {
         let x = -0.525 + i as f32 * 0.03;
         let red = i < 2;
         let col = if red { mt(mat::PLASTIC, 0.35, 0.02, 0.02) } else { mt(mat::PLASTIC, 0.03, 0.03, 0.03) };
         m.rbox(&BLACK, Vec3::new(x, -0.205, f + 0.002), Vec3::new(0.008, 0.013, 0.002), 0.0015, Quat::IDENTITY);
-        m.rbox(&col, Vec3::new(x, -0.205, f + 0.006), Vec3::new(0.0062, 0.011, 0.004), 0.002, Quat::from_rotation_x(if i % 3 == 1 { 0.18 } else { -0.18 }));
-        m.rbox(&PAINT_WHITE.pat(pat::PLACARD), Vec3::new(x, -0.229, f), Vec3::new(0.011, 0.0035, 0.0004), 0.0002, Quat::IDENTITY);
+        // (The battery master, the right half of the red pair, is a piece of its own: it moves, see `switches`.)
+        if i != 1 && i != 4 {
+            m.rbox(&col, Vec3::new(x, -0.205, f + 0.006), Vec3::new(0.0062, 0.011, 0.004), 0.002, Quat::from_rotation_x(if i % 3 == 1 { 0.18 } else { -0.18 }));
+        }
+        label(m, Vec3::new(x, -0.229, f + 0.001), 0.013, 0.004, ["ALT", "BAT", "FUEL PUMP", "BCN", "LANDING", "TAXI", "NAV", "STROBE", "PITOT HT"][i]);
     }
-    for &(x, y, w, h) in &[(-0.27f32, -0.153f32, 0.06f32, 0.011f32), (0.355, 0.058, 0.03, 0.006), (-0.47, 0.135, 0.035, 0.008), (0.07, -0.155, 0.065, 0.009)] {
-        m.rbox(&PAINT_WHITE.pat(pat::PLACARD), Vec3::new(x, y, f), Vec3::new(w, h, 0.0004), 0.0002, Quat::IDENTITY);
+    for &(x, y, w, h, text) in &[(-0.27f32, -0.168f32, 0.04f32, 0.006f32, "OIL P"), (0.355, 0.058, 0.03, 0.006, "SUCTION"), (-0.47, 0.135, 0.035, 0.008, "FUEL"), (0.07, -0.155, 0.065, 0.009, "THR PROP MIX")] {
+        label(m, Vec3::new(x, y, f + 0.001), w, h, text);
     }
     // Gear position lights over the gear handle.
-    for (k, (x, l)) in [(-0.11f32, lamp::GEAR_DOWN), (-0.07, lamp::GEAR_UP)].iter().enumerate() {
+    for (k, (x, l)) in [(GEAR_PIVOT.x - 0.020, lamp::GEAR_DOWN), (GEAR_PIVOT.x + 0.020, lamp::GEAR_UP)].iter().enumerate() {
         let col = if k == 0 { mt(mat::LAMP, 0.1, 0.9, 0.15) } else { mt(mat::LAMP, 0.95, 0.5, 0.05) };
         m.lathe(&CHROME, Vec3::new(*x, -0.138, f), Vec3::Z, &[[0.009, 0.0], [0.009, 0.004], [0.007, 0.006]], 16, false);
         m.dome(&col.x(*l), Vec3::new(*x, -0.138, f + 0.005), Vec3::Z, 0.0068, 0.005, 14, 0.0);
     }
-    // Push-pull engine controls: prop (blue, crenellated), mixture (red).
-    for (x, col) in [(0.048f32, mt(mat::PLASTIC, 0.02, 0.05, 0.25)), (0.094, mt(mat::PLASTIC, 0.35, 0.02, 0.02))] {
-        m.tube(&CHROME, &[Vec3::new(x, -0.195, z - 0.02), Vec3::new(x, -0.195, z + 0.02)], &|_| 0.0045, 10, false);
-        m.lathe(&col.pat(pat::KNURL), Vec3::new(x, -0.195, z + 0.02), Vec3::Z, &[[0.0045, 0.0], [0.014, 0.004], [0.015, 0.018], [0.013, 0.022], [0.0, 0.023]], 18, true);
-    }
     m.lathe(&CHROME, Vec3::new(0.0, -0.195, f), Vec3::Z, &[[0.012, 0.0], [0.012, 0.003], [0.0, 0.003]], 18, false);
     // Flap lever slot with its detent plate.
     m.rbox(&BLACK, Vec3::new(0.15, -0.195, f + 0.001), Vec3::new(0.012, 0.04, 0.002), 0.002, Quat::IDENTITY);
-    m.rbox(&PAINT_WHITE.pat(pat::PLACARD), Vec3::new(0.175, -0.195, f), Vec3::new(0.008, 0.04, 0.0004), 0.0002, Quat::IDENTITY);
+    rect(m, &mt(mat::GAUGE, 0.02, 0.02, 0.02).x(gauge::FLAP_SCALE), Vec3::new(0.125, -0.195, f + 0.001), Vec3::X, Vec3::Y, 0.008, 0.04);
     // Circuit breakers, two rows.
     for row in 0..2 {
         for i in 0..11 {
             let p = Vec3::new(0.225 + i as f32 * 0.029, -0.172 - row as f32 * 0.036, f);
             m.lathe(&BLACK, p, Vec3::Z, &[[0.0065, 0.0], [0.0065, 0.002], [0.0048, 0.003], [0.0048, 0.009], [0.004, 0.0105], [0.0, 0.0105]], 12, false);
-            m.rbox(&PAINT_WHITE.pat(pat::PLACARD), p + Vec3::new(0.0, 0.0115, 0.0), Vec3::new(0.011, 0.003, 0.0004), 0.0002, Quat::IDENTITY);
+            label(m,p+Vec3::new(0.0,0.0115,0.001),0.011,0.003,"SPARE");
         }
     }
     // Glovebox door and latch, hour meter.
@@ -670,11 +670,11 @@ fn panel(m: &mut Mesh) {
     let ped = mt(mat::PLASTIC, 0.04, 0.041, 0.044).pat(pat::PANEL);
     m.rbox(&ped, Vec3::new(0.0, -0.40, z - 0.03), Vec3::new(0.072, 0.17, 0.05), 0.015, Quat::from_rotation_x(0.12));
     m.rbox(&BLACK, Vec3::new(0.0, -0.40, z + 0.02), Vec3::new(0.012, 0.075, 0.004), 0.003, Quat::from_rotation_x(0.12));
-    m.rbox(&PAINT_WHITE.pat(pat::PLACARD), Vec3::new(0.03, -0.40, z + 0.022), Vec3::new(0.012, 0.06, 0.0005), 0.0003, Quat::from_rotation_x(0.12));
+    rect(m, &mt(mat::GAUGE, 0.02, 0.02, 0.02).x(gauge::TRIM_SCALE), Vec3::new(0.03, -0.40, z + 0.025), Vec3::X, Quat::from_rotation_x(0.12) * Vec3::Y, 0.012, 0.06);
     let fs = Vec3::new(0.0, FLOOR_Y + 0.004, -0.98);
-    m.disc(&mt(mat::GAUGE, 0.02, 0.02, 0.02).x(gauge::FUEL_SEL), fs, Vec3::Y, Vec3::NEG_Z, 0.06, 32);
+    m.disc(&mt(mat::GAUGE, 0.02, 0.02, 0.02).x(gauge::FUEL_SEL), fs + Vec3::Y * 0.0055, Vec3::Y, Vec3::NEG_Z, 0.06, 32);
     m.lathe(&CHROME, fs, Vec3::Y, &[[0.062, 0.0], [0.062, 0.004], [0.06, 0.005]], 32, false);
-    m.rbox(&mt(mat::PLASTIC, 0.35, 0.03, 0.02), fs + Vec3::Y * 0.012, Vec3::new(0.012, 0.01, 0.05), 0.006, Quat::IDENTITY);
+    // The existing fuel handle is a moving piece (see switches).
 }
 
 /// A carpeted box rising from the floor over an outline in (z, x): a flat top
@@ -720,7 +720,9 @@ fn seats(m: &mut Mesh) {
         m.rbox(&side, Vec3::new(xs, 0.0, -0.31), Vec3::new(0.215, 0.29, 0.035), 0.03, tilt);
         m.rbox(&up, Vec3::new(xs, 0.40, -0.21), Vec3::new(0.11, 0.07, 0.04), 0.035, tilt);
         for dx in [-0.07f32, 0.07] {
-            m.tube(&CHROME, &[Vec3::new(xs + dx, 0.32, -0.235), Vec3::new(xs + dx, 0.36, -0.225)], &|_| 0.005, 8, false);
+            // The twin adjustment rails bury into both cushions, so the
+            // padded headrest cannot look detached from the seat back.
+            m.tube(&CHROME, &[Vec3::new(xs + dx, 0.24, -0.285), Vec3::new(xs + dx, 0.34, -0.22)], &|_| 0.006, 8, true);
         }
         // Frame and adjuster under the cushion.
         for (dx, dz) in [(-0.15f32, -0.88f32), (0.15, -0.88), (-0.15, -0.46), (0.15, -0.46)] {
@@ -767,9 +769,8 @@ fn fittings(m: &mut Mesh) {
 
 // ---------------------------------------------------------------- odds and ends
 
-/// The things that make it somebody's aeroplane: the outside air thermometer
-/// poking through the windshield, the overhead console, a headset and a
-/// checklist left on the right seat, the parking brake and cowl flap handles.
+/// Cabin fittings: an outside air thermometer, overhead console, and the
+/// parking brake and cowl flap handles. Keep loose flight gear off the seats.
 fn extras(m: &mut Mesh) {
     // Outside air thermometer: a dial on a stem through the top left of the windshield.
     let gp = Vec3::new(-0.36, fuse_top_y(-1.2, -0.36), -1.2);
@@ -805,52 +806,14 @@ fn extras(m: &mut Mesh) {
     }
     m.rbox(&PAINT_WHITE.pat(pat::PLACARD), Vec3::new(-0.0425, fy - 0.0002, -0.795), Vec3::new(0.022, 0.0003, 0.006), 0.0002, Quat::IDENTITY);
 
-    // A headset left on the right seat: cups face down, the band lying flat
-    // between them, the mic boom forward and the cord trailing off the cushion.
-    let seat_y = -0.36 + 0.045 + 0.004;
-    let cup = mt(mat::PLASTIC, 0.06, 0.062, 0.068);
-    let seal = mt(mat::FABRIC, 0.02, 0.02, 0.022);
-    let (ca, cb) = (Vec3::new(0.19, seat_y, -0.70), Vec3::new(0.35, seat_y, -0.64));
-    for c in [ca, cb] {
-        m.lathe(&seal, c, Vec3::Y, &[[0.0, 0.0], [0.042, 0.0], [0.047, 0.008], [0.044, 0.016]], 22, false);
-        m.lathe(&cup, c + Vec3::Y * 0.014, Vec3::Y, &[[0.043, 0.0], [0.045, 0.012], [0.04, 0.03], [0.026, 0.04], [0.0, 0.042]], 22, false);
-        m.disc(&mt(mat::PAINT, 0.5, 0.5, 0.5).pat(pat::PLACARD), c + Vec3::Y * 0.0565, Vec3::Y, Vec3::Z, 0.012, 14);
-    }
-    let mid = (ca + cb) * 0.5;
-    let side = (cb - ca).normalize();
-    let bow = Vec3::Y.cross(side).normalize() * -1.0;
-    let band: Vec<Vec3> = (0..=16).map(|k| {
-        let t = k as f32 / 16.0;
-        let a = (t - 0.5) * PI;
-        mid + side * (a.sin() * 0.085) + bow * (a.cos() * 0.10) + Vec3::Y * 0.03
-    }).collect();
-    m.tube(&cup, &band, &|_| 0.0055, 8, true);
-    m.tube(&seal, &band[4..13], &|_| 0.011, 10, true);
-    let boom: Vec<Vec3> = [(0.0, 0.03, 0.0), (-0.03, 0.028, -0.04), (-0.04, 0.02, -0.10), (-0.025, 0.012, -0.14)].iter().map(|&(x, y, z)| ca + Vec3::new(x, y, z)).collect();
-    m.tube(&BLACK, &boom, &|_| 0.0022, 6, true);
-    m.dome(&seal, *boom.last().unwrap(), Vec3::new(0.3, 0.2, -1.0).normalize(), 0.011, 0.016, 12, 0.0);
-    let cord: Vec<Vec3> = [(0.0, 0.01, 0.03), (0.03, -0.003, 0.09), (-0.05, -0.004, 0.13), (-0.10, -0.004, 0.06), (-0.16, -0.01, -0.01), (-0.17, -0.07, -0.05), (-0.165, -0.16, -0.08)]
-        .iter().map(|&(x, y, z)| ca + Vec3::new(x, y, z)).collect();
-    m.tube(&BLACK, &cord, &|_| 0.0028, 6, true);
+    // (The parking brake's T handle moves: see `switches`.)
+    let pb = PARK_BRAKE;
+    label(m,pb+Vec3::new(0.0,0.016,-0.008),0.025,0.0045,"PARK BRAKE");
 
-    // A laminated checklist beside it.
-    let card = Quat::from_rotation_y(0.35);
-    let cc = Vec3::new(0.33, seat_y + 0.0015, -0.80);
-    m.rbox(&mt(mat::PLASTIC, 0.75, 0.74, 0.70).pat(pat::PLACARD), cc, Vec3::new(0.055, 0.0012, 0.08), 0.001, card);
-    m.rbox(&mt(mat::PLASTIC, 0.04, 0.12, 0.35), cc + card * Vec3::new(0.0, 0.0006, -0.068), Vec3::new(0.0545, 0.0008, 0.011), 0.0006, card);
+    let cf = Vec3::new(0.0,-0.53,PANEL_Z+0.01);
+    m.rbox(&BLACK,cf,Vec3::new(0.008,0.035,0.003),0.002,Quat::from_rotation_x(0.12));
+    label(m,cf+Vec3::new(0.035,0.0,0.006),0.022,0.007,"COWL FLAPS");
 
-    // Parking brake: a T handle under the left of the panel.
-    let pb = Vec3::new(-0.40, -0.265, PANEL_Z + 0.01);
-    m.tube(&CHROME, &[pb - Vec3::Z * 0.03, pb + Vec3::Z * 0.02], &|_| 0.0035, 8, false);
-    m.rbox(&mt(mat::PLASTIC, 0.35, 0.03, 0.02), pb + Vec3::Z * 0.026, Vec3::new(0.028, 0.007, 0.007), 0.005, Quat::IDENTITY);
-    m.rbox(&PAINT_WHITE.pat(pat::PLACARD), pb + Vec3::new(0.0, 0.016, -0.009), Vec3::new(0.02, 0.0045, 0.0004), 0.0002, Quat::IDENTITY);
-    // Cowl flaps: a lever in a gated slot low on the pedestal.
-    let rot = Quat::from_rotation_x(0.12);
-    let cf = Vec3::new(0.0, -0.53, PANEL_Z + 0.01);
-    m.rbox(&BLACK, cf, Vec3::new(0.008, 0.035, 0.003), 0.002, rot);
-    m.tube(&CHROME, &[cf, cf + Vec3::new(0.0, 0.01, 0.04)], &|_| 0.003, 8, false);
-    m.rbox(&mt(mat::PLASTIC, 0.03, 0.03, 0.03), cf + Vec3::new(0.0, 0.012, 0.045), Vec3::new(0.018, 0.006, 0.01), 0.004, rot);
-    m.rbox(&PAINT_WHITE.pat(pat::PLACARD), cf + Vec3::new(0.022, 0.0, 0.004), Vec3::new(0.01, 0.03, 0.0004), 0.0002, rot);
 }
 
 // ---------------------------------------------------------------- controls
@@ -860,7 +823,9 @@ fn controls(b: &mut Builder) {
     for xs in [-0.27f32, 0.27] {
         let mut y = Mesh::default();
         let c = Vec3::new(xs, -0.06, -1.06);
-        y.tube(&CHROME, &[Vec3::new(xs, -0.06, PANEL_Z - 0.14), c - Vec3::Z * 0.02], &|_| 0.0115, 14, false);
+        // Start just through the dash face and overlap the yoke hub, leaving
+        // no visible gap in the support bar.
+        y.tube(&CHROME, &[Vec3::new(xs, -0.06, PANEL_Z - 0.014), c - Vec3::Z * 0.02], &|_| 0.0115, 14, false);
         let path: Vec<Vec3> = [(-0.132, 0.085), (-0.142, 0.04), (-0.135, 0.0), (-0.105, -0.03), (-0.05, -0.042), (0.05, -0.042), (0.105, -0.03), (0.135, 0.0), (0.142, 0.04), (0.132, 0.085)]
             .iter()
             .map(|&(dx, dy)| c + Vec3::new(dx, dy, 0.012))
@@ -874,7 +839,8 @@ fn controls(b: &mut Builder) {
         y.rbox(&mt(mat::PLASTIC, 0.08, 0.08, 0.08), c + Vec3::new(-0.115, 0.06, 0.028), Vec3::new(0.004, 0.008, 0.004), 0.002, Quat::IDENTITY);
         y.screw(&SCREW_BLACK, c + Vec3::new(0.04, -0.055, 0.0285), Vec3::Z, 0.0022, xs);
         y.screw(&SCREW_BLACK, c + Vec3::new(-0.04, -0.055, 0.0285), Vec3::Z, 0.0022, xs + 1.0);
-        b.add("yoke", G_FUSE, y, Anim::turn_slide(Drive::new(Input::Roll, -0.6), Drive::new(Input::Pitch, 0.06), Vec3::Z), c, Vec3::Z, None);
+        let piece = b.add("yoke", G_FUSE, y, Anim::turn_slide(Drive::new(Input::Roll, -0.6), Drive::new(Input::Pitch, 0.06), Vec3::Z), c, Vec3::Z, None);
+        b.pieces[piece].hotspot = Some(Hotspot::wheel(Vec3::new(-0.115, 0.06, 0.028), 0.009, "trim_down", "trim_up"));
         // The shaft collar where it comes through the panel.
         let mut col = Mesh::default();
         col.lathe(&BLACK, Vec3::new(xs, -0.06, PANEL_Z), Vec3::Z, &[[0.03, 0.0], [0.03, 0.004], [0.016, 0.008], [0.013, 0.008]], 24, false);
@@ -883,14 +849,14 @@ fn controls(b: &mut Builder) {
         // Rudder pedals with toe brakes, hanging from a pivot under the panel.
         for dx in [-0.085f32, 0.085] {
             let mut p = Mesh::default();
-            let pv = Vec3::new(xs + dx, -0.27, -1.66);
-            let pc = Vec3::new(xs + dx, -0.47, -1.585);
+            let pv = Vec3::new(xs + dx, -0.27, -1.36);
+            let pc = Vec3::new(xs + dx, -0.47, -1.15);
             p.tube(&GREY, &[pv, pc], &|_| 0.009, 8, true);
             let tilt = Quat::from_rotation_x(-0.45);
             p.rbox(&ALU, pc + Vec3::new(0.0, 0.0, 0.008), Vec3::new(0.034, 0.06, 0.005), 0.004, tilt);
             p.rbox(&RUBBER.pat(pat::KNURL), pc + Vec3::new(0.0, -0.005, 0.0145), Vec3::new(0.03, 0.04, 0.0025), 0.002, tilt);
             p.tube(&CHROME, &[pc + Vec3::new(0.0, 0.05, 0.0), pc + Vec3::new(0.0, 0.10, -0.08)], &|_| 0.005, 8, true);
-            b.add("pedal", G_FUSE, p, Anim::hinge(Drive::new(Input::Yaw, dx.signum() * 0.2)), pv, Vec3::X, None);
+            b.add("pedal", G_FUSE, p, Anim::hinge2(Drive::new(Input::Yaw, dx.signum() * 0.2), Drive::new(Input::Brake(dx.signum()), 0.14)), pv, Vec3::X, None);
         }
     }
     // Throttle.
@@ -900,9 +866,9 @@ fn controls(b: &mut Builder) {
     b.add("throttle", G_FUSE, t, Anim::slide(Drive::new(Input::Throttle, -0.06).offset(0.06), Vec3::Z), Vec3::ZERO, Vec3::Z, None);
     // Gear handle: a lever with a wheel-shaped knob.
     let mut g = Mesh::default();
-    let gp = Vec3::new(-0.09, -0.185, PANEL_Z);
+    let gp = GEAR_PIVOT;
     g.tube(&CHROME, &[gp, gp + Vec3::Z * 0.05], &|_| 0.004, 8, false);
-    g.lathe(&mt(mat::PLASTIC, 0.85, 0.85, 0.83), gp + Vec3::new(0.0, -0.007, 0.05), Vec3::Y, &[[0.0, 0.0], [0.013, 0.0], [0.015, 0.003], [0.015, 0.011], [0.013, 0.014], [0.0, 0.014]], 20, false);
+    g.lathe(&mt(mat::PLASTIC, 0.85, 0.85, 0.83), gp + Vec3::new(-0.007, 0.0, 0.05), Vec3::X, &[[0.0, 0.0], [0.013, 0.0], [0.015, 0.003], [0.015, 0.011], [0.013, 0.014], [0.0, 0.014]], 20, false);
     b.add("gear handle", G_FUSE, g, Anim::hinge(Drive::new(Input::GearHandle, 0.45)), gp, Vec3::X, None);
     // Flap lever with its airfoil-shaped knob.
     let mut fl = Mesh::default();
@@ -917,6 +883,119 @@ fn controls(b: &mut Builder) {
     w.lathe(&BLACK.pat(pat::KNURL), wc - Vec3::X * 0.008, Vec3::X, &[[0.0, 0.0], [0.058, 0.0], [0.062, 0.004], [0.062, 0.012], [0.058, 0.016], [0.0, 0.016]], 40, false);
     b.add("trim wheel", G_FUSE, w, Anim::hinge(Drive::new(Input::Trim, 9.0)), wc, Vec3::X, None);
 }
+
+// ---------------------------------------------------------------- switches
+
+/// Where the ignition key, the battery master rocker, the mixture knob and
+/// the parking brake handle are (body frame); their hotspots are there too.
+const KEY: Vec3 = Vec3::new(-0.48, -0.15, PANEL_Z + 0.0005);
+const MASTER: Vec3 = Vec3::new(-0.495, -0.205, PANEL_Z + 0.0065);
+const MIXTURE: Vec3 = Vec3::new(0.094, -0.195, PANEL_Z);
+const PARK_BRAKE: Vec3 = Vec3::new(-0.40, -0.265, PANEL_Z + 0.01);
+
+/// The switches and knobs that show what they are set to, worked by the
+/// keys and by the mouse (`HOTSPOTS`).
+fn switches(b: &mut Builder) {
+    // The key turns clockwise from OFF to BOTH, and on to START while the starter runs.
+    let mut k = Mesh::default();
+    k.rbox(&mt(mat::STEEL, 0.6, 0.55, 0.4), KEY + Vec3::Z * 0.014, Vec3::new(0.003, 0.009, 0.008), 0.0015, Quat::IDENTITY);
+    k.rbox(&BLACK, KEY + Vec3::Z * 0.028, Vec3::new(0.004, 0.012, 0.009), 0.003, Quat::IDENTITY);
+    b.add("ignition key", G_FUSE, k, Anim::hinge(Drive::new(Input::Ignition, -0.8)), KEY, Vec3::Z, None);
+    // The red battery master rocker: its top pressed in when on.
+    let mut r = Mesh::default();
+    r.rbox(&mt(mat::PLASTIC, 0.35, 0.02, 0.02), MASTER, Vec3::new(0.0062, 0.011, 0.004), 0.002, Quat::IDENTITY);
+    b.add("master switch", G_FUSE, r, Anim::hinge(Drive::new(Input::Master, -0.36).offset(0.18)), MASTER - Vec3::Z * 0.004, Vec3::X, None);
+    let mut lights = Mesh::default();
+    let lp = Vec3::new(-0.405, -0.205, PANEL_Z + 0.0065);
+    lights.rbox(&KNOB, lp, Vec3::new(0.0062, 0.011, 0.004), 0.002, Quat::IDENTITY);
+    b.add("landing light switch", G_FUSE, lights, Anim::hinge(Drive::new(Input::LandingLights, -0.36).offset(0.18)), lp - Vec3::Z * 0.004, Vec3::X, None);
+    let mut fuel = Mesh::default();
+    let fs = Vec3::new(0.0, FLOOR_Y + 0.004, -0.98);
+    fuel.rbox(&mt(mat::PLASTIC, 0.35, 0.03, 0.02), fs + Vec3::new(0.0, 0.012, -0.018), Vec3::new(0.009, 0.008, 0.026), 0.006, Quat::IDENTITY);
+    b.add("fuel selector", G_FUSE, fuel, Anim::hinge(Drive::new(Input::FuelValve, -FRAC_PI_2)), fs, Vec3::Y, None);
+    let mut prop = Mesh::default();
+    let pp = Vec3::new(0.048, -0.195, PANEL_Z);
+    prop.tube(&CHROME, &[pp - Vec3::Z * 0.02, pp + Vec3::Z * 0.02], &|_| 0.0045, 10, false);
+    prop.lathe(&mt(mat::PLASTIC, 0.02, 0.05, 0.25).pat(pat::KNURL), pp + Vec3::Z * 0.02, Vec3::Z, &[[0.0045,0.0],[0.014,0.004],[0.015,0.018],[0.013,0.022],[0.0,0.023]],18,true);
+    b.add("prop control", G_FUSE, prop, Anim::slide(Drive::new(Input::PropControl,-0.05).offset(0.05),Vec3::Z),pp,Vec3::Z,None);
+    let mut cowl = Mesh::default();
+    // Cowl flaps: a lever in a gated slot low on the pedestal.
+    let rot = Quat::from_rotation_x(0.12);
+    let cf = Vec3::new(0.0, -0.53, PANEL_Z + 0.01);
+
+    cowl.tube(&CHROME, &[cf, cf + Vec3::new(0.0, 0.01, 0.04)], &|_| 0.003, 8, false);
+    cowl.rbox(&mt(mat::PLASTIC, 0.03, 0.03, 0.03), cf + Vec3::new(0.0, 0.012, 0.045), Vec3::new(0.018, 0.006, 0.01), 0.004, rot);
+
+    b.add("cowl flap lever", G_FUSE, cowl, Anim::slide(Drive::new(Input::CowlFlaps,0.035),Vec3::Z),cf,Vec3::Z,None);
+    // The mixture knob: pushed in rich, pulled out to lean and cut off.
+    let mut x = Mesh::default();
+    x.tube(&CHROME, &[MIXTURE - Vec3::Z * 0.02, MIXTURE + Vec3::Z * 0.02], &|_| 0.0045, 10, false);
+    x.lathe(&mt(mat::PLASTIC, 0.35, 0.02, 0.02).pat(pat::KNURL), MIXTURE + Vec3::Z * 0.02, Vec3::Z, &[[0.0045, 0.0], [0.014, 0.004], [0.015, 0.018], [0.013, 0.022], [0.0, 0.023]], 18, true);
+    b.add("mixture knob", G_FUSE, x, Anim::slide(Drive::new(Input::Mixture, -0.05).offset(0.05), Vec3::Z), MIXTURE, Vec3::Z, None);
+    // The parking brake: a red T handle, pulled out when set.
+    let mut p = Mesh::default();
+    p.tube(&CHROME, &[PARK_BRAKE - Vec3::Z * 0.03, PARK_BRAKE + Vec3::Z * 0.02], &|_| 0.0035, 8, false);
+    p.rbox(&mt(mat::PLASTIC, 0.35, 0.03, 0.02), PARK_BRAKE + Vec3::Z * 0.026, Vec3::new(0.028, 0.007, 0.007), 0.005, Quat::IDENTITY);
+    b.add("parking brake", G_FUSE, p, Anim::slide(Drive::new(Input::ParkingBrake, 0.04), Vec3::Z), PARK_BRAKE, Vec3::Z, None);
+}
+
+#[cfg(test)]
+pub const MOUSE_ACTIONS: &[&str] = &["prop_up", "prop_down", "cowl_open", "cowl_close", "brake_left", "brake_right", "nav_next", "nav_prev", "adf_next", "adf_prev", "landing_lights", "fuel_valve", "fuel_next", "fuel_prev",
+    // (an airliner's or business jet's autoflight panel: the G650's Guidance Panel)
+    "ap_vs", "ap_vs_up", "ap_vs_down", "ap_at", "ap_spd_up", "ap_spd_down",
+    // (a twin jet's L and R fuel control and battery switches: the G650's)
+    "fuel_control_l", "fuel_control_r", "battery_l", "battery_r"];
+
+pub fn action_label(id: &str) -> &str {
+    crate::i18n::try_tr(&format!("action.{id}")).unwrap_or(id)
+}
+
+pub fn moving_piece(h: &Hotspot) -> Option<&'static str> {
+    match h.click.or(h.wheel.map(|w| w.0)).or(h.hold)? {
+        "ignition" => Some("ignition key"), "master" => Some("master switch"),
+        "mixture_rich" => Some("mixture knob"), "throttle_up" => Some("throttle"),
+        "flaps_up" => Some("flap lever"), "gear" => Some("gear handle"),
+        "parking_brake" => Some("parking brake"), "landing_lights" => Some("landing light switch"),
+        "brake_left" | "brake_right" => Some("pedal"),
+        "fuel_valve" => Some("fuel selector"), "prop_up" => Some("prop control"),
+        "cowl_open" => Some("cowl flap lever"), _ => None,
+    }
+}
+
+fn label(m: &mut Mesh, c: Vec3, hx: f32, hy: f32, text: &str) {
+    use crate::aircraft::b747::deck;
+    let mm = mt(mat::PLASTIC, 0.035, 0.036, 0.038).pat(pat::LEGEND).x((16 * deck::sid(text)) as f32);
+    deck::rect(m, &mm, c, Vec3::X, Vec3::Y, hx, hy);
+}
+
+/// What the mouse can work in the cockpit (see `aircraft::Hotspot`).
+pub static HOTSPOTS: &[Hotspot] = &[
+    Hotspot { at: [0.048, -0.195, PANEL_Z + 0.034], r: 0.018, click: None, hold: None, wheel: Some(("prop_up", "prop_down")) },
+    Hotspot { at: [0.0, -0.518, PANEL_Z + 0.055], r: 0.023, click: None, hold: None, wheel: Some(("cowl_open", "cowl_close")) },
+    Hotspot { at: [-0.355, -0.47, -1.135], r: 0.04, click: None, hold: Some("brake_left"), wheel: None },
+    Hotspot { at: [-0.185, -0.47, -1.135], r: 0.04, click: None, hold: Some("brake_right"), wheel: None },
+    // Ignition: a click turns the magnetos on or off; hold it to crank.
+    Hotspot { at: [KEY.x, KEY.y, KEY.z + 0.02], r: 0.025, click: Some("ignition"), hold: Some("starter"), wheel: None },
+    Hotspot { at: [MASTER.x, MASTER.y, MASTER.z], r: 0.014, click: Some("master"), hold: None, wheel: None },
+    // (The knob travels 5 cm: the hotspot covers it in and out.)
+    Hotspot { at: [MIXTURE.x, MIXTURE.y, MIXTURE.z + 0.034], r: 0.019, click: None, hold: None, wheel: Some(("mixture_rich", "mixture_lean")) },
+    Hotspot { at: [0.0, -0.195, PANEL_Z + 0.04], r: 0.022, click: None, hold: None, wheel: Some(("throttle_up", "throttle_down")) },
+    Hotspot { at: [0.15, -0.195, PANEL_Z + 0.035], r: 0.02, click: None, hold: None, wheel: Some(("flaps_up", "flaps_down")) },
+    Hotspot { at: [GEAR_PIVOT.x, GEAR_PIVOT.y, GEAR_PIVOT.z + 0.05], r: 0.02, click: Some("gear"), hold: None, wheel: None },
+    Hotspot { at: [PARK_BRAKE.x, PARK_BRAKE.y, PARK_BRAKE.z + 0.026], r: 0.025, click: Some("parking_brake"), hold: None, wheel: None },
+    // The trim wheel: rolled forward, nose down.
+    Hotspot { at: [0.0, -0.40, PANEL_Z + 0.05], r: 0.03, click: None, hold: None, wheel: Some(("trim_down", "trim_up")) },
+    // The two course deviation indicators: the wheel turns the OBS.
+    Hotspot { at: [-0.075, 0.090, PANEL_Z], r: 0.042, click: None, hold: None, wheel: Some(("obs_right", "obs_left")) },
+    Hotspot { at: [-0.075, -0.005, PANEL_Z], r: 0.042, click: None, hold: None, wheel: Some(("adf_next", "adf_prev")) },
+    // Heading indicator: a click sets it to the compass; altimeter: to the QNH.
+    Hotspot { at: [-0.270, -0.005, PANEL_Z], r: 0.042, click: Some("heading_sync"), hold: None, wheel: None },
+    Hotspot { at: [-0.175, 0.090, PANEL_Z], r: 0.042, click: Some("baro_qnh"), hold: None, wheel: None },
+    // Scroll the navigation receiver to tune a nearby station.
+    Hotspot { at: [0.07, 0.01, PANEL_Z], r: 0.07, click: None, hold: None, wheel: Some(("nav_next", "nav_prev")) },
+    Hotspot { at: [-0.405, -0.205, PANEL_Z + 0.0065], r: 0.014, click: Some("landing_lights"), hold: None, wheel: None },
+    Hotspot { at: [0.0, FLOOR_Y + 0.016, -0.98], r: 0.04, click: Some("fuel_valve"), hold: None, wheel: Some(("fuel_next", "fuel_prev")) },
+];
 
 // ---------------------------------------------------------------- glass
 
@@ -1002,4 +1081,17 @@ pub fn sees_inside(eye: Vec3, d: Vec3) -> bool {
         t += 0.015 + t * 0.01;
     }
     true
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    #[test]
+    fn instrument_cutouts_do_not_overlap() {
+        for (i,&(_,x,y,r)) in GAUGES.iter().enumerate() {
+            for &(_,xx,yy,rr) in &GAUGES[i+1..] {
+                assert!(Vec2::new(x-xx,y-yy).length() > r+rr+0.002,"overlapping instruments at {x},{y} / {xx},{yy}");
+            }
+        }
+    }
 }

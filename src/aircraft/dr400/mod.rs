@@ -22,7 +22,7 @@
 //! laid out in a design frame `DZ` ahead of it (see `DZ`).
 pub mod cabin;
 
-use crate::aircraft::{Engine, Handling, Hole, Hull, Leg, Part, Piston, Sound, Spec, Tail};
+use crate::aircraft::{Engine, Handling, Hole, Hull, Leg, Livery, Part, Piston, Sound, Spec, Tail};
 use crate::airframe::*;
 use glam::{DVec3, Mat4, Quat, Vec2, Vec3};
 use std::f32::consts::{PI, TAU};
@@ -42,6 +42,21 @@ pub fn build() -> Model {
     }
     bake_ao(&mut b.pieces, &AoBake { vox: 0.025, reach: 2.4, rays: 28, open: &|_, _| false });
     Model::finish(b.pieces)
+}
+
+/// Paint schemes for the aircraft picker (`aircraft::liveries`), linear RGB:
+/// the cheat line and fin top (`colours[0]`, w 1), the pinstripe under it,
+/// the wing tips and spinner, and the airframe. plane.wgsl `livery_dr400`
+/// paints them. All are made up: "Classic" is a typical Robin white with blue
+/// cheat line and red tips; the others are fictional club and private schemes.
+pub const LIVERIES: &[Livery] = &[
+    scheme("Classic", [0.012, 0.045, 0.20], [0.42, 0.02, 0.015], [0.42, 0.02, 0.015], [0.80, 0.80, 0.78], include_bytes!("../../../assets/aircraft/liveries/dr400_classic.png")),
+    scheme("Sunburst", [0.70, 0.13, 0.01], [0.85, 0.55, 0.03], [0.70, 0.13, 0.01], [0.80, 0.75, 0.60], include_bytes!("../../../assets/aircraft/liveries/dr400_sunburst.png")),
+    scheme("Aéroclub", [0.018, 0.018, 0.022], [0.55, 0.025, 0.02], [0.55, 0.025, 0.02], [0.80, 0.80, 0.78], include_bytes!("../../../assets/aircraft/liveries/dr400_aeroclub.png")),
+    scheme("Racing green", [0.008, 0.09, 0.035], [0.62, 0.44, 0.10], [0.008, 0.09, 0.035], [0.78, 0.76, 0.68], include_bytes!("../../../assets/aircraft/liveries/dr400_green.png")),
+];
+const fn scheme(name: &'static str, line: [f32; 3], pin: [f32; 3], tips: [f32; 3], body: [f32; 3], still: &'static [u8]) -> Livery {
+    Livery { name, colours: [[line[0], line[1], line[2], 1.0], [pin[0], pin[1], pin[2], 0.0], [tips[0], tips[1], tips[2], 0.0], [body[0], body[1], body[2], 0.0]], title: "", paint: None, swatch: [line, pin], still }
 }
 
 /// The model is laid out in a design frame with the wing's root leading edge
@@ -97,6 +112,7 @@ pub static SPEC: Spec = Spec {
         stab_tip: DVec3::new(1.60, 0.06, 3.95 + DZ64),
     },
     eye: Vec3::new(EYE.x, EYE.y, EYE.z + DZ),
+    hotspots: &[super::Hotspot { at: [0.0, cabin::FLOOR_Y + 0.15, -0.66 + DZ], r: 0.018, click: None, hold: None, wheel: Some(("trim_down", "trim_up")) }],
     eye2: None,
     sees_inside: |eye, d| cabin::sees_inside(eye - Vec3::Z * DZ, d),
     // (Body frame: the design frame's z + 0.55.)
@@ -179,6 +195,7 @@ pub static SPEC: Spec = Spec {
     lever: None,
     // Fixed gear: it never moves (see `Spec::fixed_gear`).
     gear_rate: 0.0,
+    electric_actuators: false,
     // VNE 308 km/h; flutter past about 185 kt.
     vne: 85.6,
     mmo: 0.0,
@@ -207,6 +224,7 @@ pub static SPEC: Spec = Spec {
         fric0: 15.0,
         fric1: 35.0,
         blade_break_y: PROP_HUB.y + 0.40,
+        governor: None,
     }),
     // The Cessna's, quicker in roll (shorter span, a stick, light ailerons).
     handling: Handling {
@@ -708,8 +726,10 @@ fn wings(b: &mut Builder) {
     w.lathe(&mt(mat::LAMP, 0.1, 0.9, 0.2).x(lamp::NAV_GREEN), p + Vec3::new(0.0, 0.0, -0.01), Vec3::new(0.6, 0.0, -0.8), &[[0.019, 0.0], [0.019, 0.011], [0.012, 0.026], [0.0, 0.03]], 16, true);
     // The landing light and the pitot, under the left wing (built on the right, moved).
     let mut left_extra = Mesh::default();
-    let (p, n) = foil_frame(&f, 1.5, 0.004, 0.0);
-    left_extra.disc(&mt(mat::LAMP, 0.95, 0.92, 0.85).x(lamp::LANDING), p + n * 0.002 - Vec3::Z * 0.004, Vec3::NEG_Z, Vec3::Y, 0.05, 20);
+    // (on the camber line at the nose, facing ahead: side 0 has no surface
+    // normal - foil_frame's would be NaN, which hid the lens and its light)
+    let p = f.pt(1.5, 0.004, 0.0, -1.0);
+    left_extra.disc(&mt(mat::LAMP, 0.95, 0.92, 0.85).x(lamp::LANDING), p - Vec3::Z * 0.006, Vec3::NEG_Z, Vec3::Y, 0.05, 20);
     // The stall warning vane in the leading edge.
     let (p, n) = foil_frame(&f, 0.95, 0.012, -1.0);
     let fwd = (Vec3::NEG_Z - n * Vec3::NEG_Z.dot(n)).normalize();
@@ -1063,4 +1083,3 @@ mod tests {
         assert!((MAIN_AXLE.y - MAIN_R - GROUND_Y).abs() < 1e-6);
     }
 }
-

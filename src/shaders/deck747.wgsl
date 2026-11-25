@@ -1,8 +1,7 @@
 // The 747-400's flight deck (aircraft/b747/deck.rs): printed panel legends,
 // button faces and knob scales, and the six CRT displays (PFD, ND and the two
 // EICAS screens), the CDUs and the small readouts, all drawn from the
-// instrument readings. Appended to plane.wgsl, with the string table (STRS,
-// from deck.rs) in front of it.
+// instrument readings. Appended to plane.wgsl, with string IDs from deck.rs.
 //
 // params[0] IAS kt, altitude ft, vertical speed fpm, heading deg
 // params[1] pitch deg, bank deg, turn rate, slip
@@ -10,8 +9,8 @@
 // params[3] Mach, ground speed kt, radio altitude ft, TAT C
 // params[4] throttle 0..1, local time s, gear 0..1, flaps deg
 
-fn str_len(id: u32) -> u32 { return STRS[id].w >> 24u; }
-fn str_glyph(id: u32, k: u32) -> u32 { return (STRS[id][k / 4u] >> (8u * (k % 4u))) & 255u; }
+fn str_len(id: u32) -> u32 { return font.strings[id].w >> 24u; }
+fn str_glyph(id: u32, k: u32) -> u32 { return (font.strings[id][k / 4u] >> (8u * (k % 4u))) & 255u; }
 
 // Ink of one glyph cell: q in glyph units (1 wide, 2 tall), stroke half width w.
 fn glyph_ink(g: u32, q: vec2f, w: f32, aa: f32) -> f32 {
@@ -197,6 +196,35 @@ fn legend(style: u32, s: u32, uv: vec2f, asp: f32, px: f32, seed: f32) -> Legend
       let title = step(0.78, uv.y) * aa_fill(sd_box(uv, vec2f(0.0, 0.86), vec2f(asp * 0.9, 0.06)), aa);
       r.col = vec3f(0.03);
       r.a = max(a, title * 0.6);
+    }
+    case 11u, 12u, 13u, 14u, 15u: {
+      // The G650's switchlights (g650/deck.rs `cap`): one legend on the cap
+      // and no made-up second line; string 0 is a blank, dead-front cap.
+      // 11 unlit, centred; 15 unlit in the upper half (the lower half is a
+      // lit legend piece of its own); 12 / 13 the master WARNING (red) and
+      // CAUTION (amber), lit while the CAS list holds a warning or a caution
+      // (deck650.wgsl `master650`); 14 lit blue while the bus is powered (AUTO).
+      var a = 0.0;
+      if (s > 0u) {
+        let n = f32(str_len(s));
+        let hh = min(select(0.62, 0.50, style == 15u), asp * 1.7 / max((n * 1.45 - 0.45) * 0.5, 0.5));
+        a = str_at(uv, select(vec2f(0.0), vec2f(0.0, 0.42), style == 15u), s, hh, aa, 0.0);
+      }
+      var dim = vec3f(0.36, 0.36, 0.35);
+      var lit = vec3f(0.0);
+      var on = false;
+      if (style == 12u) { dim = vec3f(0.20, 0.05, 0.04); lit = vec3f(1.0, 0.07, 0.04); on = master650().x > 0.5; }
+      if (style == 13u) { dim = vec3f(0.22, 0.13, 0.03); lit = C_AMBER; on = master650().y > 0.5; }
+      if (style == 14u) { lit = vec3f(0.30, 0.62, 1.0); on = G.cockpit[2].z > 0.5; }
+      if (on) {
+        r.col = lit;
+        r.a = a;
+        r.lit = lit * a;
+      } else {
+        r.col = dim;
+        r.a = a * 0.9;
+        r.glow = dim * a * 0.5;
+      }
     }
     case 8u: { // a CDU key's legend
       var a = 0.0;

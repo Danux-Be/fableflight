@@ -13,6 +13,7 @@
 //! here; so are the switches, knobs and plates the consoles are filled with.
 //! The dials are faces of plane.wgsl's `gauge`, from the instrument readings.
 //! Everything here is body frame (+X right, +Y up, -Z forward).
+use crate::aircraft::Hotspot;
 use super::*;
 use crate::aircraft::b747::deck::{legend_mat, rect, sid, style, Face};
 use crate::aircraft::c172::cabin::gauge;
@@ -115,12 +116,12 @@ pub fn build(b: &mut Builder) {
     let mut c = Mesh::default();
     // Panels, front to back: (from, to, title); an untitled one is the throttle quadrant, "-" a blank plate with a map case.
     consoles(
-        &mut c, CON_Y, FLOOR, -5.80, Z_MID, 60.0,
+        b, &mut c, CON_Y, FLOOR, -5.80, Z_MID, 60.0,
         &[(-5.80, -5.63, "ELEC"), (-5.63, -5.47, "FUEL"), (-5.47, -5.03, ""), (-5.03, -4.85, "COMM"), (-4.85, -4.65, "FCS"), (-4.65, -4.43, "OIL")],
         &[(-5.80, -5.60, "INTR LT"), (-5.60, -5.38, "IFF"), (-5.38, -5.16, "NAV"), (-5.16, -4.92, "TCN"), (-4.92, -4.68, "ILS"), (-4.68, -4.43, "DEFOG")],
     );
     consoles(
-        &mut c, CON_Y_R, FLOOR_R, -4.18, -3.05, 160.0,
+        b, &mut c, CON_Y_R, FLOOR_R, -4.18, -3.05, 160.0,
         &[(-4.18, -3.90, "COMM"), (-3.90, -3.58, "SNSR"), (-3.58, -3.06, "-")],
         &[(-4.18, -3.88, "NAV"), (-3.88, -3.56, "INS"), (-3.56, -3.06, "-")],
     );
@@ -455,7 +456,7 @@ fn rear_panel(m: &mut Mesh) {
 
 // ---------------------------------------------------------------- side consoles
 
-fn consoles(m: &mut Mesh, top: f32, floor: f32, z0: f32, z1: f32, seed: f32, left: &[(f32, f32, &str)], right: &[(f32, f32, &str)]) {
+fn consoles(b: &mut Builder, m: &mut Mesh, top: f32, floor: f32, z0: f32, z1: f32, seed: f32, left: &[(f32, f32, &str)], right: &[(f32, f32, &str)]) {
     let cx = hp::CON_X;
     for s in [-1.0f32, 1.0] {
         // Inner side down to the floor, and the top: a grey tray the panels sit in.
@@ -481,7 +482,17 @@ fn consoles(m: &mut Mesh, top: f32, floor: f32, z0: f32, z1: f32, seed: f32, lef
             if title.is_empty() {
                 // The throttle quadrant, a panel either side of it.
                 hp::plate(m, &f, ua, va, ua + 0.09, vb, seed);
-                hp::populate(m, &f, ua + 0.004, va + 0.004, ua + 0.086, vb - 0.004, seed, Some("EXT LT"));
+                // Front left console, outboard of the throttles. The three
+                // positions are NORM, OUT and OUT AND DOWN on the slatted F-4E.
+                let face = f.sub(ua + 0.045, va + 0.070, 0.005);
+                hp::word(m, &face, 0.0, 0.030, 0.003, "FLAPS");
+                let pivot = face.o;
+                let mut lever = Mesh::default();
+                lever.tube(&STEEL, &[pivot, pivot + face.n() * 0.024], &|_| 0.003, 10, false);
+                lever.rbox(&hp::KNOB, pivot + face.n() * 0.025, Vec3::new(0.014, 0.005, 0.008), 0.003, face.rot());
+                let piece = b.add("slats/flaps switch", G_ENGINE, lever, Anim::hinge(Drive::new(Input::FlapLever, 0.90).offset(-0.45)), pivot, face.ax, None);
+                b.pieces[piece].hotspot = Some(Hotspot::wheel(face.n() * 0.025, 0.016, "flaps_up", "flaps_down"));
+                hp::populate(m, &f, ua + 0.004, va + 0.12, ua + 0.086, vb - 0.004, seed, Some("EXT LT"));
                 hp::plate(m, &f, ub - 0.03, va, ub, vb, seed + 1.0);
                 hp::quadrant(m, &f, ua + 0.09, ub - 0.03, va, vb);
                 continue;
@@ -502,7 +513,7 @@ fn consoles(m: &mut Mesh, top: f32, floor: f32, z0: f32, z1: f32, seed: f32, lef
 /// landing gear handle in its slot on the panel.
 fn controls(b: &mut Builder, f: &Face) {
     let mut h = Builder::default();
-    hp::controls(&mut h);
+    hp::controls(&mut h, 0.0);
     let off = b.pieces.len();
     let mut at = Vec::new();
     for mut p in h.pieces {
@@ -525,7 +536,8 @@ fn controls(b: &mut Builder, f: &Face) {
     let c = arm_top + w.n() * 0.004;
     gh.lathe(&mt(mat::PLASTIC, 0.75, 0.74, 0.70), c - w.ax * 0.012, w.ax, &[[0.0, 0.0], [0.016, 0.0], [0.019, 0.003], [0.019, 0.021], [0.016, 0.024], [0.0, 0.024]], 22, false);
     gh.lathe(&RED_LENS, c - w.ax * 0.013, w.ax, &[[0.0, 0.0], [0.009, 0.0], [0.009, 0.026], [0.0, 0.026]], 14, false);
-    b.add("gear handle", G_ENGINE, gh, Anim::slide(Drive::new(Input::GearHandle, 0.028), w.ay), w.o, Vec3::X, None);
+    let piece = b.add("gear handle", G_ENGINE, gh, Anim::slide(Drive::new(Input::GearHandle, -0.028), w.ay), w.o, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(c - w.o, 0.021, "gear"));
 }
 
 /// Looking down or behind from the front seat, the view is mostly of the cockpit.

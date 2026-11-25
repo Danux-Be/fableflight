@@ -173,6 +173,7 @@ impl Game {
             tools::Tool::SetAircraftConfig => self.mcp_set_config(args),
             tools::Tool::SetEngine => self.mcp_set_engine(args),
             tools::Tool::SetRadios => self.mcp_set_radios(args),
+            tools::Tool::SetAutopilot => self.mcp_set_autopilot(args),
             tools::Tool::SetEnvironment => self.mcp_set_environment(args),
             tools::Tool::PlaceAircraft => self.mcp_place(args),
             tools::Tool::TakeScreenshot => unreachable!("screenshots are deferred"),
@@ -228,7 +229,7 @@ impl Game {
             "gear_handle_down": p.gear_down,
             "speedbrake": num(p.speedbrake),
             "spoilers": num(p.spoilers),
-            "parking_brake": self.parking_brake,
+            "parking_brake": p.parking_brake,
             "mixture": num(p.mixture),
             "trim_deg": num(p.trim.to_degrees()),
             "reverser": num(p.reverser),
@@ -292,7 +293,6 @@ impl Game {
             "altimeter_setting_hpa": num(self.radios.setting(self.wx.qnh)),
             "qnh_hpa": num(self.wx.qnh),
             "altimeter_follows_qnh": self.radios.baro.is_none(),
-            "nav_display_on": self.radios.show,
         })
     }
 
@@ -381,7 +381,7 @@ impl Game {
                 "holding_for_terrain": p.hold || self.hold_spot.is_some(),
                 "airport_loading": self.airport_rx.is_some() || self.menu.starting,
                 "status": self.status,
-                "view": if self.cam_mode == 1 { "cockpit" } else { "chase" },
+                "view": match self.cam_mode { 1 => "cockpit", crate::settings::TAIL_VIEW => "tail", _ => "chase" },
                 "hud": self.show_hud,
                 "view_panel_open": self.info_open,
                 "fps": num(self.fps),
@@ -454,6 +454,7 @@ impl Game {
                 },
             },
             "radios": self.radio_state(),
+            "autopilot": self.autopilot_state(),
             "environment": {
                 "wind_from_deg": num(self.wx.wind_from),
                 "wind_speed_kt": num(wind_kt),
@@ -838,7 +839,7 @@ impl Game {
         }
         if let Some(on) = args.parking_brake {
             any = true;
-            self.parking_brake = on;
+            p.parking_brake = on;
         }
         if let Some(mixture) = args.mixture {
             any = true;
@@ -905,6 +906,84 @@ impl Game {
         }
         let engine = self.engine_state();
         Ok(json!({ "ok": true, "action": action, "note": note, "engine": engine }))
+    }
+
+    /// The autopilot as the copilot reads it.
+    fn autopilot_state(&self) -> Value {
+        let ap = &self.ap;
+        let (active, armed) = ap.annunciation();
+        json!({
+            "engaged": ap.on,
+            "active_modes": active,
+            "armed_modes": armed,
+            "heading_bug_deg": num(ap.hdg),
+            "altitude_ft": num(ap.alt * 3.28084),
+            "vs_fpm": num(ap.vs * 196.85),
+            "autothrottle": ap.at,
+            "speed_kt": num(ap.spd * 1.943_84),
+        })
+    }
+
+    fn mcp_set_autopilot(&mut self, args: &Value) -> Result<Value, String> {
+        use crate::autopilot::{Lat, Vert};
+        let args: tools::AutopilotArgs = tools::parse(args)?;
+        self.require_flying()?;
+        if let Some(h) = args.heading_deg {
+            self.ap.hdg = h.rem_euclid(360.0);
+        }
+        if let Some(a) = args.altitude_ft {
+            self.ap.alt = a / 3.28084;
+        }
+        if let Some(v) = args.vs_fpm {
+            self.ap.vs = v / 196.85;
+        }
+        if let Some(k) = args.speed_kt {
+            self.ap.spd = k / 1.943_84;
+        }
+        if let Some(on) = args.autothrottle {
+            self.ap.at = on;
+        }
+        if args.engaged == Some(false) {
+            if self.ap.on {
+                self.ap_disconnect(None);
+            }
+            return Ok(json!({ "ok": true, "autopilot": self.autopilot_state() }));
+        }
+        let s = crate::autopilot::State::of(&self.plane);
+        if let Some(m) = args.lateral.as_deref() {
+            let m = match m {
+                "hdg" => Lat::Hdg,
+                "nav" => Lat::Nav,
+                "gps" => Lat::Gps,
+                "apr" => Lat::Apr,
+                "roll" => Lat::Roll,
+                _ => return Err(format!("unknown lateral mode {m:?}")),
+            };
+            self.ap.set_lat(m, &s);
+        }
+        if let Some(m) = args.vertical.as_deref() {
+            let m = match m {
+                "alt" => Vert::Alt,
+                "vs" => Vert::Vs,
+                "pitch" => Vert::Pitch,
+                _ => return Err(format!("unknown vertical mode {m:?}")),
+            };
+            self.ap.set_vert(m, &s);
+        }
+        let mut notes = Vec::new();
+        if (args.engaged == Some(true) || args.lateral.is_some() || args.vertical.is_some()) && !self.ap.on {
+            self.ap_toggle();
+            if !self.ap.on {
+                return Err("the autopilot works in flight only".into());
+            }
+        }
+        if matches!(self.ap.lat, Lat::Nav | Lat::Apr) && self.radios.nav.is_none() {
+            notes.push("NAV1 is not tuned: the mode stays armed, flying the heading bug (set_radios)");
+        }
+        if self.ap.lat == Lat::Gps && self.plan.done() {
+            notes.push("no flight plan to follow: GPS stays armed, flying the heading bug");
+        }
+        Ok(json!({ "ok": true, "notes": notes, "autopilot": self.autopilot_state() }))
     }
 
     fn mcp_set_radios(&mut self, args: &Value) -> Result<Value, String> {

@@ -1,0 +1,133 @@
+# Publishes a GitHub Release when a version tag is pushed, e.g.
+#   git tag v1.0.0 && git push origin v1.0.0
+# Releases are cut by tagging, not by pushing to main. Tags with a suffix
+# (v1.1.0-beta.1) become pre-releases. The tag must match the version in
+# Cargo.toml.
+#
+# Every asset is embedded in the binary (include_bytes!), so each archive holds
+# only the executables (the game, the copilot bridge and the launcher), the
+# README and the licence. The launcher's updater (src/bin/fableflight-launcher/
+# update.rs) relies on this layout and on SHA256SUMS.txt.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build, e.g. v1.0.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  check:
+    name: Version check and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Tag matches Cargo.toml version
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match Cargo.toml version $version"
+            exit 1
+          fi
+      - name: Linux libraries (audio, gamepads)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --release --locked
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x86_64, os: windows-latest,   target: x86_64-pc-windows-msvc }
+          - { name: windows-arm64,  os: windows-11-arm,   target: aarch64-pc-windows-msvc }
+          - { name: macos-x86_64,   os: macos-latest,     target: x86_64-apple-darwin }
+          - { name: macos-arm64,    os: macos-latest,     target: aarch64-apple-darwin }
+          - { name: linux-x86_64,   os: ubuntu-22.04,     target: x86_64-unknown-linux-gnu }
+          - { name: linux-arm64,    os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Linux libraries (audio, gamepads)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+      # The Windows ARM image does not always ship rustup.
+      - name: Install rustup (Windows ARM)
+        if: matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            Invoke-WebRequest https://static.rust-lang.org/rustup/dist/aarch64-pc-windows-msvc/rustup-init.exe -OutFile rustup-init.exe
+            .\rustup-init.exe -y --profile minimal --default-toolchain none
+            Add-Content $env:GITHUB_PATH "$env:USERPROFILE\.cargo\bin"
+          }
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Build
+        shell: bash
+        run: cargo build --profile dist --locked --target ${{ matrix.target }} --bins
+      - name: Package
+        shell: bash
+        run: |
+          dir="fableflight-$TAG-${{ matrix.name }}"
+          mkdir "$dir"
+          bin="target/${{ matrix.target }}/dist"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "$bin/fablegame.exe" "$bin/fableflight-mcp.exe" "$bin/fableflight-launcher.exe" "$dir/"
+            cp README.md LICENSE "$dir/"
+            7z a "$dir.zip" "$dir" > /dev/null
+            echo "ASSET=$dir.zip" >> "$GITHUB_ENV"
+          else
+            cp "$bin/fablegame" "$bin/fableflight-mcp" "$bin/fableflight-launcher" "$dir/"
+            cp README.md LICENSE "$dir/"
+            tar czf "$dir.tar.gz" "$dir"
+            echo "ASSET=$dir.tar.gz" >> "$GITHUB_ENV"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: FableFlight ${{ env.TAG }}
+          prerelease: ${{ contains(env.TAG, '-') }}
+          generate_release_notes: true
+          files: dist/*

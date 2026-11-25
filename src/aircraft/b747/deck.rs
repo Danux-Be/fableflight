@@ -13,6 +13,7 @@
 //! plane.wgsl / deck747.wgsl from the `pat::LEGEND` quads placed here), the
 //! knobs a cream plastic, the lining an off-white. What is shown on the
 //! displays is drawn in the shader from the instrument readings.
+use crate::aircraft::Hotspot;
 use super::*;
 use glam::{Mat3, Quat, Vec2, Vec3};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -80,8 +81,9 @@ pub mod screen {
 // ---------------------------------------------------------------- strings
 
 /// Every string a legend or a display can print, looked up by index. The
-/// shader gets them as a table (`strings_wgsl`); index 0 means "made-up text".
+/// shader reads them from the aircraft font uniform; index 0 means "made-up text".
 pub const STRINGS: &[&str] = &[
+
     "", "IAS/MACH", "HDG", "ALT", "VERT SPD", "LNAV", "VNAV", "FL CH", "HOLD", "A/T ARM", "F/D", "APP", "LOC", "BANK LIMIT", "CMD", "DISENGAGE",
     "MINS", "BARO", "MAP", "PLN", "VOR", "RANGE", "WXR", "STA", "WPT", "ARPT", "DATA", "POS", "TERR", "FUEL CONTROL", "RUN", "CUTOFF",
     "STAB TRIM", "AUTO", "ALTN", "GEAR", "UP", "DN", "OFF", "AUTOBRAKES", "RTO", "DISARM", "MAX AUTO", "GND PROX", "FLAP", "OVRD", "SOURCE", "IRS",
@@ -103,6 +105,40 @@ pub const STRINGS: &[&str] = &[
     "DANGER", "FIRE", "MASTER CAUTION", "EXTGH", "A/A", "A/G", "MASTER ARM", "EMERG JETT", "APU FIRE", "IR COOL", "HMD", "SPIN", "NIGHT", "CONT", "5", "6", "7", "8", "9", "0", "ENT", "I/P", "ADF", "VOL", "COMM 1", "COMM 2", "EMCON", "A/P", "IFF", "TCN", "ILS", "D/L", "BCN", "ON/OFF", "DAY", "BLK LVL", "W/B", "BAL", "AOA", "INS", "LOCK", "SHOOT", "MODE", "QTY", "ZONE", "INT", "CRS", "ECM", "LDG GEAR", "NOSE", "LEFT", "RIGHT", "HALF", "FULL", "EXT LT", "FCS", "COMM", "INTR LT", "SNSR", "KY-58", "DEFOG", "IDLE", "MIL", "MAX", "CANOPY", "EJECTION SEAT", "UPPER", "RWS", "TWS", "STT", "RSET", "SIL", "AZ", "EL", "OPR", "ADI", "HSI", "SA", "STORES", "SUPT", "BIT", "FPAS", "CHKLST", "UFC", "TAC", "WYPT", "SEQ1", "SCL", "DCLTR", "MK-82", "AIM-9X", "AIM-120", "GUN", "PRGM", "T/R", "RCV", "X", "Y", "71X", "M", "RPM", "TEMP", "NOZ", "OIL", "BINGO", "T", "I", "L", "R", "G", "N", "E", "S", "W", "DIST", "RNG", "40",
     // The Blackbird's cockpits (sr71/pit.rs).
     "TEB", "OXY", "UHF", "TACAN", "LIGHTS", "DEF", "SAS", "AUTOPILOT", "SPIKE", "FWD BYPASS", "AFT BYPASS", "L UNSTART", "R UNSTART", "CIT", "FUEL LOW", "CG", "PITOT HEAT", "OIL PRESS", "SENSOR", "VIEWSIGHT", "RADAR", "MAP PROJ",
+    "ALT AUTO", "FIXED PROP", "THR PROP MIX", "COWL FLAPS", "SPARE", "SUCTION", "BOTH", "MIXTURE", "THROTTLE", "IGNITION", "BOOST", "BAT", "FUEL PUMP", "PITOT HT",
+    // The G650's flight deck (g650/deck.rs).
+    "10", "20", "39", "A/T", "ACRT", "AFT CABIN", "AIL", "ALTITUDE", "ALTN GEAR", "ANTI-ICE HTR", "AP", "APPR", "APU CONTROL", "BATT", "BC",
+    "BLEED AIR", "BRAKE PRESS", "CABIN", "CABIN ALT FT", "CABIN PRESS CTL", "CAS", "CHART", "CHECK LDG GEAR", "CKLST", "COCKPIT", "COCKPIT LIGHTS",
+    "CONT IGN", "CRS 1", "CRS 2", "DIR", "DN LOCK REL", "DSPL BRT", "ELEC POWER CTL", "EMER", "EMERGENCY POWER", "ENGINE START", "EXT",
+    "EXTERIOR LIGHTS", "FIRE DETECTION", "FIRE EXT", "FLCH", "FLT CTRL RESET", "FMS", "FPLN", "FUEL RETURN", "FUEL SYSTEM", "GND SPLR ORIDE",
+    "GULFSTREAM", "HEADING", "HONEYWELL", "HORN SILENCE", "HYDRAULIC", "INFO", "INTERTANK", "IRS 1", "IRS 2", "IRS 3", "IRS MODE SELECT", "L ALT",
+    "L COWL", "L ENG", "L LDG", "L MAIN", "L VOLTS", "L WING", "LDG GEAR DUMP", "LIGHTING", "LOW BANK", "MAIN BATTERIES", "MAIN EMER BATT",
+    "MASTERS", "MFD DSPL SWITCH", "QX-GLF", "NEXT", "OXYGEN", "PARK EMER BRAKE", "PASS WARN", "PEDAL STEERING", "PERF", "PFD", "PITCH", "PLAN",
+    "PREV", "PULL TO DEPLOY", "PUSH STD", "R ALT", "R COWL", "R ENG", "R LDG", "R MAIN", "R VOLTS", "R WING", "RAAS INHB", "RADIO",
+    "RAM AIR TURBINE", "RAT", "RECOG", "REMOTE FUELING", "RET", "RUD", "SEAT BELT", "SELCAL ABCD", "SMC 1", "SMC 2", "SOUND OFF", "SPEED", "STANDBY",
+    "START", "STOP", "SYN", "SYNC", "SYSTEM TEST", "TAIL", "TEMP CONTROL", "TRAF", "TRIM", "VIDEO", "VS", "VS/FPA", "VSD", "WSHLD HEAT", "WX",
+    "XFLOW", "YD",
+    // The G650's displays (deck650.wgsl).
+    "ROLL", "PTCH", "ASEL", "AP1", "VOR1", "LOC1", "ITT", "OIL TEMP", "HYD PRESS", "FUEL QTY", "TOTAL", "LB", "AIRCRAFT CONFIG", "GEAR NOT DOWN", "L-R", "OIL PRESS LOW", "GEN OFF", "FUEL LEVEL LOW", "SPEEDBRAKE EXT", "MAIN BATT DISCH", "PARKING BRAKE", "REV DEPLOYED", "PITCH TRIM", "ROLL TRIM", "RUDDER TRIM", "NU", "ND", "SPD BRK", "FLIGHT CONTROLS", "FCC 1", "FCC 2", "NAV 1", "PROGRESS", "ACTIVE FLT PLAN", "SVS", "FL", "---",
+    // The G650's overhead, circuit breakers and MCDU keys: their real legends (g650/deck.rs).
+    "A", "B", "C", "D", "F", "H", "J", "K", "O", "P", "Q", "U", "V", "Z", "SP", "/", ".", "+/-", "NO SMOKE", "OVHD PNL", "PED PNL", "MASTER CONTROL",
+    "CB PANELS", "OVHD FLOOD", "ANTI ICE HTR", "WINDSHIELD HEAT", "EVS WSHLD HT", "CABIN WDO HT", "PROBE 1", "PROBE 2", "PROBE 3", "PROBE 4", "LF/RS",
+    "RF/LS", "CRANK", "CONTROL", "PTU", "OFF/ARM", "AUX PUMP", "VOLTS/AMPS", "ELECTRICAL", "POWER CONTROL", "L BUS TIE", "R BUS TIE", "APU GEN",
+    "L GEN", "GND SVC BUS", "R GEN", "FLT CTRL", "BATTERIES", "EBHA", "UPS", "GEN", "ANTI ICE", "L TANK", "R TANK", "INTER TANK", "X FLOW",
+    "OFF/AUTO", "SHUTOFF", "CABIN/GALLEY", "60 HZ", "CABIN PRESSURE", "MAN", "FLIGHT", "DFRN PRESS", "RC", "FPM X 1000", "FWD CABIN", "COLD", "HOT",
+    "ISOLATION", "L PACK", "RAM AIR", "R PACK", "AUTO TEMP", "SELECT", "TEMP DISPLAY", "ICE DET", "SMOKE DET", "ANN LIGHTS", "DOOR OPEN",
+    "DOOR SAFETY", "FDR/CMC EVENT", "VALVES", "FIRE TEST", "LOOP A", "LOOP B", "FAULT TEST", "MFD DISPLAY", "SWITCHING", "PILOT", "COPILOT",
+    "DISPLAY SYSTEM", "ICE", "PULSE", "WING TIP", "WHL WELL", "CLOCK 1", "MAGNETOMETER 1", "AHRS 1", "MAU 3B PRI", "MAU 3A PRI", "MAU 2B SEC",
+    "MAU 2A SEC", "MAU 1B SEC", "MAU 1A PRI", "HUD FAN/VIDEO", "AMP", "HUD PWR 1", "DU 1", "DU 2", "DU 4 SEC", "ADS STBY CH 3B", "ADS STBY CH 4B",
+    "ADS 3 CH 3A", "ADS 3 CH 4A", "MCDU 1", "CMC SHUTDOWN", "PWR", "FLT GUID PNL 1", "MAU 1 TONE GEN", "L MAIN PUMP", "L FADEC CH A", "R FADEC CH A",
+    "DOOR CTRL/WARN", "AP PITCH SERVO", "AP ROLL SERVO 1", "L/R IGN 1", "L/R START A", "L HPSOV", "FIRE EXT SHOT 1", "LDG GEAR CTRL 1",
+    "INBD BRAKE CTRL", "APU DOOR", "APU CTRL 1", "APU PWR 1", "APU FIRE EXT", "L GCU PWR", "ATC 1", "NAV RCVR 1", "VHF COMM 1", "L SSPC CH 1",
+    "R SSPC CH 1", "TRU CTRL 1", "CLOCK 2", "MAGNETOMETER 2", "AHRS 2", "MAU 3B SEC", "MAU 3A SEC", "MAU 2B PRI", "MAU 2A PRI", "MAU 1B PRI",
+    "MAU 1A SEC", "HUD PWR 2", "DU 4 PRI", "DU 3", "ADS 2 CH 2B", "ADS 2 CH 1B", "ADS 1 CH 2A", "ADS 1 CH 1A", "MCDU 3", "FLT GUID PNL 2",
+    "MAU 2 TONE GEN", "R MAIN PUMP", "L FADEC CH B", "R FADEC CH B", "AP ROLL SERVO 2", "L/R IGN 2", "L/R START B", "R HPSOV", "THROT QUAD",
+    "FIRE EXT SHOT 2", "LDG GEAR IND", "LDG GEAR CTRL 2", "OUTBD BRAKE", "CTRL", "APU CTRL 2", "APU PWR 2", "R GCU PWR", "ATC 2", "NAV RCVR 2",
+    "VHF COMM 2", "L SSPC CH 2", "R SSPC CH 2", "BATT BUS CONT", "TRU CTRL 2", "COPILOT ACP", "OBSERVER ACP", "FLT INSTRUMENTS", "FLT CTRL/LDG",
+    "ENG SYS/FUEL", "COM/NAV",
 ];
 
 /// Index of a string in `STRINGS` (panics if it is missing: a typo in the layout).
@@ -110,7 +146,7 @@ pub fn sid(s: &str) -> u32 {
     STRINGS.iter().skip(1).position(|x| *x == s).map(|i| i as u32 + 1).unwrap_or_else(|| panic!("no legend string {s:?}"))
 }
 
-/// Stroke-font glyph index for a character (plane.wgsl `GSEG`).
+/// Stroke-font glyph index for a character (see `stroke_font::STARTS`).
 pub fn glyph(c: char) -> u32 {
     match c {
         '0'..='9' => c as u32 - '0' as u32,
@@ -127,22 +163,18 @@ pub fn glyph(c: char) -> u32 {
     }
 }
 
-/// The string table as WGSL: 15 glyphs a string, 8 bits each, the length in the top byte.
-pub fn strings_wgsl() -> String {
-    // (const, not var<private>: Metal copies a private array into every
-    // invocation, 4 KB here, on every pixel of the aircraft.)
-    let mut out = format!("const STRS = array<vec4u, {}>(\n", STRINGS.len());
-    for (k, s) in STRINGS.iter().enumerate() {
-        let mut b = [15u32; 16];
-        let n = s.chars().count().min(15);
-        for (i, c) in s.chars().take(15).enumerate() {
-            b[i] = glyph(c);
-        }
-        b[15] = n as u32;
-        let w: Vec<String> = (0..4).map(|j| format!("{}u", b[j * 4] | b[j * 4 + 1] << 8 | b[j * 4 + 2] << 16 | b[j * 4 + 3] << 24)).collect();
-        out += &format!("  vec4u({}){}\n", w.join(", "), if k + 1 < STRINGS.len() { "," } else { "" });
+/// Fifteen glyph indices and the length, packed into a WGSL vec4u.
+pub fn packed_string(s: &str) -> [u32; 4] {
+    let mut bytes = [15; 16];
+    for (i, c) in s.chars().take(15).enumerate() {
+        bytes[i] = glyph(c) as u8;
     }
-    out += ");\n";
+    bytes[15] = s.chars().count().min(15) as u8;
+    std::array::from_fn(|i| u32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap()))
+}
+
+pub fn strings_wgsl() -> String {
+    let mut out = format!("const STRING_COUNT: u32 = {}u;\n", STRINGS.len());
     // Names for the ones the displays print (the first of any repeats).
     let mut seen = std::collections::HashSet::new();
     for (k, s) in STRINGS.iter().enumerate().skip(1) {
@@ -564,11 +596,11 @@ pub fn build(b: &mut Builder) {
     let mut m = Mesh::default();
     let mf = main_panel(&mut m);
     glareshield(&mut m, &mf);
-    pedestal_fixed(&mut m);
+    pedestal_fixed(&mut m, b);
     b.fixed("flight deck panels", G_ENGINE, m);
 
     let mut o = Mesh::default();
-    overhead(&mut o);
+    overhead(&mut o, b);
     b.fixed("overhead panel", G_ENGINE, o);
 
     let mut s = Mesh::default();
@@ -1548,7 +1580,7 @@ fn cdu(m: &mut Mesh, f: &Face, id: f32, seed: f32) {
 
 /// The pedestal: its forward part (CDUs and the thrust lever quadrant) and
 /// the aft part with the fuel control switches and the radio panels.
-fn pedestal_fixed(m: &mut Mesh) {
+fn pedestal_fixed(m: &mut Mesh, b: &mut Builder) {
     let f = main_face();
     let base = f.at(0.0, -0.43);
     // Forward pedestal body.
@@ -1634,20 +1666,29 @@ fn pedestal_fixed(m: &mut Mesh) {
     plate(m, &ft, -0.225, -0.05, 0.225, 0.055, 400.0);
     let g = ft.sub(0.0, 0.0, 0.0043);
     label(m, &g, -0.035, 0.038, 0.05, 0.0045, style::TEXT, sid("FUEL CONTROL"));
+    // The four switches are one mouse target: RUN or CUTOFF together (the
+    // simulator has one fuel control for all four engines; they do not move).
+    let mut sw = Mesh::default();
     for k in 0..4 {
         let u = -0.11 + k as f32 * 0.05;
         let c = g.at(u, 0.0);
-        m.lathe(&CHROME, c, g.n(), &[[0.009, 0.0], [0.009, 0.004], [0.004, 0.006], [0.004, 0.018]], 12, false);
-        m.dome(&BTN, c + g.n() * 0.02 + g.ay * 0.006, g.n(), 0.011, 0.014, 14, 0.0);
+        sw.lathe(&CHROME, c, g.n(), &[[0.009, 0.0], [0.009, 0.004], [0.004, 0.006], [0.004, 0.018]], 12, false);
+        sw.dome(&BTN, c + g.n() * 0.02 + g.ay * 0.006, g.n(), 0.011, 0.014, 14, 0.0);
         label(m, &g, u, -0.032, 0.008, 0.005, style::TEXT, sid(["1", "2", "3", "4"][k]));
     }
+    let piece = b.fixed("fuel control switches", G_ENGINE, sw);
+    b.pieces[piece].hotspot = Some(Hotspot::click(g.at(-0.035, 0.0) + g.n() * 0.02, 0.055, "ignition"));
     word(m, &g, -0.035, 0.022, 0.004, "RUN");
     word(m, &g, -0.035, -0.04, 0.004, "CUTOFF");
     for k in 0..2 {
         guarded(m, &g, 0.09 + k as f32 * 0.03, 0.0, true);
     }
     label(m, &g, 0.105, 0.035, 0.03, 0.004, style::TEXT, sid("STAB TRIM"));
-    toggle(m, &g, 0.175, 0.0, false);
+    // The alternate stabiliser trim switch: the wheel over it trims.
+    let mut alt = Mesh::default();
+    toggle(&mut alt, &g, 0.175, 0.0, false);
+    let piece = b.fixed("alternate stab trim switch", G_ENGINE, alt);
+    b.pieces[piece].hotspot = Some(Hotspot::wheel(g.at(0.175, 0.0) + g.n() * 0.006, 0.02, "trim_down", "trim_up"));
     label(m, &g, 0.175, 0.03, 0.02, 0.0035, style::TEXT, sid("ALTN"));
 
     // The aft electronic panels: radio tuning, audio, the third CDU, weather
@@ -1750,24 +1791,28 @@ fn levers(b: &mut Builder) {
         m.tube(&ALU, &arm, &|_| 0.0055, 8, false);
         let kc = piv + Vec3::new(0.0, 0.352, -0.01);
         m.lathe(&mt(mat::PLASTIC, 0.70, 0.67, 0.58), kc - Vec3::X * 0.024, Vec3::X, &[[0.0, 0.0], [0.016, 0.0], [0.018, 0.004], [0.014, 0.012], [0.013, 0.024], [0.014, 0.036], [0.018, 0.044], [0.016, 0.048], [0.0, 0.048]], 18, true);
-        b.add("thrust lever", G_ENGINE, m, Anim::hinge(Drive::new(Input::Throttle, -0.55).offset(0.28)), piv, Vec3::X, None);
+        let piece = b.add("thrust lever", G_ENGINE, m, Anim::hinge(Drive::new(Input::Throttle, -0.55).offset(0.28)), piv, Vec3::X, None);
+        b.pieces[piece].hotspot = Some(Hotspot::wheel(kc - piv, 0.018, "throttle_up", "throttle_down"));
         let mut r = Mesh::default();
         let rp = piv + Vec3::new(0.0, 0.27, -0.03);
         r.rbox(&BTN, rp + Vec3::new(0.0, 0.02, -0.005), Vec3::new(0.006, 0.03, 0.006), 0.003, Quat::IDENTITY);
         r.rbox(&BTN.pat(pat::KNURL), rp + Vec3::new(0.0, 0.05, -0.012), Vec3::new(0.012, 0.01, 0.008), 0.004, Quat::IDENTITY);
-        b.add("reverse lever", G_ENGINE, r, Anim::hinge2(Drive::new(Input::Throttle, -0.55).offset(0.28), Drive::new(Input::Reverser, 0.9)), piv, Vec3::X, None);
+        let piece = b.add("reverse lever", G_ENGINE, r, Anim::hinge2(Drive::new(Input::Throttle, -0.55).offset(0.28), Drive::new(Input::Reverser, 0.9)), piv, Vec3::X, None);
+        b.pieces[piece].hotspot = Some(Hotspot::hold(rp + Vec3::new(0.0, 0.05, -0.012) - piv, 0.014, "reversers"));
     }
     // Speedbrake lever (left of the quadrant) and flap lever (right).
     let mut s = Mesh::default();
     let sp = Vec3::new(-0.125, qc.y, qc.z);
     s.tube(&ALU, &[sp + Vec3::Y * 0.2, sp + Vec3::new(0.0, 0.32, 0.0)], &|_| 0.004, 8, false);
     s.rbox(&mt(mat::PLASTIC, 0.72, 0.70, 0.66), sp + Vec3::new(0.0, 0.335, -0.004), Vec3::new(0.008, 0.032, 0.008), 0.006, Quat::from_rotation_x(-0.2));
-    b.add("speedbrake lever", G_ENGINE, s, Anim::hinge(Drive::new(Input::Spoiler(-1.0), 0.75).offset(-0.38)), sp, Vec3::X, None);
+    let piece = b.add("speedbrake lever", G_ENGINE, s, Anim::hinge(Drive::new(Input::Spoiler(-1.0), 0.75).offset(-0.38)), sp, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(Vec3::new(0.0, 0.335, -0.004), 0.020, "speedbrake"));
     let mut fl = Mesh::default();
     let fp = Vec3::new(0.125, qc.y, qc.z);
     fl.tube(&ALU, &[fp + Vec3::Y * 0.2, fp + Vec3::new(0.0, 0.31, 0.0)], &|_| 0.0045, 8, false);
     fl.rbox(&mt(mat::PLASTIC, 0.72, 0.70, 0.66), fp + Vec3::new(0.0, 0.322, 0.0), Vec3::new(0.016, 0.012, 0.022), 0.006, Quat::IDENTITY);
-    b.add("flap lever", G_ENGINE, fl, Anim::hinge(Drive::new(Input::FlapLever, 0.78).offset(-0.38)), fp, Vec3::X, None);
+    let piece = b.add("flap lever", G_ENGINE, fl, Anim::hinge(Drive::new(Input::FlapLever, 0.78).offset(-0.38)), fp, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::wheel(Vec3::Y * 0.322, 0.020, "flaps_up", "flaps_down"));
 
     // The gear lever: a wheel-shaped knob on an arm that moves up and down.
     let f2 = main_face();
@@ -1775,7 +1820,17 @@ fn levers(b: &mut Builder) {
     let mut g = Mesh::default();
     g.tube(&ALU, &[gp - f2.n() * 0.02, gp + f2.n() * 0.03], &|_| 0.005, 8, false);
     g.lathe(&mt(mat::PLASTIC, 0.08, 0.075, 0.07), gp + f2.n() * 0.03 - Vec3::X * 0.014, Vec3::X, &[[0.0, 0.0], [0.016, 0.0], [0.02, 0.004], [0.02, 0.024], [0.016, 0.028], [0.0, 0.028]], 20, false);
-    b.add("gear lever", G_ENGINE, g, Anim::slide(Drive::new(Input::GearHandle, -0.055), f2.ay), gp, Vec3::X, None);
+    let piece = b.add("gear lever", G_ENGINE, g, Anim::slide(Drive::new(Input::GearHandle, -0.055), f2.ay), gp, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(f2.n() * 0.03, 0.021, "gear"));
+
+    // The parking brake: a red T-handle on the pedestal, behind the
+    // speedbrake lever at the quadrant's aft corner, pulled up to set.
+    let pb = Vec3::new(-0.15, ytq, zm + 0.005);
+    let mut p = Mesh::default();
+    p.tube(&CHROME, &[pb - Vec3::Y * 0.02, pb + Vec3::Y * 0.05], &|_| 0.0035, 8, false);
+    p.rbox(&mt(mat::PLASTIC, 0.55, 0.06, 0.04), pb + Vec3::Y * 0.055, Vec3::new(0.022, 0.006, 0.007), 0.004, Quat::IDENTITY);
+    let piece = b.add("parking brake", G_ENGINE, p, Anim::slide(Drive::new(Input::ParkingBrake, 0.025), Vec3::Y), pb, Vec3::Y, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(Vec3::Y * 0.055, 0.022, "parking_brake"));
 }
 
 fn columns(b: &mut Builder) {
@@ -1818,7 +1873,8 @@ fn columns(b: &mut Builder) {
             let tilt = Quat::from_rotation_x(-0.35);
             p.rbox(&mt(mat::ALU, 0.35, 0.35, 0.36), pc + Vec3::new(0.0, 0.0, 0.01), Vec3::new(0.045, 0.085, 0.008), 0.006, tilt);
             p.rbox(&RUBBER.pat(pat::KNURL), pc + Vec3::new(0.0, 0.0, 0.019), Vec3::new(0.04, 0.075, 0.0025), 0.002, tilt);
-            b.add("rudder pedal", G_ENGINE, p, Anim::hinge(Drive::new(Input::Yaw, dx.signum() * 0.18)), pv, Vec3::X, None);
+            let piece = b.add("rudder pedal", G_ENGINE, p, Anim::hinge2(Drive::new(Input::Yaw, dx.signum() * 0.18), Drive::new(Input::Brake(dx.signum()), 0.14)), pv, Vec3::X, None);
+            b.pieces[piece].hotspot = Some(Hotspot::hold(pc - pv, 0.038, if dx < 0.0 { "brake_left" } else { "brake_right" }));
         }
     }
     // The nose wheel tiller on the captain's side console.
@@ -1831,7 +1887,7 @@ fn columns(b: &mut Builder) {
 
 // ---------------------------------------------------------------- overhead panel
 
-fn overhead(m: &mut Mesh) {
+fn overhead(m: &mut Mesh, b: &mut Builder) {
     // A box hanging from the ceiling from just behind the windshield to over
     // the seats: its forward face sloping, the aft one nearly level.
     let hw = 0.40;
@@ -1881,12 +1937,16 @@ fn overhead(m: &mut Mesh) {
                 label(m, &g, u, lf - 0.085, 0.014, 0.005, style::TEXT, sid(["1", "2", "3", "4"][k]));
             }
             plate(m, &fwd, u0, lf - 0.20, u1, lf - 0.10, 601.0);
+            // The four engine start switches, one mouse target: held, the starters turn.
+            let mut st = Mesh::default();
             for k in 0..4 {
                 let u = u0 + 0.035 + k as f32 * 0.0615;
-                m.lathe(&BTN, g.at(u, lf - 0.125), g.n(), &[[0.011, 0.0], [0.011, 0.006], [0.009, 0.008], [0.009, 0.02], [0.0, 0.021]], 14, false);
+                st.lathe(&BTN, g.at(u, lf - 0.125), g.n(), &[[0.011, 0.0], [0.011, 0.006], [0.009, 0.008], [0.009, 0.02], [0.0, 0.021]], 14, false);
                 label(m, &g, u, lf - 0.108, 0.006, 0.0045, style::TEXT, sid(["1", "2", "3", "4"][k]));
                 knob(m, &g, u, lf - 0.17, 0.0062, 610.0 + k as f32, true);
             }
+            let piece = b.fixed("engine start switches", G_ENGINE, st);
+            b.pieces[piece].hotspot = Some(Hotspot::hold(g.at(u0 + 0.035 + 1.5 * 0.0615, lf - 0.125) + g.n() * 0.01, 0.06, "starter"));
             label(m, &g, *cu, lf - 0.145, 0.03, 0.004, style::TEXT, sid("ENG START"));
             // Fuel panel with its flow lines.
             plate(m, &fwd, u0, -lf + 0.11, u1, lf - 0.20, 602.0);
@@ -1903,6 +1963,24 @@ fn overhead(m: &mut Mesh) {
             }
             plate(m, &fwd, u0, -lf + 0.005, u1, -lf + 0.11, 603.0);
             populate(m, &g, u0 + 0.004, -lf + 0.009, u1 - 0.004, -lf + 0.106, 604.0);
+        } else if ci == 0 {
+            // The battery pushbutton is on the left electrical panel.
+            let bottom = lf - 0.12;
+            panel_run(m, &fwd, u0, -lf + 0.005, u1, bottom, 1, 4, 620.0);
+            plate(m, &fwd, u0, bottom, u1, lf - 0.005, 632.0);
+            let g = fwd.sub(0.0, 0.0, 0.0043);
+            let u = u0 + 0.038;
+            let v = lf - 0.064;
+            label(m, &g, u, v + 0.024, 0.023, 0.005, style::TEXT, sid("BATTERY"));
+            let face = g.at_h(u, v, 0.008);
+            let mut button = Mesh::default();
+            button.rbox(&BTN, face - g.n() * 0.004, Vec3::new(0.012, 0.014, 0.004), 0.0015, g.rot());
+            let piece = b.add("battery switch", G_ENGINE, button, Anim::slide(Drive::new(Input::Master, -0.002), g.n()), face, g.n(), None);
+            b.pieces[piece].hotspot = Some(Hotspot::click(Vec3::ZERO, 0.014, "master"));
+            let mut on = Mesh::default();
+            rect(&mut on, &legend_mat(style::TEXT, sid("ON"), Vec3::splat(0.9)), face - g.n() * 0.001, g.ax, g.ay, 0.008, 0.004);
+            b.add("battery ON legend", G_ENGINE, on, Anim::slide(Drive::new(Input::Master, 0.002), g.n()), face, g.n(), Some(piece));
+            populate(m, &g, u + 0.034, bottom + 0.004, u1 - 0.004, lf - 0.009, 633.0);
         } else {
             panel_run(m, &fwd, u0, -lf + 0.005, u1, lf - 0.005, 1, 5, 620.0 + ci as f32 * 31.0);
         }
@@ -2199,21 +2277,59 @@ mod tests {
                 assert!(glyph(c) != 15 || c == ' ', "no glyph for {c:?} in {s}");
             }
         }
-        let w = strings_wgsl();
-        assert!(w.contains("vec4u("));
+        assert_eq!(packed_string("12")[0], 0x0f0f0201);
+        assert_eq!(packed_string("12")[3] >> 24, 2);
     }
 
     #[test]
     fn plane_shader_validates() {
-        let src = format!("{}\n{}\n{}\n{}\n{}", include_str!("../../shaders/common.wgsl"), include_str!("../../shaders/plane.wgsl"), strings_wgsl(), include_str!("../../shaders/deck747.wgsl"), include_str!("../../shaders/pit18.wgsl"));
+        use naga::back::msl;
+        let src = format!("{}\n{}\n{}\n{}\n{}\n{}", include_str!("../../shaders/common.wgsl"), include_str!("../../shaders/plane.wgsl"), strings_wgsl(), include_str!("../../shaders/deck747.wgsl"), include_str!("../../shaders/pit18.wgsl"), include_str!("../../shaders/deck650.wgsl"));
         // the generic shader, and each kind's specialised one (render.rs `specialise`).
-        let mut all = vec![src.clone()];
-        all.extend((0..8).map(|k| crate::render::specialise(&src, k)));
-        assert!(all[1].contains("const KIND: u32 = 0u;") && all[1].contains("const INSTR: u32 = 0u;"), "specialise found nothing to rewrite");
-        for src in &all {
-            let m = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
-            if let Err(e) = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all()).validate(&m) {
-                panic!("{}", e.emit_to_string(src));
+        let mut all = vec![("plane (generic)".to_string(), src.clone())];
+        all.extend((0..11).map(|k| (format!("plane #{k}"), crate::render::specialise(&src, k))));
+        assert!(all[1].1.contains("const KIND: u32 = 0u;") && all[1].1.contains("const INSTR: u32 = 0u;"), "specialise found nothing to rewrite");
+        for (label, src) in &all {
+            let m = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{label}:\n{}", e.emit_to_string(src)));
+            let info = naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+                .validate(&m)
+                .unwrap_or_else(|e| panic!("{label}:\n{}", e.emit_to_string(src)));
+            let mut resources = msl::BindingMap::default();
+            let (mut buf, mut tex, mut samp) = (0u8, 0u8, 0u8);
+            for (_, var) in m.global_variables.iter() {
+                let Some(binding) = var.binding else { continue };
+                let target = match m.types[var.ty].inner {
+                    naga::TypeInner::Image { .. } => { let t = msl::BindTarget { texture: Some(tex), ..Default::default() }; tex = tex.wrapping_add(1); t }
+                    naga::TypeInner::Sampler { .. } => { let t = msl::BindTarget { sampler: Some(msl::BindSamplerTarget::Resource(samp)), ..Default::default() }; samp = samp.wrapping_add(1); t }
+                    _ => {
+                        let mutable = matches!(var.space, naga::AddressSpace::Storage { access } if access.contains(naga::StorageAccess::STORE));
+                        let t = msl::BindTarget { buffer: Some(buf), mutable, ..Default::default() }; buf = buf.wrapping_add(1); t
+                    }
+                };
+                resources.insert(binding, target);
+            }
+            let mut per_entry_point_map = msl::EntryPointResourceMap::default();
+            for ep in &m.entry_points {
+                per_entry_point_map.insert(ep.name.clone(), msl::EntryPointResources { resources: resources.clone(), immediates_buffer: None, sizes_buffer: Some(30) });
+            }
+            let options = msl::Options { lang_version: (2, 4), per_entry_point_map, fake_missing_bindings: false, ..Default::default() };
+            for ep in &m.entry_points {
+                let pipe = msl::PipelineOptions { entry_point: Some((ep.stage, ep.name.clone())), vertex_pulling_transform: false, ..Default::default() };
+                let (msl_src, _) = msl::write_string(&m, &info, &options, &pipe).unwrap_or_else(|e| panic!("{label} ({}) MSL: {e}", ep.name));
+                #[cfg(target_os = "macos")]
+                {
+                    use std::io::Write;
+                    use std::process::{Command, Stdio};
+                    let mut child = Command::new("xcrun")
+                        .args(["-sdk", "macosx", "metal", "-x", "metal", "-std=macos-metal2.4", "-c", "-", "-o", "/dev/null"])
+                        .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
+                        .spawn().expect("xcrun metal");
+                    if let Some(mut stdin) = child.stdin.take() { let _ = stdin.write_all(msl_src.as_bytes()); }
+                    let out = child.wait_with_output().expect("wait metal");
+                    assert!(out.status.success(), "{label} ({}): Metal refuses the translated shader:\n{}", ep.name, String::from_utf8_lossy(&out.stderr));
+                }
+                #[cfg(not(target_os = "macos"))]
+                let _ = msl_src;
             }
         }
     }

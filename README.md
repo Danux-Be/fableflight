@@ -1,13 +1,12 @@
-
 <div align="center">
 
-# FableFlight
+# Fable Flight
 
 ### An Open-World Flight Simulator Built in Pure Rust
 
 Explore the skies with real-world weather, live air traffic, and an immersive open-world flying experience.
 
-*Created with Claude Fable 5.2 & Opus 5.5*
+*Created with Claude Fable 5.2, Opus 5.5 and other AI's*
 
 <br>
 
@@ -23,105 +22,130 @@ Explore the skies with real-world weather, live air traffic, and an immersive op
   </video>
 </div>
 
-# Compiling
-* Install rust
-```
-cargo build --release
-```
+## Download
+Download the [latest release](https://github.com/Rolandjg/fableflight/releases/latest), unpack it, and run **`fableflight-launcher`** (`fableflight-launcher.exe` on Windows).
 
-running
-```
+## Compiling
+
+Requires **Rust 1.85+** (edition 2024). Note that the Cargo crate and main simulator binary are named `fablegame` (the optional AI copilot bridge binary is `fableflight-mcp`, and the launcher is `fableflight-launcher`), while the application is Fable Flight.
+
+### Platform prerequisites
+
+- **Linux (Debian / Ubuntu):**
+  ```sh
+  sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+  ```
+- **Linux (Fedora):**
+  ```sh
+  sudo dnf install alsa-lib-devel systemd-devel pkgconf-pkg-config
+  ```
+- **macOS:** Xcode Command Line Tools (`xcode-select --install`).
+- **Windows:** [Rust](https://www.rust-lang.org/tools/install) with the MSVC C++ Build Tools. On Windows x64, use **Visual Studio Installer** to modify your Build Tools installation and add **C++ ATL for x64/x86** under **Individual components**. ATL provides `atls.lib`, which the bundled DirectX shader compiler needs at link time.
+
+### Build and run
+
+```sh
 cargo run --release
 ```
 
-# Language
-The interface is in English or French. It follows the system language, can be changed in Settings (start screen or pause menu), and is remembered. For one run: `cargo run --release -- --lang fr`.
-
-# Full screen and several monitors
-In Graphics (pause menu or start screen), Display: in a window, full screen on the monitor of your choice, or across all screens. F11 switches between the window and the last full-screen choice. Across all screens, the game draws one view over the monitors as the system lays them out (two side by side, three, six in two rows…): click the screens on the little map to take them in or leave them out, choose the one the menus and instruments go on (the globe and the view straight ahead are centred on it too, or on the middle of all the screens if you prefer, as with three or five), and set the widest field of view so that a very wide view does not bend at the edges. On a Wayland desktop that mode runs through XWayland, which is the only way a program can place its window over several screens: restart the game after choosing it. Kept in `display.json` in the config folder; for one run, `--display windowed|fullscreen|span`.
-
-# Joysticks, pedals and key bindings
-Any joystick, throttle, rudder pedals or wheel can be used: in Bindings (pause menu, or Settings on the start screen), bind each axis by moving it the way that means "more" (nose up, right roll, right rudder, full throttle, brake pressed) and each button to any action. Each axis has an Invert switch and a dead zone. Presets set a device up in one click; the Turtle Beach VelocityOne Flightstick and rudder pedals get theirs on their own the first time they are plugged in. Keyboard keys can be moved too. Everything is kept in `bindings.json` in the config folder.
-
-# Aircraft
-The Cessna 172RG, the Robin DR 400/180 Régent, the 747, the F/A-18, the F-4, the F-22, Concorde, the SR-71 and Starship. The Robin is the French wooden four-seater and glider tug: bubble canopy, the cranked Jodel wing, an all-moving tailplane, fixed gear and 60° flaps (`--aircraft dr400`); 6 slides its canopy open and shut. Like the Cessna it is built in code (`src/aircraft/dr400`), in a made-up classic Robin livery.
-
-# Fuel and engine start
-The engines burn fuel as they work (the Cessna some 30 l/h at 75% power, the 747 about 10 t/h in the cruise) and the fuel weighs: full tanks fly heavier than empty ones. Choose how much to take on the start screen (Flight); the HUD, the flight panel (fuel, flow, endurance) and the cockpit gauges show what is left, with LOW FUEL / NO FUEL warnings, and a dry engine stops. Start on a runway with the engine off ("cold start", or `--cold`) and start it by hand (I magnetos, Page Up mixture, hold O for the starter; on the jets I is the fuel controls and O engages the starters) or with F4, which also shuts it down. A windmilling engine with fuel and ignition catches again in the air; shut down on the ground, compression stops it within seconds.
-
-# Mass and balance
-The fuel and the payload (crew, passengers, baggage: set on the start screen) make the aircraft heavier or lighter and move its centre of gravity, shown against its limits in % of the mean aerodynamic chord (start screen, flight panel; CG LIMIT on the HUD). Loaded aft, the nose is lighter and quicker to answer and a gust takes longer to settle; forward, it is stable but nose-heavy and the elevator runs out sooner (a harder flare). A Cessna with four aboard and full baggage is out of its aft limit, as the real one is.
-
-# Electrics and failures
-A battery behind the master switch (Ins) and an alternator (the jets' generators) that charges it once the engine turns fast enough: the starter, the radios, the electric gauges and the lights need power, the engine itself runs on its magnetos. The pause menu's Failures page sets failures by hand or at random (about every N minutes): engine, alternator, flat battery, vacuum pump (the attitude and heading gyros run down), blocked pitot (the airspeed indicator turns into an altimeter) or static port (altimeter and VSI freeze), fuel leak. The flight panel shows the volts, battery and current, and the HUD warns LOW VOLTS and VACUUM.
-
-# In-flight map
-
-A round minimap in the lower-left corner, stacked above the info panel, follows the aircraft; ` (backquote, the tilde key) shows or hides it. Choose **Satellite** or **Map** (a light road map), and **North** to keep north at the top or **Heading** to keep the nose pointing up. The controls, hints and status messages follow the game language (English/French). Place names use the corresponding translation when supplied by the map data, falling back to the local name; changing language also updates already loaded labels. City, town and village names stay upright on both backgrounds, with smaller places appearing as you zoom in and overlapping labels hidden. Use **+ / -** or the mouse wheel over the map to zoom. The compact toolbar sits under the map: click the orientation/background buttons to toggle them, or **x** to collapse it to a **Map** button. Drag the knob on the upper-right of the rim to resize it (240-640 logical pixels across, shrunk to fit between the HUD panels); the size is remembered and can also be set in the pause menu Settings. The map follows HUD visibility and remains visible beside the flight panel and temporarily hides while the pause menu is open. Visibility, background, orientation and zoom are remembered.
-
-Runways are highlighted in cyan using the loaded 3D airfield geometry when available, falling back to database endpoint coordinates for distant airfields. Near a loaded airfield, the active runway gets orange arrival arrows and a corridor on the map. In flight on its arrival side, orange gates show a visual 3-degree descent path toward the runway aiming point. This optional visual aid uses the game traffic runway selection (or wind-based selection), not an ATC clearance or terrain-clearance calculation. Toggle it in pause Settings; the choice is remembered.
-
-The minimap shares the terrain imagery and OpenFreeMap vector data caches. It loads tiles in the background, with at most one imagery and one vector request in flight, 64 satellite textures and 32 road-map tiles in memory. The road map is rasterized once per tile on a worker, not every frame, and does not request satellite images. Neither mode renders the 3D world a second time. Lower-resolution satellite tiles stand in while detail loads. Offline it uses cached data; missing imagery is indicated, and place names require cached vector tiles. The map is unavailable beyond 85 degrees latitude. Map and label data: [OpenFreeMap](https://openfreemap.org/), [OpenMapTiles](https://openmaptiles.org/), [OpenStreetMap contributors](https://www.openstreetmap.org/copyright).
-
-# Radio navigation
-VORs and NDBs from [OurAirports](https://ourairports.com/data/) (public domain), and an ILS on every paved runway end of 1500 m or more at medium and large airports. Tune NAV 1 (VOR or ILS) and the ADF on the flight panel's Radio page (Tab); J shows the instruments: a course deviation indicator with TO/FROM, the glide slope on an ILS and DME, and an ADF needle. [ and ] turn the OBS. Starting on a final approach tunes the runway's ILS. The altimeter is set to the QNH (from the METAR when the weather is real) unless you set it yourself; X sets it back. Courses are true: the world has no magnetic variation. `assets/mknav.py` rebuilds `assets/navaids.tsv.gz` from OurAirports' `navaids.csv`.
-
-# More aircraft: FlightGear's collection
-Click the aircraft picture on the start screen (or **All aircraft**) to see every aircraft you can fly as a gallery; **Get more…** opens [FlightGear's aircraft collection](https://wiki.flightgear.org/FGAddon) (its 2020 catalogue, about 650 aircraft). Pick one to read its files from FGAddon: its flight model, author, the license its JSBSim file states (else FGAddon's GNU GPL v2 or later), and what it becomes here; the ones that can't be flown are hidden once read (tick **Show all**). **Download** takes its package from a FlightGear mirror and unpacks it, without sounds, scripts and splash screens, into `~/.local/share/fablegame/aircraft/<folder>/` (with a `source.json` recording the source, revision and license), and it joins the list. Nothing from FlightGear ships with the game.
-
-A downloaded aircraft is **drawn with its own 3D model** (src/fgmodel.rs): the AC3D meshes and textures (PNG, JPEG, SGI .rgb) its model file names, with sub-models placed by their offsets. Its animations become our moving parts where we drive the same thing: control surfaces, flaps, slats, spoilers, gear retraction, steering, oleo compression, wheels and propellers. Others are taken at rest, and select animations hide what is off at rest or swap propeller blades for their blur. It sits on its own landing gear (the JSBSim contact points), sees from its pilot's view, and gets its picture from its previews.
-
-It is not flown by JSBSim or YASim: its flight model is *fitted* to ours (src/hangar.rs). Its mass, inertia, wing, lift and drag curves, flaps, engines and fuel go into a `Spec` built on the closest of our types, which lends its instruments, sounds and damage rules: propeller aircraft the Cessna's, fighters and anything with afterburners the Hornet's, other jets of 25 t or more the 747's. A JSBSim aircraft's curves are read from its own aerodynamic tables. A YASim aircraft (most of the catalogue) has none: YASim builds it from its geometry and solves for the lift and drag that fly the approach and cruise its file gives, and src/yasim.rs does the same for a polar, with its mass spread over the airframe around its ballast, engines and fuel for the centre of gravity and inertia. Helicopters and autogyros, rockets, gliders, balloons and electric aircraft can't be flown yet.
-
-**A word of caution:** the collection's aircraft are made by FlightGear's community and vary a lot. Some are not of high quality (rough models, odd files), and since each is fitted to our flight model rather than flown by its own, some don't fly realistically here. From the command line: `--fg-install SR22T` downloads, `--aircraft fg:sr22t` flies it, `--fg-survey [TEXT]` reads catalogue entries (those named JSBSim, or matching TEXT) and prints which can be flown, `--jsbsim-fit FILE...` prints what JSBSim (or YASim) files become, and `--fly-check KEY` flies any aircraft in an empty world (take-off, top speed, stall).
-
-# Comparing with a JSBSim flight model
-`cargo run --release -- --jsbsim-compare path/to/c172p.xml [--aircraft 747]` reads a JSBSim aircraft file (the XML flight models JSBSim and FlightGear use; none ship with the game) and prints how its aerodynamics compare with one of ours: geometry, mass and inertia, the lift and drag curves clean and with flaps, stall, best glide, the roll rate at full aileron, and the `Spec` values that would match its curves, as a start for tuning by hand.
-
-# Live air traffic
-Real aircraft around you, as reported by ADS-B receivers (data from [adsb.lol](https://adsb.lol), ODbL), fly in the sky with tags (callsign, type, altitude, speed, distance); the flight panel (Tab) lists the nearest. It can be switched off in the pause menu's Settings.
-
-# Missiles
-The F/A-18C carries its two wingtip Sidewinders. Press **3** to set Master Arm, **4** to find and lock a target (press it again to step to the next one), and **5** to fire. On a gamepad, hold **Y** and press **left** on the d-pad to arm, **Y** + **right** to lock or cycle, and release **Y** on its own at a locked target to fire. The seeker looks about 45° either side of the nose for airborne aircraft — the real ADS-B traffic and airport departures and arrivals — and needs a few seconds to build a lock; the HUD shows `TRACK` until it is solid, then `LOCK`. Armed with no lock, firing says `NO LOCK`; with Master Arm off it says `MASTER ARM OFF`. The missile leaves the rail, boosts, follows the target's heat and detonates on a proximity fuse. The rail stays, the empty wingtip is visible, and the second missile is still there. The keys can be moved on the Bindings page.
-
-# Real weather
-The weather follows the real conditions where you fly: the nearest METAR within 60 km ([aviationweather.gov](https://aviationweather.gov)) sets the wind, gusts, visibility, cloud layers and thunderstorms; with no airport near, [Open-Meteo](https://open-meteo.com)'s model stands in. It is looked up again every 10 minutes or 30 km, and the sky eases into each report. Switch it off in the weather settings (start screen, flight panel or F3) to set the weather by hand.
-
-The clock can follow real time too ("Real time" above the day sliders): the sun and the date are those where you fly, now (solar time, so the local hour can differ from the legal one by up to an hour or so). Pressing T / Y to set the time by hand leaves real time.
-
-Settings (language, sound, camera, HUD, anti-aliasing) are kept in `settings.json` in the config folder (`~/.config/fablegame` on Linux).
-
-# AI copilot (MCP)
-The simulator can host an AI copilot through the [Model Context Protocol](https://modelcontextprotocol.io). Build the game and the small stdio bridge, run the game normally, and point your AI client at `target/release/fableflight-mcp`:
+Or build the release binaries (`target/release/fablegame`, `target/release/fableflight-mcp` and `target/release/fableflight-launcher`) with:
 
 ```sh
-cargo build --release
-./target/release/fablegame
+cargo build --release --locked
 ```
 
-For OpenCode, add a local server to `opencode.json` (or use `opencode mcp add fableflight -- /absolute/path/to/fableflight-mcp`):
+## Features
 
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "servers": {
-      "fableflight": {
-        "type": "local",
-        "command": ["/absolute/path/to/fableflight-mcp"]
-      }
-    }
-  }
-}
+- **Aircraft:** Cessna 172RG, Robin DR400, Beechcraft A36 Bonanza, Boeing 747, Gulfstream G650, F/A-18, F-4, F-22, Concorde, SR-71, Starship, and downloadable [FlightGear aircraft](https://wiki.flightgear.org/FGAddon).
+- **Flight systems:** fuel, mass and balance, electrical failures, clickable cockpits, radio navigation, and autopilot.
+- **Flight plans:** on the start screen, add airports, named fixes, VORs, NDBs, coordinates or a whole route string with airways (`KSFO SFO V25 SNS KLAX`), or click waypoints on the globe. US airports get real SIDs, STARs and approaches from the FAA's public domain CIFP (`assets/mkcifp.py` rebuilds it; for the sim only, not real navigation). Every other airport in the world gets generated procedures for each runway: an RNAV approach with left, right and straight in entries on a 3° final, and a runway heading departure. In flight, the minimap shows the route and the next leg, and the autopilot's GPS mode flies it, heading legs and vectors included.
+- **Mouse yoke:** `F8` turns it on: the pointer becomes a dot and its offset from the centre is the stick, the wheel is the throttle.
+- **World:** real METAR weather, seasonal & live snow cover, satellite/road minimap, live ADS-B traffic, and multiplayer.
+- **Controls:** remappable keyboard, joystick, throttle, pedals, and gamepad. Configure them in **Settings → Controls**.
+- **Arcade mode:** optional boosts, missiles, and in-flight respawns. Enable in **Settings → General** or pass `--arcade`.
+- **AI copilot:** optional MCP integration; see [docs/mcp.md](docs/mcp.md).
+- **Upscaling:** bilinear, AMD FSR 1 and FSR 3.1 built in, and AMD FSR 4.1 downloaded from AMD on request (Windows, Radeon RX 6000 or newer), with a suggestion for your GPU. In **Settings → Graphics → Upscaling**; see [docs/upscaling.md](docs/upscaling.md).
+
+The UI supports English (`en`), French (`fr`), and Korean (`ko`). Settings and key bindings are saved automatically.
+
+## Default Controls
+
+All bindings can be customized in **Settings → Controls**. In cockpit view, hover over switches, levers, and knobs to click, hold, or scroll them directly with the mouse (or the gamepad's aim dot).
+
+| Action | Default Key |
+| --- | --- |
+| Pitch down / up | `W` / `S` |
+| Roll left / right | `A` / `D` |
+| Rudder left / right | `Q` / `E` |
+| Throttle up / down | `Left Shift` / `Left Ctrl` |
+| Pitch trim down / up | `Numpad 7` / `Numpad 1` |
+| Wheel brakes / Parking brake | `B` / `.` |
+| Flaps down / up a notch | `F` / `V` |
+| Landing gear | `L` |
+| Speedbrake / Braking chute | `/` |
+| Thrust reversers (hold) | `Z` |
+| Canopy open / close | `6` |
+| Boost / Afterburner | `Space` |
+| Auto-start / stop engine | `F4` |
+| Battery master / Magnetos / Starter | `Insert` / `I` / `O` |
+| Mixture richer / leaner | `Page Up` / `Page Down` |
+| Autopilot toggle / HDG / NAV / APR / ALT | `F5` / `7` / `8` / `9` / `0` |
+| Heading bug / Altitude preselect | `-` `=` / `;` `'` |
+| Camera (chase / cockpit) | `C` |
+| HUD / Minimap toggle | `H` / `` ` `` |
+| Go to place / Respawn / Pause | `G` / `R` / `P` |
+| Flight panel / Pause menu | `Tab` / `Esc` |
+| Sound toggle / Screenshot | `U` / `F12` |
+| Full screen / window | `F11` or `Alt+Enter` |
+| Mouse yoke | `F8` |
+
+The game starts in borderless full screen. Turn this off in **Settings → General**, or pass `--windowed` (or `--width`/`--height`) for a single run.
+
+**Settings → Graphics → Screens** chooses a window, full screen on the monitor of your choice, or **All screens**: one view across several monitors (2 side by side, 3, 6 in two rows…), laid out as the system has them, with a small map of the monitors to take each one in or leave it out. The menus and instruments stay on one screen (the main one by default), and the view straight ahead is centred on it unless you turn that off (3 or 5 monitors). **Widest view** (110° by default) keeps a 32:9 or wider view from bending at the edges. `F11` switches between the window and the last full-screen choice. The choice is kept in `display.json`; `--display windowed|fullscreen|span` sets it for one run. On a Wayland desktop, All screens runs through XWayland: restart the game after choosing it.
+
+## Configuration & Data Paths
+
+| Platform | Config (settings, bindings, Google key, MCP token) | Cache (tiles, downloaded hangar cache) |
+| --- | --- | --- |
+| **Linux** | `~/.config/fablegame/` | `~/.cache/fablegame/` |
+| **macOS** | `~/Library/Application Support/fablegame/` | `~/Library/Caches/fablegame/` |
+| **Windows** | `%APPDATA%\fablegame\` | `%LOCALAPPDATA%\fablegame\` |
+
+When using optional Google Maps imagery/3D tiles, prefer setting the `FABLE_GOOGLE_KEY` environment variable (or entering the key in **Settings → Map**) rather than passing `--google-key` on the command line.
+
+## Troubleshooting
+
+- **GPU startup or driver issues:** Run from a terminal to see GPU error output. Make sure Vulkan (Linux/Windows), DX12 (Windows), or Metal (macOS) drivers are up to date. On integrated GPUs, try `--graphics very-low` or set `FABLE_MSAA=1`.
+- **Low frame rate / laptops without a dedicated GPU:** In **Settings → Graphics**, pick the **Very Low** preset (the first start on integrated graphics picks Very Low on Intel, Low elsewhere). For more speed, set **Clouds** to Off and lower **Render resolution** (down to 35%). A 30 fps **Frame limit** keeps the laptop cooler and saves battery. To see where the GPU time goes, run with `FABLE_GPU_TIMES=1`: it logs the time spent in each render stage.
+- **No sound or switched headphones:** Audio automatically attempts to reopen the default output device every few seconds after a stream error. Use `U` to toggle mute or `--mute` to launch silently.
+- **Offline / slow network:** Launch with `--offline` to fly using only cached tiles and built-in data.
+- **Linux gamepads not detected:** Ensure your user has read access to `/dev/input/event*` (usually the `input` group) and `libudev` is installed.
+- **Invalid command-line flags:** Run `fablegame --help` to see all supported options.
+- **The game stops while starting from the launcher:** the launcher shows the game's last log lines, and the full log of the last run is in the cache folder as `last-run.log` (Home → Open the last game log).
+
+## Multiplayer
+
+Multiplayer is on by default, under a random pilot name (such as `SwiftKestrel27`). Change the name, pick a server, or turn multiplayer off in the **Multiplayer** settings. Offline and scripted runs (`--offline`, `--shot`, `--record`, `--bench`, `--headless`) stay off the network unless `--mp` is given. To host a relay:
+
+```sh
+cd relay
+docker compose up -d
 ```
+Allow UDP port `7480` through your firewall.
 
-For Claude Code: `claude mcp add fableflight /absolute/path/to/fableflight-mcp`. Claude Desktop uses the same command in its `mcpServers` configuration. The bridge attaches to the running game over `127.0.0.1:42761`; start a flight, then ask the AI to read the aircraft state, tune radios, set flaps or weather, or take a screenshot. `--mcp-port PORT` changes the game's port and `FABLEFLIGHT_MCP_PORT` tells the bridge where to look. `--no-mcp` disables the service.
+Read [docs/relay.md](docs/relay.md) for more info.
 
-The copilot can read the aircraft, navigation, weather, traffic and airports, and can set the throttle, flaps, gear, speedbrake, parking brake, mixture, trim, engine state, radios, weather, time and the aircraft's position. It cannot move the stick: attitude stays with the human pilot. See [docs/mcp.md](docs/mcp.md) for the full tool list, units and examples.
+## Assets & Attributions
 
-# Contributions
-Please contribute anything if you want to! Improvements to flight sim realism, graphics, optimization, UI, and especially plane models are needed! (((=
+The source code is licensed under the MIT License (see [LICENSE](LICENSE)). Bundled data and media assets include:
 
-For substantial AI-assisted contributions, use Claude Opus 5.5, GPT-6 Astra, Claude Fable, or a model with equivalent or greater capability. Sonnet, GPT-6.1 Sol, and less capable models should only handle simple fixes or very small features; switch to a stronger model for larger tasks, including aircraft creation and flight-model tuning. See [AGENTS.md](AGENTS.md) for the full guidance.
+- **Airports & navigation aids (`assets/airports.tsv.gz`, `assets/navaids.tsv.gz`):** Derived from [OurAirports](https://ourairports.com/data/) (Public Domain).
+- **Night lights (`assets/night_lights.bin`):** Block-wise zlib-compressed global radiance tiles packed from NASA Earth Observatory's Black Marble 2016 dataset (Public Domain).
+- **Fonts (`assets/fonts/`):** Barlow and IBM Plex Mono, licensed under the SIL Open Font License 1.1 (see `assets/fonts/OFL-Barlow.txt` and `assets/fonts/OFL-IBMPlexMono.txt`).
+- **AMD FidelityFX Super Resolution:** `src/shaders/fsr3.wgsl` and the FSR 1/RCAS functions in `src/shaders/post.wgsl` are ported from AMD's FSR SDK v2.4.0 (MIT; notice in [docs/upscaling.md](docs/upscaling.md)). AMD's FSR 4 runtime is not bundled: it is downloaded from AMD at the player's request, under AMD's licence.
+- **Google Maps badge (`assets/google_maps_logo.png`):** Displayed when optional Google Maps Platform imagery or Photorealistic 3D Tiles are enabled, per Google Maps attribution requirements.
+- **Aircraft models, textures, and audio (`assets/*.bin.gz`, `assets/*_paint.jpg`, `assets/audio/`, `assets/ui/`):** Project-authored or procedural assets bundled with Fable Flight. Optional downloadable aircraft from [FGAddon](https://wiki.flightgear.org/FGAddon) carry their own per-aircraft licenses recorded in each installed aircraft's `source.json`.
 
-I personally recommend using Opus 5.5 high for most tasks. If you don't have a routine for conserving tokens a general rule of thumb is to give models specific tasks (e.g. decompose the cockpit and plane body into different prompts) and keep conversations to one prompt, starting a new chat if refinement is needed.
+## Contributing
+
+Contributions are welcome, see [AGENTS.md](AGENTS.md) for guidance on coding agent standards.

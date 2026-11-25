@@ -427,14 +427,29 @@ pub fn respawn(net: &RoadNet, car: &mut Car, seed: u32) {
     place(net, car, seed);
 }
 
+/// Indices of `cars` by lane (path, direction, lane), then by distance along
+/// it, ties in index order: what a stable sort by those gives, but sorted as
+/// packed keys (the distance in `f32::total_cmp` order) instead of chasing
+/// every comparison through `cars`.
+fn lane_order(cars: &[Car]) -> Vec<usize> {
+    let mut keys: Vec<u128> = cars
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let lane = (c.path as u128) << 9 | (c.fwd as u128) << 8 | c.lane as u128;
+            let b = c.s.to_bits();
+            let s = b ^ if b >> 31 == 1 { u32::MAX } else { 1 << 31 };
+            lane << 64 | (s as u128) << 32 | i as u128
+        })
+        .collect();
+    keys.sort_unstable();
+    keys.iter().map(|k| *k as u32 as usize).collect()
+}
+
 /// Advance every car of one tile. Cars that leave the tile are returned.
 pub fn step(net: &RoadNet, cars: &mut Vec<Car>, dt: f32, up: Vec3, tick: u32) -> Vec<Exit> {
     // Following distance: sort the cars of each lane and look at the one in front.
-    let mut order: Vec<usize> = (0..cars.len()).collect();
-    order.sort_by(|&a, &b| {
-        let (x, y) = (&cars[a], &cars[b]);
-        (x.path, x.fwd, x.lane).cmp(&(y.path, y.fwd, y.lane)).then(x.s.total_cmp(&y.s))
-    });
+    let order = lane_order(cars);
     for c in cars.iter_mut() {
         c.gap = 1e9;
     }
@@ -463,7 +478,6 @@ pub fn step(net: &RoadNet, cars: &mut Vec<Car>, dt: f32, up: Vec3, tick: u32) ->
         let before = c.s;
         c.s += c.v * dt * if c.fwd { 1.0 } else { -1.0 };
         c.shift *= (-dt * 2.2).exp();
-        let was = pose(net, c, up).0 + c.shift;
         let mut next: Option<(u32, f32, bool)> = None;
         let mut gone = false;
         if c.s >= p.len || c.s <= 0.0 {
@@ -494,6 +508,9 @@ pub fn step(net: &RoadNet, cars: &mut Vec<Car>, dt: f32, up: Vec3, tick: u32) ->
             }
         }
         if let Some((np, ns, nf)) = next {
+            // Where it was drawn before the turn (only needed for a turn: the
+            // car has not been moved off its path or lane yet).
+            let was = pose(net, c, up).0 + c.shift;
             c.path = np;
             c.s = ns;
             c.fwd = nf;
@@ -514,4 +531,43 @@ pub fn step(net: &RoadNet, cars: &mut Vec<Car>, dt: f32, up: Vec3, tick: u32) ->
 pub fn activity(hour: f32) -> f32 {
     let bump = |c: f32, w: f32| (-((hour - c) / w).powi(2)).exp();
     (0.1 + 0.9 * (bump(8.3, 2.2) + bump(17.5, 2.8) + 0.7 * bump(13.0, 3.0))).min(1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The packed-key order is the stable sort by lane and distance it replaced,
+    /// ties, negative zero and all.
+    #[test]
+    fn lane_order_matches_stable_sort() {
+        let mut seed = 7u32;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            seed >> 8
+        };
+        let cars: Vec<Car> = (0..600)
+            .map(|_| Car {
+                path: rnd() % 5,
+                s: [0.0, -0.0, 12.5, (rnd() % 4000) as f32 * 0.25 - 50.0][(rnd() % 4) as usize],
+                fwd: rnd() % 2 == 0,
+                lane: (rnd() % 3) as u8,
+                v: 0.0,
+                vmul: 1.0,
+                model: 0,
+                col: [0.0; 3],
+                rank: 0.0,
+                dir: Vec3::ZERO,
+                shift: Vec3::ZERO,
+                gap: 0.0,
+                street: Default::default(),
+            })
+            .collect();
+        let mut want: Vec<usize> = (0..cars.len()).collect();
+        want.sort_by(|&a, &b| {
+            let (x, y) = (&cars[a], &cars[b]);
+            (x.path, x.fwd, x.lane).cmp(&(y.path, y.fwd, y.lane)).then(x.s.total_cmp(&y.s))
+        });
+        assert_eq!(lane_order(&cars), want);
+    }
 }

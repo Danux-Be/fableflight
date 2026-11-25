@@ -1,8 +1,7 @@
-//! Crashes: the aircraft breaks into tumbling, burning parts and its fuel goes
-//! up in one big rolling fireball, followed by fires along the skid path, a
-//! smoke column, a flash of light and scorched ground. Into the water there is
-//! no fire: a great splash, white water, and wreckage that floats a while,
-//! wallowing and settling as it floods, before it goes under.
+//! Crashes: the airframe breaks into tumbling parts; ruptured fuel may ignite
+//! into a rolling fireball, while survivable fuel-free impacts leave a wreck.
+//! Into the water there is no fire: a great splash, white water, and wreckage
+//! that floats a while, wallowing and settling as it floods, before it goes under.
 use crate::geo;
 use crate::airframe::{self, Mesh};
 use crate::damage::{self, Tear};
@@ -82,6 +81,8 @@ pub struct Debris {
     wet: bool,
     /// time to its next escaping-air burst once it is going under
     glug: f32,
+    /// previous ground-contact position for continuous snow crash trails
+    track_prev: Option<DVec3>,
 }
 
 /// White water left on the surface (see `Crash::foam`).
@@ -129,6 +130,8 @@ pub struct Crash {
     pub water: bool,
     pub time: f64,
     pub power: f32,
+    /// whether the fuel caught fire (never in the water)
+    pub ignited: bool,
     pub debris: Vec<Debris>,
     fires: Vec<Fire>,
     pending: Vec<Blast>,
@@ -165,6 +168,8 @@ pub struct Crash {
     foam: Vec<Foam>,
     /// how steeply it went in (0 flat .. 1 straight down)
     steep: f32,
+    /// snow trails carved by sliding and tumbling wreckage this frame
+    pub snow_marks: Vec<crate::snowtrack::Mark>,
 }
 
 pub const GAS: f32 = 0.0;
@@ -177,6 +182,16 @@ pub const GRIT: f32 = 7.0; // pale masonry dust
 pub const SOOT: f32 = 8.0; // smoke carried on from the fire simulation
 pub const GLASS: f32 = 9.0; // shards of window glass
 pub const DROPS: f32 = 10.0; // thrown water, streaked along its flight
+pub const FEATHER: f32 = 11.0; // a bird's feathers after a strike (temp = how pale)
+
+fn crash_ignition_chance(fuel: f32, energy_per_kg: f32, steep: f32, tank_hit: bool) -> f32 {
+    let fuel = fuel.clamp(0.0, 1.0);
+    if fuel <= 0.02 { return 0.0; }
+    if tank_hit { return 0.95 * fuel; }
+    let x = ((energy_per_kg - 250.0) / 1_750.0).clamp(0.0, 1.0);
+    let severity = x * x * (3.0 - 2.0 * x);
+    severity * fuel * (0.45 + 0.55 * steep.clamp(0.0, 1.0))
+}
 
 impl Crash {
     /// `meshes`: renderer meshes of the aircraft's breakable groups, then the two
@@ -199,6 +214,13 @@ impl Crash {
         let vn = imp.vel.dot(up);
         let slide = imp.vel - up * vn;
         let water = imp.water;
+        let fuel = if spec.fuel_kg > 0.0 { (plane.fuel / spec.fuel_kg).clamp(0.0, 1.0) as f32 } else { 0.0 };
+        let steep = (-vn / speed.max(1.0) as f64).clamp(0.0, 1.0) as f32;
+        let tank_hit = plane.cause == "wing tank";
+        let ignition_chance = crash_ignition_chance(fuel, 0.5 * speed * speed, steep, tank_hit);
+        // Flown into a building at speed, the tanks always burst and go up.
+        let ignited = !water && fuel > 0.02 && (imp.building.is_some() || rng.f() < ignition_chance);
+        let fire_power = power * (0.35 + 0.65 * fuel);
         let carry = if water {
             // Water gives way, but it is no cushion: the downward part is
             // stopped dead and the pieces skip on along the surface, until
@@ -324,6 +346,7 @@ impl Crash {
                 lean: 0.0,
                 wet: false,
                 glug: 0.0,
+                track_prev: None,
             };
             if let Some((lo, hi, share)) = shares[i] {
                 // A heavy piece: a box as big as what it kept, that goes on
@@ -377,6 +400,11 @@ impl Crash {
                 if !d.rigid {
                     d.vel = carry * rng.range(0.6, 1.0) as f64 + rng.dir().as_dvec3() * 2.0;
                 }
+            } else if !ignited {
+                // A structural crash can scatter a wreck without automatically
+                // igniting intact, cool fuel tanks.
+                d.burn = 0.0;
+                d.char = 0.0;
             }
             debris.push(d);
         }
@@ -398,8 +426,8 @@ impl Crash {
                 omega: rng.dir().as_dvec3() * rng.range(5.0, 25.0) as f64 / ss as f64,
                 scale: rng.range(0.5, 1.7) * ss,
                 radius: 0.25 * ss as f64,
-                burn: if water { 0.0 } else { rng.range(3.0, 14.0) },
-                char: if water { rng.range(0.0, 0.08) } else { rng.range(0.2, 0.8) },
+                burn: if ignited { rng.range(3.0, 14.0) } else { 0.0 },
+                char: if ignited { rng.range(0.2, 0.8) } else { rng.range(0.0, 0.08) },
                 resting: false,
                 sunk: false,
                 tear: [Tear::NONE; 2],
@@ -421,6 +449,7 @@ impl Crash {
                 lean: 0.0,
                 wet: false,
                 glug: 0.0,
+                track_prev: None,
             });
         }
         let mut c = Self {
@@ -429,6 +458,7 @@ impl Crash {
             water: imp.water,
             time: 0.0,
             power,
+            ignited,
             debris,
             fires: Vec::new(),
             pending: Vec::new(),
@@ -452,21 +482,25 @@ impl Crash {
             splashes: Vec::new(),
             foam: Vec::new(),
             steep: (-vn / imp.vel.length().max(1.0)).clamp(0.0, 1.0) as f32,
+            snow_marks: Vec::new(),
         };
-        // One explosion: all the fuel goes at once (into the water, one splash).
-        c.pending.push(Blast { at: 0.0, pos: if water { Vec3::ZERO } else { up.as_vec3() * 2.5 }, power });
-        if heavy && !water {
+        // Fuel ignites only when the impact ruptures a tank or carries enough
+        // energy to make ignition plausible; ditching never makes a fireball.
+        if ignited {
+            c.pending.push(Blast { at: 0.0, pos: up.as_vec3() * 2.5, power: fire_power });
+        }
+        if heavy && ignited {
             // An airliner's tanks do not all go at once: what is left in the
             // wings bursts as they break up and tumble on.
-            c.pending.push(Blast { at: c.rng.range(0.35, 0.9) as f64, pos: Vec3::NAN, power: power * 0.55 });
-            c.pending.push(Blast { at: c.rng.range(1.3, 2.6) as f64, pos: Vec3::NAN, power: power * 0.4 });
+            c.pending.push(Blast { at: c.rng.range(0.35, 0.9) as f64, pos: Vec3::NAN, power: fire_power * 0.55 });
+            c.pending.push(Blast { at: c.rng.range(1.3, 2.6) as f64, pos: Vec3::NAN, power: fire_power * 0.4 });
         }
-        if !water {
+        if ignited {
             let big = if heavy { size.powf(0.75) } else { 1.0 };
-            c.scorch.push((Vec3::ZERO, 12.0 * power * big));
+            c.scorch.push((Vec3::ZERO, 12.0 * fire_power * big));
             // What is left in the tanks burns on where the wreck came to rest
             // (the source of the smoke column).
-            c.fires.push(Fire { pos: up.as_vec3() * 0.3, life: if heavy { 85.0 } else { 70.0 }, size: 1.25 * power * if heavy { size.powf(0.8) } else { 1.0 }, acc: 0.0 });
+            c.fires.push(Fire { pos: up.as_vec3() * 0.3, life: if heavy { 85.0 } else { 70.0 }, size: 1.25 * fire_power * if heavy { size.powf(0.8) } else { 1.0 }, acc: 0.0 });
         }
         c
     }
@@ -752,7 +786,7 @@ impl Crash {
     }
 
     /// Advance the wreck. `dt` is game time.
-    pub fn update(&mut self, dt: f64, world: &World, out: &mut Vec<Particle>) {
+    pub fn update(&mut self, dt: f64, world: &World, snowy: bool, out: &mut Vec<Particle>) {
         self.time += dt;
         self.last_blast.0 += dt;
         self.fluid.clear();
@@ -776,7 +810,7 @@ impl Crash {
         };
         for (k, b) in due.into_iter().enumerate() {
             let pos = if b.pos.is_nan() {
-                let pick = [2usize, 3, 0][(self.time * 7.0) as usize % 3 + k * 0 % 3];
+                let pick = [2usize, 3, 0][((self.time * 7.0) as usize + k) % 3];
                 self.debris.get(pick).filter(|d| !d.sunk).map(|d| self.local(d.pos) + up).unwrap_or(up * 2.0)
             } else {
                 b.pos
@@ -925,8 +959,38 @@ impl Crash {
                         k -= 1.0;
                         let r = &mut self.rng;
                         let vel = tang * r.range(0.3, 0.8) + r.dir() * (2.0 + c.slide * 0.15) + up * r.range(2.0, 6.0);
-                        out.push(Particle { pos: at.into(), vel: vel.into(), life: r.range(3.0, 7.0), size0: r.range(1.0, 2.0), size1: r.range(5.0, 11.0), kind: DUST, drag: 1.2, buoy: 0.2, seed: r.f(), alpha: r.range(0.45, 0.7), ..Default::default() });
+                        let kind = if snowy && r.f() < 0.65 { MIST } else { DUST };
+                        out.push(Particle { pos: at.into(), vel: vel.into(), life: r.range(3.0, 7.0), size0: r.range(1.0, 2.0), size1: r.range(5.0, 11.0), kind, drag: 1.2, buoy: 0.2, seed: r.f(), alpha: r.range(0.45, 0.7), ..Default::default() });
                     }
+                }
+                if let Some(at) = c.ground_at {
+                    // Carve a crash trail matching this piece's width across the ground.
+                    let tang = d.vel - upw * d.vel.dot(upw);
+                    let side = if tang.length_squared() > 0.04 {
+                        tang.cross(upw).normalize_or_zero()
+                    } else {
+                        let (_, e, _) = geo::enu(at);
+                        e
+                    };
+                    let rx = d.rot * DVec3::X;
+                    let ry = d.rot * DVec3::Y;
+                    let rz = d.rot * DVec3::Z;
+                    let hw = (side.dot(rx).abs() * d.half.x as f64 + side.dot(ry).abs() * d.half.y as f64 + side.dot(rz).abs() * d.half.z as f64) as f32;
+                    let radius = (hw * 1.05).clamp(0.65, 5.5);
+                    match d.track_prev {
+                        Some(p0) => {
+                            if (at - p0).length_squared() >= 0.10 * 0.10 {
+                                self.snow_marks.push(crate::snowtrack::Mark { a: p0, b: at, radius, clear: 0.97, berm: 0.95, rough: 0.85 });
+                                d.track_prev = Some(at);
+                            }
+                        }
+                        None => {
+                            self.snow_marks.push(crate::snowtrack::Mark { a: at, b: at, radius: radius * 1.1, clear: 0.97, berm: 0.95, rough: 0.85 });
+                            d.track_prev = Some(at);
+                        }
+                    }
+                } else {
+                    d.track_prev = None;
                 }
                 // Burning fuel left behind along its path.
                 if c.slide > 1.0 && d.burn > 5.0 && d.group != Some(airframe::G_PROP) && d.mass > 3000.0 {
@@ -951,17 +1015,20 @@ impl Crash {
                 }
                 let (lat, lon, h) = geo::pos_to_lla(d.pos);
                 let mut gh = None;
+                let mut on_building = false;
                 if let Some(g) = world.ground(lat, lon) {
                     gh = Some((g.h, g.water));
                 }
                 if let Some(b) = world.building(lat, lon) {
                     if h < b.top + 1.0 && (!b.bridge || h > b.base) {
                         gh = Some((b.top, false));
+                        on_building = true;
                     }
                 }
                 if let Some((g, water)) = gh {
                     if h >= g + d.radius {
                         d.wet = false;
+                        d.track_prev = None;
                     } else if water {
                         // In the water: it floats while it can, dragged to a stop.
                         let r = d.radius.max(0.1);
@@ -1001,6 +1068,24 @@ impl Crash {
                         if d.vel.length() < 0.8 && vn.abs() < 1.0 {
                             d.resting = true;
                             d.vel = DVec3::ZERO;
+                        }
+                        if !on_building {
+                            let at = d.pos - upw * d.radius;
+                            let radius = (d.radius as f32 * 1.15).clamp(0.28, 1.3);
+                            match d.track_prev {
+                                Some(p0) => {
+                                    if (at - p0).length_squared() >= 0.12 * 0.12 {
+                                        self.snow_marks.push(crate::snowtrack::Mark { a: p0, b: at, radius, clear: 0.88, berm: 0.82, rough: 0.75 });
+                                        d.track_prev = Some(at);
+                                    }
+                                }
+                                None => {
+                                    self.snow_marks.push(crate::snowtrack::Mark { a: at, b: at, radius, clear: 0.88, berm: 0.82, rough: 0.75 });
+                                    d.track_prev = Some(at);
+                                }
+                            }
+                        } else {
+                            d.track_prev = None;
                         }
                         // Burning fuel left behind where the big pieces slide.
                         if big && d.group != Some(airframe::G_PROP) && d.burn > 5.0 {
@@ -1130,7 +1215,7 @@ impl Crash {
 
         // The main smoke column over the site.
         let col_life = 75.0;
-        if self.time < col_life && self.domain.is_none() && !self.water {
+        if self.time < col_life && self.domain.is_none() && self.ignited {
             let k = (1.0 - (self.time / col_life) as f32).powf(0.6);
             self.column_acc += 11.0 * k * dtf * self.power.sqrt();
             while self.column_acc >= 1.0 {
@@ -1210,6 +1295,19 @@ impl Crash {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::crash_ignition_chance;
+
+    #[test]
+    fn crash_fire_depends_on_fuel_and_impact_severity() {
+        assert_eq!(crash_ignition_chance(1.0, 0.5 * 8.0 * 8.0, 0.0, false), 0.0);
+        assert_eq!(crash_ignition_chance(0.0, 10_000.0, 1.0, true), 0.0);
+        assert!(crash_ignition_chance(1.0, 0.5 * 70.0 * 70.0, 1.0, false) > 0.99);
+        assert!((crash_ignition_chance(1.0, 10_000.0, 0.0, true) - 0.95).abs() < 1e-6);
+    }
+}
+
 
 /// The bounds (body frame) of what a break keeps of a group's mesh, and
 /// the share of the mesh that is.
@@ -1234,6 +1332,8 @@ struct Contact {
     /// sliding speed where it touches the ground (0: in the air), and where
     slide: f32,
     at: DVec3,
+    /// centroid of corners penetrating open terrain (not water or buildings)
+    ground_at: Option<DVec3>,
     water: bool,
     /// a building it went into below its roof, and where
     build: Option<(BHit, DVec3)>,
@@ -1277,6 +1377,8 @@ fn rigid_step(d: &mut Debris, dt: f64, world: &World, ignore: &[(geo::TileId, us
         let iw = |v: DVec3| rot * (d.inv_i * (rot.inverse() * v));
         let mut deepest = 0.0f64;
         let mut touching = false;
+        let mut ground_sum = DVec3::ZERO;
+        let mut ground_n = 0u32;
         for &pb in &pts {
             let r = rot * pb;
             let p = d.pos + r;
@@ -1312,6 +1414,10 @@ fn rigid_step(d: &mut Debris, dt: f64, world: &World, ignore: &[(geo::TileId, us
                 return c;
             }
             touching = true;
+            if floor == g.h {
+                ground_sum += p;
+                ground_n += 1;
+            }
             deepest = deepest.max(pen);
             // The ground pushes back at this corner: no bounce to speak of,
             // and friction along it.
@@ -1341,10 +1447,16 @@ fn rigid_step(d: &mut Debris, dt: f64, world: &World, ignore: &[(geo::TileId, us
                 c.at = p;
             }
         }
+        if ground_n > 0 {
+            c.ground_at = Some(ground_sum / ground_n as f64);
+        }
         if touching {
             d.pos += upw * deepest.min(1.5) * 0.6;
-            // Crumpling and scraping soak up its spin.
-            d.omega *= 1.0 - (0.6 * h).min(0.5);
+            // Crumpling and scraping soak up its spin, the more the deeper it
+            // digs in (a rate, so it is the same at any frame rate; the
+            // impulses above already take out its speed into the ground and
+            // along it).
+            d.omega *= (-(0.9 + 6.0 * deepest.min(0.5)) * h).exp();
         }
         if touching && d.vel.length() < 0.4 && d.omega.length() < 0.25 {
             d.still += h as f32;

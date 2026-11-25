@@ -2,26 +2,111 @@
 //! with the toolkit in `airframe.rs`) and a `Spec`: everything the flight
 //! model, the damage model, the landing gear, the engines, the camera and the
 //! sound need to know about it. Adding a type is a new module and an entry in
-//! `ALL`; nothing else in the game is specific to one aircraft except its
+//! `BUILTIN`; nothing else in the game is specific to one aircraft except its
 //! paint and surface detail, which `plane.wgsl` picks by `Spec::id`.
 //!
 //! Body frame (as in airframe.rs): +X right, +Y up, -Z forward, the origin at
 //! the centre of gravity.
+// Aircraft geometry tables contain physical dimensions in metres (e.g. 1.57 m,
+// 3.14 m, -6.28 m) that trip clippy::approx_constant.
+#![allow(clippy::approx_constant)]
 pub mod b747;
+pub mod bonanza;
 pub mod c172;
 pub mod concorde;
 pub mod dr400;
 pub mod f22;
 pub mod f4;
 pub mod fa18;
+pub mod g650;
 pub mod sr71;
 pub mod starship;
+#[cfg(test)]
+mod standards;
 
 use crate::airframe::{Model, Sect};
 use glam::{DVec3, Vec3};
 
+/// A control in the cockpit that the mouse can work: a sphere in the body
+/// frame, and the actions (ids from `bind::ACTIONS`) a click and the wheel
+/// stand for. Clicking does what the action's key does; with a `hold`
+/// action, keeping the button down past a moment holds that key instead
+/// (the ignition key turned on to START); each notch of the wheel holds the "up" or
+/// "down" action for a moment (mixture, throttle, trim, OBS).
+#[derive(Clone, Copy, Debug)]
+pub struct Hotspot {
+    pub at: [f32; 3],
+    pub r: f32,
+    pub click: Option<&'static str>,
+    /// held past a moment instead of clicked (the key turned on to START)
+    pub hold: Option<&'static str>,
+    pub wheel: Option<(&'static str, &'static str)>,
+}
+
+/// The hotspot a ray from `o` along `d` (body frame, `d` unit length) meets
+/// first, if any.
+pub fn pick(hs: &[Hotspot], o: Vec3, d: Vec3) -> Option<usize> {
+    let mut best: Option<(usize, f32)> = None;
+    for (i, h) in hs.iter().enumerate() {
+        let c = Vec3::from(h.at) - o;
+        let t = c.dot(d);
+        if t <= 0.0 || c.length_squared() - t * t > h.r * h.r {
+            continue;
+        }
+        if best.is_none_or(|(_, bt)| t < bt) {
+            best = Some((i, t));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+impl Hotspot {
+    pub fn click(at: Vec3, r: f32, id: &'static str) -> Self {
+        Self { at: at.to_array(), r, click: Some(id), hold: None, wheel: None }
+    }
+
+    pub fn hold(at: Vec3, r: f32, id: &'static str) -> Self {
+        Self { at: at.to_array(), r, click: None, hold: Some(id), wheel: None }
+    }
+
+    pub fn wheel(at: Vec3, r: f32, up: &'static str, down: &'static str) -> Self {
+        Self { at: at.to_array(), r, click: None, hold: None, wheel: Some((up, down)) }
+    }
+}
+
+/// Resolve the mouse targets once when loading the aircraft. Keep the exact
+/// piece index so identical levers and inherited cockpit meshes animate correctly.
+pub fn cockpit_controls(spec: &Spec, pieces: &[crate::airframe::Piece]) -> Vec<(Hotspot, Option<usize>)> {
+    let mut controls: Vec<_> = spec.hotspots.iter().map(|h| {
+        let index = c172::cabin::moving_piece(h).and_then(|name| pieces.iter().position(|p|
+            p.name == name && match h.hold {
+                Some("brake_left") => p.pivot.x < -0.27,
+                Some("brake_right") => p.pivot.x > -0.27 && p.pivot.x < 0.0,
+                _ => true,
+            }));
+        (*h, index)
+    }).collect();
+    if BUILTIN.iter().any(|s| std::ptr::eq(*s, spec)) {
+        controls.extend(pieces.iter().enumerate().filter_map(|(i, p)| {
+            let mut h = p.hotspot?;
+            h.at = (p.pivot + Vec3::from(h.at)).to_array();
+            Some((h, Some(i)))
+        }));
+    }
+    controls
+}
+
+pub fn animated_hotspots(controls: &[(Hotspot, Option<usize>)], pose: &[glam::Mat4]) -> Vec<Hotspot> {
+    controls.iter().map(|&(mut h, index)| {
+        if let Some(i) = index {
+            h.at = pose[i].transform_point3(Vec3::from(h.at)).to_array();
+        }
+        h
+    }).collect()
+}
+
 /// The types built into the game, in the order the menu lists them.
-pub static BUILTIN: [&Spec; 9] = [&c172::SPEC, &dr400::SPEC, &b747::SPEC, &fa18::SPEC, &f4::SPEC, &f22::SPEC, &starship::SPEC, &concorde::SPEC, &sr71::SPEC];
+pub static BUILTIN: [&Spec; 11] = [&c172::SPEC, &dr400::SPEC, &bonanza::SPEC, &b747::SPEC, &fa18::SPEC, &f4::SPEC, &f22::SPEC, &starship::SPEC, &concorde::SPEC, &sr71::SPEC, &g650::SPEC];
 
 /// Types added while the game runs: JSBSim aircraft the player downloaded
 /// (see hangar.rs), each flying with a stand-in from `BUILTIN` as its body.
@@ -150,7 +235,30 @@ pub struct Tail {
     pub stab_tip: DVec3,
 }
 
-/// A piston engine turning a fixed-pitch propeller.
+/// A propeller governor: past the revs the propeller lever selects it turns
+/// the blades coarser, which loads the engine more, until the revs come back
+/// down; below them it runs the blades back to the fine stop. The blade
+/// setting `coarse` (0 at the fine stop, up to `coarse_max`) scales the
+/// propeller's thrust and power coefficients and its advance ratios by
+/// 1 + gain × coarse (`ct`, `cp`, `j`): a coarser blade bites at a higher
+/// advance ratio, its thrust and power running out further along.
+#[derive(Clone)]
+pub struct Governor {
+    /// the revs (rpm) it holds with the lever right back and fully forward
+    pub rpm: [f64; 2],
+    /// true: a constant-speed propeller, governing with the lever fully
+    /// forward too; false: fully forward is the fine stop and it turns as a
+    /// fixed-pitch propeller there, governing only once the lever comes back
+    pub at_full: bool,
+    pub coarse_max: f64,
+    pub ct: f64,
+    pub cp: f64,
+    pub j: f64,
+    /// how fast the blades move: `coarse` per second per rad/s off the revs selected
+    pub rate: f64,
+}
+
+/// A piston engine turning a fixed-pitch propeller, or one with a governor.
 #[derive(Clone)]
 pub struct Piston {
     /// rated power (W) at rated revs (rad/s)
@@ -172,6 +280,9 @@ pub struct Piston {
     pub fric1: f64,
     /// height of the propeller hub and where a broken blade snaps (body y)
     pub blade_break_y: f32,
+    /// the propeller lever's governor (None: a fixed-pitch propeller, the
+    /// lever does nothing); `ct0` to `j_p` above are then the fine stop's
+    pub governor: Option<Governor>,
 }
 
 /// High-bypass turbofans.
@@ -302,16 +413,20 @@ pub struct Hole {
 /// speeds they are good for, the two flap roles.)
 #[derive(Clone)]
 pub struct Lever {
-    /// what it is called, and each notch (English, French)
-    pub name: [&'static str; 2],
-    pub notches: &'static [[&'static str; 2]],
+    /// the keys (in the language files) of what it is called and of each notch
+    pub name: &'static str,
+    pub notches: &'static [&'static str],
     /// the pieces with the left and the right flap role, as the damage messages name them
     pub parts: [&'static str; 2],
 }
 
 impl Lever {
     pub fn notch(&self, k: u8) -> &'static str {
-        self.notches.get(k as usize).map_or("", |n| n[crate::i18n::is_fr() as usize])
+        self.notches.get(k as usize).map_or("", |n| crate::i18n::tr(n))
+    }
+
+    pub fn label(&self) -> &'static str {
+        crate::i18n::tr(self.name)
     }
 }
 
@@ -347,6 +462,69 @@ pub struct MissileStation {
     pub piece: &'static str,
     pub side: usize,
     pub name: &'static str,
+}
+
+/// A paint scheme the aircraft picker offers for a type (`liveries`). The
+/// shader takes it as `Paint::a` .. `Paint::d` and `Paint::title` (plane.wgsl);
+/// what the colours and the style mean is up to each type's livery function.
+pub struct Livery {
+    pub name: &'static str,
+    /// four colours, linear RGB; `colours[0][3]` is the style (which design
+    /// the type's livery function draws); `colours[1][3]` is overwritten
+    /// (`livery_uniform`); the other w's are free
+    pub colours: [[f32; 4]; 4],
+    /// an airline's name painted on, if the design has one: capitals, digits
+    /// and spaces, at most 15 (glyphs of plane.wgsl's stroke font)
+    pub title: &'static str,
+    /// a paint of its own instead of the type's `Spec::paint`
+    pub paint: Option<&'static Paint>,
+    /// the picker's swatch: its main colour over its trim, linear RGB
+    pub swatch: [[f32; 3]; 2],
+    /// its picture in the aircraft picker (680 x 392), rendered with `--still`
+    /// (assets/aircraft/liveries/stills.sh)
+    pub still: &'static [u8],
+}
+
+/// The paint schemes the picker offers for a type: those painted by the
+/// shader, or baked by script; none for a type that has only its own.
+pub fn liveries(spec: &Spec) -> &'static [Livery] {
+    if std::ptr::eq(spec, &c172::SPEC) { c172::LIVERIES }
+    else if std::ptr::eq(spec, &dr400::SPEC) { dr400::LIVERIES }
+    else if std::ptr::eq(spec, &bonanza::SPEC) { bonanza::LIVERIES }
+    else if std::ptr::eq(spec, &b747::SPEC) { b747::LIVERIES }
+    else if std::ptr::eq(spec, &g650::SPEC) { g650::LIVERIES }
+    else { &[] }
+}
+
+/// The scheme a type starts in (an index of `liveries`).
+pub fn default_livery(spec: &Spec) -> usize {
+    if std::ptr::eq(spec, &c172::SPEC) { c172::DEFAULT_LIVERY } else { 0 }
+}
+
+/// A scheme as the shader's uniform takes it (`Paint::a` .. `Paint::title`):
+/// the four colours, then the title, 8 bits a glyph with its length in the
+/// top byte. `b.w` is the flown type's kind (`Spec::id`) + 1: the uniform is
+/// shared by every aircraft drawn, so other types (multiplayer, wreckage)
+/// keep their own default look (plane.wgsl `livery_ours`). No scheme: all
+/// zero but that (each livery function's style 0).
+pub fn livery_uniform(spec: &Spec, l: Option<&Livery>) -> [u32; 20] {
+    let mut u = [0u32; 20];
+    if let Some(l) = l {
+        for (k, c) in l.colours.iter().flatten().enumerate() {
+            u[k] = c.to_bits();
+        }
+    }
+    u[7] = (spec.id as f32 + 1.0).to_bits();
+    let Some(l) = l else { return u };
+    let n = l.title.chars().count().min(15);
+    for (k, c) in l.title.chars().take(15).enumerate() {
+        u[16 + k / 4] |= b747::deck::glyph(c) << (8 * (k % 4));
+    }
+    for k in n..15 {
+        u[16 + k / 4] |= 15 << (8 * (k % 4));
+    }
+    u[19] |= (n as u32) << 24;
+    u
 }
 
 /// A painted skin: pictures of the aircraft seen from straight above, from
@@ -411,6 +589,8 @@ pub struct Spec {
     pub eye2: Option<Vec3>,
     /// does a view from the eye along this direction see the cabin (rather than out a window)?
     pub sees_inside: fn(Vec3, Vec3) -> bool,
+    /// the cockpit's controls that can be clicked or turned with the mouse wheel
+    pub hotspots: &'static [Hotspot],
     /// points of the fuselage that can touch the ground, and of the tail cone
     pub contacts: &'static [([f64; 3], Part)],
     pub tail_pts: &'static [[f64; 3]],
@@ -480,6 +660,9 @@ pub struct Spec {
     pub lever: Option<Lever>,
     /// how fast the gear goes up or down (fraction per second; 0: fixed gear)
     pub gear_rate: f64,
+    /// the flaps and gear run on electric motors: without power on the bus
+    /// (master off, battery flat and no alternator) they stay where they are
+    pub electric_actuators: bool,
     /// never-exceed speed (m/s indicated) and Mach limit (0: none); flutter sets in at `flutter_v`
     pub vne: f64,
     pub mmo: f64,
@@ -543,6 +726,11 @@ impl Spec {
     pub fn is_jet(&self) -> bool {
         matches!(self.engine, Engine::Fan(_))
     }
+    /// It has a real afterburner or reheat (the boost key works in every
+    /// mode); otherwise boost is the game's own, for arcade mode only.
+    pub fn real_boost(&self) -> bool {
+        matches!(&self.engine, Engine::Fan(f) if f.boost >= 1.2)
+    }
     pub fn rocket(&self) -> Option<&Rocket> {
         match &self.engine {
             Engine::Rocket(r) => Some(r),
@@ -556,5 +744,168 @@ impl Spec {
     }
     pub fn max_notch(&self) -> u8 {
         (self.flaps.len().max(1) - 1) as u8
+    }
+}
+
+#[cfg(test)]
+mod hotspot_tests {
+    use super::*;
+
+    #[test]
+    fn crewed_aircraft_have_bound_and_reachable_flight_controls() {
+        let known = |id: &str| crate::bind::ACTIONS.iter().any(|a| a.id == id) || c172::cabin::MOUSE_ACTIONS.contains(&id);
+        let mut hidden = Vec::new();
+        for spec in BUILTIN {
+            let model = (spec.build)();
+            let controls = cockpit_controls(spec, &model.pieces);
+            if std::ptr::eq(spec, &starship::SPEC) {
+                assert!(controls.is_empty());
+                continue;
+            }
+            for (h, _) in &controls {
+                for id in h.click.iter().chain(h.hold.iter()).chain(h.wheel.iter().flat_map(|w| [&w.0, &w.1])) {
+                    assert!(known(id), "{}: no action {id}", spec.name);
+                }
+            }
+            let mut plane = crate::plane::Plane::spawn(spec, 0.6, -2.1, 1000.0, 0.0, 55.0);
+            let blockers = crate::cockpit::blockers(&model.pieces);
+            for extended in [false, true] {
+                plane.gear_down = extended;
+                plane.throttle = if extended { 0.0 } else { 1.0 };
+                let pose = plane.pose(&model.pieces);
+                let targets = animated_hotspots(&controls, &pose);
+                let target_action = |h: &Hotspot| h.click.or(h.wheel.map(|w| w.0)).or(h.hold);
+                let actions: std::collections::BTreeSet<_> = targets.iter().filter_map(target_action).collect();
+                assert!(actions.contains("throttle_up"));
+                assert_eq!(actions.contains("gear"), spec.gear_rate > 0.0);
+                for action in actions {
+                    let reachable = targets.iter().enumerate().any(|(i, h)| {
+                        if target_action(h) != Some(action) { return false; }
+                        let delta = Vec3::from(h.at) - spec.eye;
+                        let yaw = delta.x.atan2(-delta.z) as f64;
+                        let pitch = (-delta.y / delta.length()).asin() as f64;
+                        // The head moves forward and down when looking at a console.
+                        let mut head = crate::cockpit::Head::new(yaw, pitch);
+                        [(0.0, 0.0), (-0.14, -0.05), (0.14, -0.05), (0.0, -0.22),
+                         (-0.15, -0.35), (0.15, -0.35), (0.0, -0.40)].into_iter().any(|(x, y)| {
+                            head.center_seat();
+                            head.lean_by(x, y);
+                            let view = head.update(spec, 1.0, (yaw, pitch), 58.0, DVec3::ZERO,
+                                glam::DQuat::IDENTITY, DVec3::Y, 1.5, 1.0);
+                            let eye = view.eye.as_vec3();
+                            let ray = Vec3::from(h.at) - eye;
+                            let dir = ray.normalize();
+                            let picked = pick(&targets, eye, dir);
+                            let limit = ray.length() - h.r - 0.005;
+                            let clear = !crate::cockpit::occluded(&model.pieces, &pose, &blockers, eye, dir, limit);
+                            picked == Some(i) && clear
+                        })
+                    });
+                    if !reachable { hidden.push((spec.name, action, extended)); }
+                }
+            }
+        }
+        assert!(hidden.is_empty(), "Unreachable controls {hidden:?}");
+    }
+
+    #[test]
+    fn animated_targets_follow_actual_throttle_and_gear_geometry() {
+        let mut builder = crate::airframe::Builder::default();
+        c172::cabin::build(&mut builder);
+        let pieces = builder.pieces;
+        let mut plane = crate::plane::Plane::spawn(&c172::SPEC,0.6,-2.1,1000.0,0.0,55.0);
+        for state in [0.0,0.5,1.0] {
+            plane.throttle = state;
+            plane.gear_down = state > 0.0;
+            let pose = plane.pose(&pieces);
+            let hs = animated_hotspots(&cockpit_controls(&c172::SPEC, &pieces), &pose);
+            for (name, point, action) in [
+                ("throttle",Vec3::new(0.0,-0.195,c172::cabin::PANEL_Z+0.043),"throttle_up"),
+                ("gear handle",c172::cabin::GEAR_PIVOT + Vec3::Z * 0.05,"gear")
+            ] {
+                let i = pieces.iter().position(|p| p.name == name).unwrap();
+                let visible = pose[i].transform_point3(point);
+                let hit = pick(&hs,c172::SPEC.eye,(visible-c172::SPEC.eye).normalize()).expect(name);
+                assert_eq!(hs[hit].click.or(hs[hit].wheel.map(|w| w.0)),Some(action),"{name} at {state}");
+            }
+        }
+    }
+
+    /// From the pilot's eye, every target is the first one its own ray
+    /// meets, and looking out ahead at the horizon meets none: the static
+    /// `Spec::hotspots` and the ones on moving pieces as they are posed (gear
+    /// down at idle, gear up at full power), as `hotspot_tests` resolves them.
+    #[test]
+    fn the_pilot_can_point_at_every_hotspot() {
+        let mut bad = Vec::new();
+        for s in BUILTIN.iter() {
+            let model = (s.build)();
+            let controls = cockpit_controls(s, &model.pieces);
+            let mut plane = crate::plane::Plane::spawn(s, 0.6, -2.1, 1000.0, 0.0, 55.0);
+            for extended in [true, false] {
+                plane.gear_down = extended;
+                plane.throttle = if extended { 0.0 } else { 1.0 };
+                let targets = animated_hotspots(&controls, &plane.pose(&model.pieces));
+                for (i, h) in targets.iter().enumerate() {
+                    let d = (Vec3::from(h.at) - s.eye).normalize();
+                    let hit = pick(&targets, s.eye, d);
+                    if hit != Some(i) {
+                        let id = |h: &Hotspot| h.click.or(h.wheel.map(|w| w.0)).or(h.hold).unwrap_or("?");
+                        bad.push(format!("{}: {} (gear {}) hidden behind {:?}", s.name, id(h), if extended { "down" } else { "up" }, hit.map(|k| id(&targets[k]))));
+                    }
+                }
+                // Looking out ahead, at the horizon: nothing.
+                if let Some(k) = pick(&targets, s.eye, Vec3::new(0.0, 0.05, -1.0).normalize()) {
+                    bad.push(format!("{}: looking out ahead picks {:?}", s.name, targets[k]));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    /// No vertex of any aircraft may be NaN or infinite, and the bounds (the
+    /// box temporal anti-aliasing tells the aircraft's pixels by) hold every
+    /// solid vertex. A NaN in the C172's door pocket once shrank that box to
+    /// the fuselage, and the wings smeared and stair-stepped in flight.
+    #[test]
+    fn every_vertex_is_finite_and_inside_the_bounds() {
+        let mut bad = Vec::new();
+        for spec in BUILTIN {
+            let model = (spec.build)();
+            let (c, h) = model.bounds();
+            for (i, p) in model.pieces.iter().enumerate() {
+                let nan: Vec<usize> = (0..p.mesh.v.len()).filter(|&k| !Vec3::from(p.mesh.v[k].pos).is_finite()).collect();
+                if let Some(&k) = nan.first() {
+                    let v = &p.mesh.v[k];
+                    bad.push(format!("{}: piece {i} ({}) has {} non-finite vertices (first #{k} of {}, pos {:?}, mat {:?})", spec.name, p.name, nan.len(), p.mesh.v.len(), v.pos, v.mat));
+                }
+                if !p.glass && p.vis != crate::airframe::Vis::Chute {
+                    if let Some(pos) = p.mesh.v.iter().map(|v| Vec3::from(v.pos)).find(|&q| q.is_finite() && ((q - c).abs() - h).max_element() > 1e-3) {
+                        bad.push(format!("{}: piece {i} vertex {pos:?} outside bounds {c:?} ± {h:?}", spec.name));
+                    }
+                }
+            }
+        }
+        assert!(bad.is_empty(), "\n{}", bad.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod boost_tests {
+    use super::*;
+
+    /// Real afterburners and reheat work in every mode; the game's own boost
+    /// (pistons, the 747) is arcade mode's.
+    #[test]
+    fn real_afterburners() {
+        let real: Vec<&str> = BUILTIN.iter().filter(|s| s.real_boost()).map(|s| s.keys[0]).collect();
+        let want: Vec<&str> = BUILTIN.iter().map(|s| s.keys[0]).filter(|k| ["fa18", "f4", "f22", "sr71", "concorde"].iter().any(|w| k.contains(w))).collect();
+        assert_eq!(real, want, "keys: {:?}", BUILTIN.iter().map(|s| s.keys[0]).collect::<Vec<_>>());
+        assert!(!c172::SPEC.real_boost() && !b747::SPEC.real_boost());
     }
 }

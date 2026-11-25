@@ -20,13 +20,14 @@ pub enum Tool {
     SetAircraftConfig,
     SetEngine,
     SetRadios,
+    SetAutopilot,
     SetEnvironment,
     PlaceAircraft,
     TakeScreenshot,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 11] = [
+    pub const ALL: [Tool; 12] = [
         Tool::GetAircraftState,
         Tool::GetNavigation,
         Tool::GetEnvironment,
@@ -35,6 +36,7 @@ impl Tool {
         Tool::SetAircraftConfig,
         Tool::SetEngine,
         Tool::SetRadios,
+        Tool::SetAutopilot,
         Tool::SetEnvironment,
         Tool::PlaceAircraft,
         Tool::TakeScreenshot,
@@ -50,6 +52,7 @@ impl Tool {
             "set_aircraft_config" => Tool::SetAircraftConfig,
             "set_engine" => Tool::SetEngine,
             "set_radios" => Tool::SetRadios,
+            "set_autopilot" => Tool::SetAutopilot,
             "set_environment" => Tool::SetEnvironment,
             "place_aircraft" => Tool::PlaceAircraft,
             "take_screenshot" => Tool::TakeScreenshot,
@@ -67,6 +70,7 @@ impl Tool {
             Tool::SetAircraftConfig => "set_aircraft_config",
             Tool::SetEngine => "set_engine",
             Tool::SetRadios => "set_radios",
+            Tool::SetAutopilot => "set_autopilot",
             Tool::SetEnvironment => "set_environment",
             Tool::PlaceAircraft => "place_aircraft",
             Tool::TakeScreenshot => "take_screenshot",
@@ -83,6 +87,7 @@ impl Tool {
             Tool::SetAircraftConfig => "Change the aircraft's configuration: throttle/power lever, flaps notch or delta, gear, speedbrake, parking brake, mixture and trim. It cannot move the stick. Returns the resulting configuration.",
             Tool::SetEngine => "Start or stop the engine, or set the magnetos/fuel control and the starters. Returns the resulting engine state.",
             Tool::SetRadios => "Tune NAV1 or the ADF by ident or frequency, set the OBS, or set the altimeter setting. Returns the resulting radio state.",
+            Tool::SetAutopilot => "Set the autopilot: engage or disconnect it, pick its lateral mode (hdg, nav: follow NAV1, apr: the ILS localizer and glide slope, roll: wings level) and vertical mode (alt, vs, pitch), and set the heading bug, preselected altitude, vertical speed and the autothrottle's speed. NAV and APR need NAV1 tuned (set_radios). A firm input from the pilot disconnects it. Returns the resulting autopilot state.",
             Tool::SetEnvironment => "Set the weather and/or the clock. Any weather change turns live weather off; any manual time change turns real time off. Returns the new environment.",
             Tool::PlaceAircraft => "Move the aircraft: an airport code with an optional runway or final approach, or an airborne latitude/longitude/altitude/heading/speed. Airport placement loads in the background, so poll get_aircraft_state until it is flying.",
             Tool::TakeScreenshot => "Capture the next rendered frame as a JPEG and return it as an MCP image, plus the path of the saved PNG. Defaults to the current view with the HUD visible. Use after changing the view or when instruments or the outside world matter.",
@@ -166,6 +171,20 @@ impl Tool {
                     "adf": { "type": "string", "description": "ADF station: an NDB ident or its frequency in kHz (377)." },
                     "obs_deg": { "type": "number", "minimum": 0.0, "maximum": 360.0, "description": "OBS course, degrees true." },
                     "altimeter_hpa": { "description": "Altimeter setting in hPa, or the string \"qnh\" to follow the QNH again.", "oneOf": [{ "type": "number", "minimum": 850.0, "maximum": 1100.0 }, { "type": "string", "enum": ["qnh"] }] }
+                },
+                "additionalProperties": false
+            }),
+            Tool::SetAutopilot => json!({
+                "type": "object",
+                "properties": {
+                    "engaged": { "type": "boolean", "description": "Autopilot on (true) or off (false)." },
+                    "lateral": { "type": "string", "enum": ["hdg", "nav", "gps", "apr", "roll"], "description": "Lateral mode (gps follows the flight plan made on the start screen)." },
+                    "vertical": { "type": "string", "enum": ["alt", "vs", "pitch"], "description": "Vertical mode (the glide slope comes with apr)." },
+                    "heading_deg": { "type": "number", "minimum": 0.0, "maximum": 360.0, "description": "Heading bug, degrees true." },
+                    "altitude_ft": { "type": "number", "minimum": 0.0, "maximum": 80000.0, "description": "Preselected altitude, feet: ALT holds it when reached, VS levels off there." },
+                    "vs_fpm": { "type": "number", "minimum": -6000.0, "maximum": 6000.0, "description": "Vertical speed for VS, ft/min." },
+                    "autothrottle": { "type": "boolean", "description": "Autothrottle holding speed_kt." },
+                    "speed_kt": { "type": "number", "minimum": 40.0, "maximum": 2000.0, "description": "Indicated airspeed the autothrottle holds, knots." }
                 },
                 "additionalProperties": false
             }),
@@ -265,6 +284,19 @@ pub struct RadiosArgs {
     pub adf: Option<String>,
     pub obs_deg: Option<f64>,
     pub altimeter_hpa: Option<Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutopilotArgs {
+    pub engaged: Option<bool>,
+    pub lateral: Option<String>,
+    pub vertical: Option<String>,
+    pub heading_deg: Option<f64>,
+    pub altitude_ft: Option<f64>,
+    pub vs_fpm: Option<f64>,
+    pub autothrottle: Option<bool>,
+    pub speed_kt: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -4,8 +4,8 @@
 //! it and a third on the pedestal between the knees; the integrated control
 //! panel (a keypad) under the wide HUD, an up-front display each side of it;
 //! the standby flight group and the landing gear handle at the panel's
-//! edges. A side-stick on the right console behind its armrest, one broad
-//! throttle grip for both engines on the left, an ACES II seat with its
+//! edges. A side-stick on the right console behind its armrest, a
+//! pair of throttle grips on the left, an ACES II seat with its
 //! yellow ejection handles either side of the pan.
 //!
 //! The seat, the pedals and the widgets on the panels are the Hornet's
@@ -14,6 +14,7 @@
 //! the Hornet's pages too (pit18.wgsl `display18`) and its combiner the same
 //! symbology (`hud18`, plane.wgsl `F22_HUD`). Everything here is body frame
 //! (+X right, +Y up, -Z forward).
+use crate::aircraft::Hotspot;
 use super::*;
 use crate::aircraft::b747::deck::{legend_mat, rect, screen_quad, sid, style, Face};
 use crate::aircraft::fa18::pit as hp;
@@ -111,7 +112,7 @@ pub fn build(b: &mut Builder) {
     b.fixed("instrument panel", G_ENGINE, p);
 
     let mut c = Mesh::default();
-    consoles(&mut c);
+    consoles(&mut c, b);
     b.fixed("consoles", G_ENGINE, c);
 
     let mut s = Mesh::default();
@@ -268,16 +269,13 @@ fn main_panel(m: &mut Mesh, f: &Face) {
     hp::word(m, f, 0.360, -0.103, 0.0026, "MASTER ARM");
     hp::word(m, f, 0.360, -0.150, 0.0026, "EMERG JETT");
     // Down the left edge: the fire light, the landing gear's position lights
-    // beside the handle's slot, the flap switch.
+    // beside the handle's slot.
     hp::light(m, f, -0.360, 0.008, 0.022, 0.010, sid("FIRE"), &RED_LENS);
     hp::word(m, f, -0.360, -0.006, 0.0026, "LDG GEAR");
     for (i, s) in ["NOSE", "LEFT", "RIGHT"].iter().enumerate() {
         hp::light(m, f, -0.342, -0.022 - i as f32 * 0.018, 0.012, 0.0065, sid(s), &GREEN_LENS);
     }
     m.rbox(&mt(mat::BLACK, 0.004, 0.004, 0.004), f.at_h(GEAR_U, GEAR_V, 0.0), Vec3::new(0.005, 0.034, 0.002), 0.002, f.rot());
-    hp::toggle(m, f, -0.360, -0.125, true);
-    hp::word(m, f, -0.360, -0.103, 0.0026, "FLAPS");
-    hp::word(m, f, -0.360, -0.150, 0.0024, "AUTO");
 }
 
 /// A standby instrument in its black case, the face under a raised rim.
@@ -391,7 +389,7 @@ fn combiner(m: &mut Mesh) {
 /// The throttle's two slots in the Hornet's quadrant, here.
 const THR_X: [f32; 2] = [hp::THR_X[0], hp::THR_X[1]];
 
-fn consoles(m: &mut Mesh) {
+fn consoles(m: &mut Mesh, b: &mut Builder) {
     let xo = |z: f32| wall_x(z) + 0.004;
     for s in [-1.0f32, 1.0] {
         // Inner side down to the floor, the front facing the pedals, the back.
@@ -441,7 +439,11 @@ fn consoles(m: &mut Mesh) {
     let wf = Face::new(Vec3::new(wall_x(z) - 0.001, CON_Y + 0.085, z), Vec3::Z, Vec3::Y);
     hp::word(m, &wf, 0.0, 0.0, 0.004, "CANOPY");
     m.rbox(&BLK, wf.at_h(0.0, -0.024, 0.004), Vec3::new(0.02, 0.014, 0.004), 0.003, wf.rot());
-    hp::toggle(m, &wf.sub(0.0, -0.024, 0.008), 0.0, 0.0, true);
+    let mut canopy = Mesh::default();
+    hp::toggle(&mut canopy, &wf.sub(0.0, -0.024, 0.008), 0.0, 0.0, true);
+    let pivot = wf.at_h(0.0, -0.024, 0.008);
+    let piece = b.add("canopy switch", G_ENGINE, canopy, Anim::hinge(Drive::new(Input::Canopy, 0.74)), pivot, wf.ax, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(wf.n() * 0.0145 + wf.ay * 0.0055, 0.012, "canopy"));
 }
 
 // ---------------------------------------------------------------- the seat
@@ -486,10 +488,13 @@ fn controls(b: &mut Builder, f: &Face) {
     stick(&mut st);
     b.add("stick", G_ENGINE, st, Anim::hinge(Drive::new(Input::Roll, -0.10)), STICK, Vec3::Z, Some(g));
 
-    // The throttle: an arm up through each slot to the one grip.
-    let mut t = Mesh::default();
-    throttle(&mut t);
-    b.add("throttle", G_ENGINE, t, Anim::hinge(Drive::new(Input::Throttle, -0.55).offset(0.30)), THR_PIVOT, Vec3::X, None);
+    for (engine, x) in THR_X.into_iter().enumerate() {
+        let pivot = Vec3::new(x, THR_PIVOT.y, THR_PIVOT.z);
+        let mut grip = Mesh::default();
+        throttle(&mut grip, pivot, engine == 1);
+        let piece = b.add("throttle", G_ENGINE, grip, Anim::hinge(Drive::new(Input::Throttle, -0.55).offset(0.30)), pivot, Vec3::X, None);
+        b.pieces[piece].hotspot = Some(Hotspot::wheel(Vec3::new(0.0, 0.294, -0.010), 0.020, "throttle_up", "throttle_down"));
+    }
 
     // The landing gear handle: a wheel-shaped knob (red light inside) on an arm moving up and down its slot.
     let w = f.sub(GEAR_U, GEAR_V, 0.0);
@@ -499,11 +504,12 @@ fn controls(b: &mut Builder, f: &Face) {
     let c = arm_top + w.n() * 0.004;
     gh.lathe(&mt(mat::PLASTIC, 0.75, 0.74, 0.70), c - w.ax * 0.012, w.ax, &[[0.0, 0.0], [0.016, 0.0], [0.019, 0.003], [0.019, 0.021], [0.016, 0.024], [0.0, 0.024]], 22, false);
     gh.lathe(&RED_LENS, c - w.ax * 0.013, w.ax, &[[0.0, 0.0], [0.009, 0.0], [0.009, 0.026], [0.0, 0.026]], 14, false);
-    b.add("gear handle", G_ENGINE, gh, Anim::slide(Drive::new(Input::GearHandle, 0.028), w.ay), w.o, Vec3::X, None);
+    let piece = b.add("gear handle", G_ENGINE, gh, Anim::slide(Drive::new(Input::GearHandle, -0.028), w.ay), w.o, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(c - w.o, 0.021, "gear"));
 
     // The Hornet's rudder pedals and the box they hang from.
     let mut h = Builder::default();
-    hp::controls(&mut h);
+    hp::controls(&mut h, 0.0);
     for mut p in h.pieces {
         if p.name == "rudder pedal" || p.name == "pedal box" {
             p.mesh.transform(0, Mat4::from_translation(D));
@@ -531,19 +537,18 @@ fn stick(m: &mut Mesh) {
     m.rbox(&BLK, s0 + Vec3::new(-0.002, 0.030, -0.020), Vec3::new(0.010, 0.009, 0.004), 0.002, Quat::from_rotation_x(0.3));
 }
 
-/// The throttle: both engines under one broad grip, its switches under the fingers and thumb.
-fn throttle(m: &mut Mesh) {
+/// One grip per engine, with the thumb controls on the inboard grip.
+fn throttle(m: &mut Mesh, pivot: Vec3, inboard: bool) {
     let steel = mt(mat::STEEL, 0.25, 0.25, 0.26);
-    for x in THR_X {
-        m.rbox(&steel, Vec3::new(x, THR_PIVOT.y + 0.17, THR_PIVOT.z), Vec3::new(0.005, 0.08, 0.012), 0.003, Quat::IDENTITY);
-    }
+    m.rbox(&steel, pivot + Vec3::Y * 0.17, Vec3::new(0.005, 0.08, 0.012), 0.003, Quat::IDENTITY);
     let grip = mt(mat::PLASTIC, 0.024, 0.024, 0.026);
-    let c = THR_PIVOT + Vec3::new(0.0, 0.270, -0.008);
-    m.rbox(&grip, c, Vec3::new(0.038, 0.040, 0.034), 0.016, Quat::from_rotation_x(-0.15));
-    m.rbox(&grip, c + Vec3::new(0.0, 0.030, -0.024), Vec3::new(0.034, 0.016, 0.022), 0.012, Quat::from_rotation_x(-0.5));
+    let c = pivot + Vec3::new(0.0, 0.270, -0.008);
+    m.rbox(&grip, c, Vec3::new(0.016, 0.040, 0.034), 0.016, Quat::from_rotation_x(-0.15));
+    m.rbox(&grip, c + Vec3::new(0.0, 0.030, -0.024), Vec3::new(0.016, 0.016, 0.022), 0.012, Quat::from_rotation_x(-0.5));
+    if !inboard { return; }
     // Speedbrake (a slide switch) and a comm hat on the inboard side, the cursor pad on top.
-    m.rbox(&BLK, c + Vec3::new(0.040, 0.014, -0.012), Vec3::new(0.003, 0.012, 0.004), 0.0015, Quat::IDENTITY);
-    m.lathe(&BLK, c + Vec3::new(0.038, -0.010, 0.006), Vec3::X, &[[0.004, 0.0], [0.004, 0.003], [0.0, 0.004]], 10, false);
+    m.rbox(&BLK, c + Vec3::new(0.017, 0.014, -0.012), Vec3::new(0.003, 0.012, 0.004), 0.0015, Quat::IDENTITY);
+    m.lathe(&BLK, c + Vec3::new(0.017, -0.010, 0.006), Vec3::X, &[[0.004, 0.0], [0.004, 0.003], [0.0, 0.004]], 10, false);
     m.lathe(&mt(mat::RUBBER, 0.05, 0.05, 0.05), c + Vec3::new(-0.008, 0.046, -0.030), Vec3::new(0.0, 1.0, -0.4).normalize(), &[[0.0065, 0.0], [0.0065, 0.003], [0.005, 0.005], [0.0, 0.0055]], 12, false);
 }
 

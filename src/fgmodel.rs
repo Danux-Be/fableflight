@@ -198,6 +198,9 @@ fn parse_ac(text: &str) -> Result<Ac, String> {
 
 // ------------------------------------------------------------------ textures
 
+/// The largest SGI image we decode (8192 x 8192): past any aircraft texture.
+const SGI_MAX_PIXELS: usize = 8192 * 8192;
+
 /// An SGI image (.rgb, .rgba, .sgi, .bw), as FlightGear's older models use.
 fn read_sgi(d: &[u8]) -> Option<image::RgbaImage> {
     if d.len() < 512 || u16::from_be_bytes([d[0], d[1]]) != 474 {
@@ -208,6 +211,10 @@ fn read_sgi(d: &[u8]) -> Option<image::RgbaImage> {
         return None; // only 8 bits a channel
     }
     let (w, h, zs) = (u16::from_be_bytes([d[6], d[7]]) as usize, u16::from_be_bytes([d[8], d[9]]) as usize, u16::from_be_bytes([d[10], d[11]]).max(1) as usize);
+    // (the header's own word for its size: up to 65535 x 65535 x 65535 bytes to allocate)
+    if w == 0 || h == 0 || zs > 4 || w * h > SGI_MAX_PIXELS {
+        return None;
+    }
     let mut ch = vec![vec![0u8; w * h]; zs];
     if rle {
         let tab = |i: usize| -> usize { let o = 512 + i * 4; u32::from_be_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]]) as usize };
@@ -312,11 +319,24 @@ struct Obj {
 
 struct Loader<'a> {
     ext: &'a Ext,
+    /// Canonical root of the aircraft folder; all resolved model and texture
+    /// paths must stay inside this directory.
+    root: PathBuf,
+    /// Active XML include stack (prevents cycles) and total model load count
+    /// (prevents exponential DAG fan-out).
+    stack: Vec<PathBuf>,
+    loads: usize,
     acs: Vec<(Ac, PathBuf, Mat4)>,
     objs: Vec<Obj>,
     anims: Vec<AnimDef>,
     order: usize,
     warn: Vec<String>,
+}
+
+/// Canonicalizes `candidate` and returns it only if it exists and stays inside `root`.
+fn contain(root: &Path, candidate: &Path) -> Option<PathBuf> {
+    let canon = std::fs::canonicalize(candidate).ok()?;
+    canon.starts_with(root).then_some(canon)
 }
 
 fn num(n: roxmltree::Node, k: &str) -> Option<f32> {
@@ -412,42 +432,53 @@ fn offsets(n: Option<roxmltree::Node>) -> Mat4 {
 const AC_TO_FG: Mat4 = Mat4::from_cols_array(&[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
 
 impl<'a> Loader<'a> {
-    /// A path as a model file writes it: relative to that file, or from the FlightGear root (`Aircraft/...`).
+    /// A path as a model file writes it: relative to that file, or from the
+    /// FlightGear root (`Aircraft/...`), always contained inside the aircraft folder.
     fn resolve(&self, base: &Path, p: &str) -> Option<PathBuf> {
         let p = p.trim();
-        if let Some(rest) = p.strip_prefix("Aircraft/") {
+        let q = if let Some(rest) = p.strip_prefix("Aircraft/") {
             let mut it = rest.splitn(2, '/');
             let (dir, sub) = (it.next()?, it.next()?);
             // Only the aircraft's own files: FlightGear's shared ones aren't here.
             if !dir.eq_ignore_ascii_case(&self.ext.fg_dir) {
                 return None;
             }
-            let q = self.ext.dir.join(sub);
-            return q.exists().then_some(q);
-        }
-        let q = base.join(p);
-        q.exists().then_some(q)
+            self.ext.dir.join(sub)
+        } else {
+            base.join(p)
+        };
+        contain(&self.root, &q)
     }
 
     /// Loads a model file (or a bare .ac) placed by `xf`; returns the objects it brought in.
     fn load(&mut self, path: &Path, xf: Mat4, level: usize) -> Vec<usize> {
-        if level > 8 {
+        const MAX_LOADS: usize = 512;
+        if level > 8 || self.loads >= MAX_LOADS {
             return Vec::new();
         }
-        let ext_l = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-        if ext_l == "ac" {
-            return self.load_ac(path, xf, level).map(|(r, _)| r).unwrap_or_default();
+        let Some(canon) = contain(&self.root, path) else {
+            self.warn.push(format!("{}: outside aircraft folder", path.display()));
+            return Vec::new();
+        };
+        if self.stack.contains(&canon) {
+            return Vec::new();
         }
-        let Ok(text) = std::fs::read_to_string(path) else {
-            self.warn.push(format!("{}: unreadable", path.display()));
+        self.loads += 1;
+        let ext_l = canon.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if ext_l == "ac" {
+            return self.load_ac(&canon, xf, level).map(|(r, _)| r).unwrap_or_default();
+        }
+        let Ok(text) = std::fs::read_to_string(&canon) else {
+            self.warn.push(format!("{}: unreadable", canon.display()));
             return Vec::new();
         };
         let Ok(doc) = roxmltree::Document::parse(&text) else {
-            self.warn.push(format!("{}: bad XML", path.display()));
+            self.warn.push(format!("{}: bad XML", canon.display()));
             return Vec::new();
         };
+        self.stack.push(canon.clone());
         let root = doc.root_element();
-        let base = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let base = canon.parent().unwrap_or(Path::new(".")).to_path_buf();
         let xf = xf * offsets(root.children().find(|c| c.has_tag_name("offsets")));
         let mut mine: Vec<usize> = Vec::new();
         // name -> objects, for this file's animations
@@ -506,6 +537,7 @@ impl<'a> Loader<'a> {
                 self.objs[o].chain.push(((level, d as f32, self.order), id));
             }
         }
+        self.stack.pop();
         mine
     }
 
@@ -677,7 +709,8 @@ impl Ext {
     /// Reads the model and builds ours from it.
     pub fn build(&self) -> Result<Model, String> {
         let t0 = std::time::Instant::now();
-        let mut ld = Loader { ext: self, acs: Vec::new(), objs: Vec::new(), anims: Vec::new(), order: 0, warn: Vec::new() };
+        let root = std::fs::canonicalize(&self.dir).unwrap_or_else(|_| self.dir.clone());
+        let mut ld = Loader { ext: self, root, stack: Vec::new(), loads: 0, acs: Vec::new(), objs: Vec::new(), anims: Vec::new(), order: 0, warn: Vec::new() };
         ld.load(&self.model, Mat4::IDENTITY, 0);
         if ld.objs.is_empty() {
             return Err(format!("its model {} has nothing in it", self.model.display()));
@@ -698,7 +731,10 @@ impl Ext {
                 continue;
             }
             // (a missing .png is often there as .rgb, and the other way round)
-            let found = [p.clone(), p.with_extension("png"), p.with_extension("rgb"), p.with_extension("jpg"), p.with_extension("dds")].into_iter().find_map(|q| read_texture(&q));
+            let found = [p.clone(), p.with_extension("png"), p.with_extension("rgb"), p.with_extension("jpg"), p.with_extension("dds")]
+                .into_iter()
+                .filter_map(|q| contain(&ld.root, &q))
+                .find_map(|q| read_texture(&q));
             match found {
                 Some(img) => {
                     tex_ids.insert(p, images.len() as i32);
@@ -869,7 +905,7 @@ impl Ext {
                         let d = &ld.anims[id];
                         let (anim, pivot, axis) = to_anim(d, self.origin);
                         let role = if d.prop { Role::Prop } else if let Some(l) = d.gear_leg { Role::Gear(l.min(crate::aircraft::MAX_GEAR as u8 - 1)) } else { d.surface.unwrap_or(Role::Other) };
-                        pieces.push(Piece { name: "fg", mesh: Mesh::default(), group, parent, pivot, axis, anim, role, vis: Vis::Always, glass: false, occluder: true });
+                        pieces.push(Piece { hotspot: None, name: "fg", mesh: Mesh::default(), group, parent, pivot, axis, anim, role, vis: Vis::Always, glass: false, occluder: true });
                         node_of.insert(k, pieces.len() - 1);
                         pieces.len() - 1
                     }
@@ -883,7 +919,7 @@ impl Ext {
                 // Merge into a piece with the same parent, group, glass and visibility.
                 match pieces.iter().position(|p| p.name == "fg mesh" && p.parent == parent && p.group == group && p.glass == is_glass && p.vis == vis && p.role == role) {
                     Some(i) => pieces[i].mesh.append(&mesh),
-                    None => pieces.push(Piece { name: "fg mesh", mesh, group, parent, pivot: Vec3::ZERO, axis: Vec3::X, anim: Anim::Fixed, role, vis, glass: is_glass, occluder: !is_glass }),
+                    None => pieces.push(Piece { hotspot: None, name: "fg mesh", mesh, group, parent, pivot: Vec3::ZERO, axis: Vec3::X, anim: Anim::Fixed, role, vis, glass: is_glass, occluder: !is_glass }),
                 }
             }
         }
@@ -936,6 +972,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sgi_header_cannot_ask_for_gigabytes() {
+        // 65535 x 65535, 65535 channels, 8 bits: a 512-byte file asking for terabytes.
+        let mut d = vec![0u8; 512];
+        d[..4].copy_from_slice(&[0x01, 0xda, 0, 1]);
+        d[6..12].copy_from_slice(&[0xff; 6]);
+        assert!(read_sgi(&d).is_none());
+    }
+
+    #[test]
     fn ac_hierarchy_and_frames() {
         let ac = "AC3Db\nMATERIAL \"m\" rgb 1 0.5 0.25  amb 0.2 0.2 0.2  emis 0 0 0  spec 0 0 0  shi 10  trans 0\nOBJECT world\nkids 1\nOBJECT poly\nname \"wing\"\nloc 1 0 0\nnumvert 3\n0 0 0\n0 1 0\n0 0 1\nnumsurf 1\nSURF 0x10\nmat 0\nrefs 3\n0 0 0\n1 1 0\n2 0 1\nkids 0\n";
         let a = parse_ac(ac).unwrap();
@@ -969,5 +1014,30 @@ mod tests {
         assert_eq!(condition(doc.root_element()), (false, Some(true)));
         let doc = roxmltree::Document::parse("<condition><not><property>sim/model/damaged</property></not></condition>").unwrap();
         assert!(condition(doc.root_element()).0);
+    }
+
+    #[test]
+    fn model_paths_cannot_escape_aircraft_dir_or_loop() {
+        let dir = std::env::temp_dir().join(format!("fable-fgmodel-sec-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let aircraft = dir.join("myplane");
+        std::fs::create_dir_all(&aircraft).unwrap();
+        let outside = dir.join("secret.xml");
+        std::fs::write(&outside, "<PropertyList/>").unwrap();
+        // Self-referencing model XML plus traversal attempt outside `myplane`.
+        let model = aircraft.join("main.xml");
+        std::fs::write(
+            &model,
+            "<PropertyList><model><path>../secret.xml</path></model><model><path>main.xml</path></model><model><path>main.xml</path></model></PropertyList>",
+        )
+        .unwrap();
+        let ext = Ext { dir: aircraft.clone(), fg_dir: "myplane".into(), model: model.clone(), origin: Vec3::ZERO, steer_max: 0.5, travel: Vec::new(), span: 10.0 };
+        let root = std::fs::canonicalize(&aircraft).unwrap();
+        let mut ld = Loader { ext: &ext, root: root.clone(), stack: Vec::new(), loads: 0, acs: Vec::new(), objs: Vec::new(), anims: Vec::new(), order: 0, warn: Vec::new() };
+        assert!(ld.resolve(&aircraft, "../secret.xml").is_none(), "traversal must be refused");
+        assert!(ld.resolve(&aircraft, "main.xml").is_some(), "in-folder file must resolve");
+        ld.load(&model, Mat4::IDENTITY, 0);
+        assert_eq!(ld.loads, 1, "self-include cycle must be stopped immediately");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

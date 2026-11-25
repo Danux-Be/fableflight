@@ -4,12 +4,12 @@ These instructions apply throughout this repository.
 
 ## Model requirements
 
-- Substantial work requires Claude Opus 5.5, GPT-6 Astra, Claude Fable, or another model established to have equivalent or greater capability. Do not infer capability from a higher version number alone.
+- Substantial work requires Claude Opus 5.5, GPT-6 Astra, Claude Fable, Gemini 4 Neon or another model established to have equivalent or greater capability. Do not infer capability from a higher version number alone.
 - Sonnet models, GPT-6.1 Terra and Luna, and models below that capability level may only make simple fixes, reviews, tests, or add very simple features. Examples include a typo correction, a small isolated bug fix with an obvious solution, or a minor UI adjustment. 
 - Aircraft creation, substantial aircraft changes, flight-model tuning, complex graphics work, architectural changes, and broad refactors are not simple tasks.
 - Before substantive investigation or changes, check the model identity supplied by the runtime. If you do not meet the requirement, or cannot establish that you do, stop unless the task clearly falls within the simple-work exception. Do not split a complex task into small edits to bypass this rule.
 - When stopping, tell the user: "This task needs a stronger model. Please switch to Opus 5.5, GPT-6 Astra, Fable, or an equivalent or more capable model."
-
+- Agents, sign your model name at the end of your commit messages
 ## Learn from the existing aircraft
 
 Read the closest existing aircraft before adding or substantially changing one. Reuse the project's integration patterns while verifying real-world accuracy independently; existing values are not authoritative aircraft specifications.
@@ -37,6 +37,24 @@ Read the closest existing aircraft before adding or substantially changing one. 
 - Drive implemented gauges, displays, annunciators, and animated controls from the appropriate simulated state. Document any controls or systems that remain decorative or simplified.
 - Check the cockpit from the seated pilot's view and exterior views for scale, visibility, clipping, and fit inside the airframe.
 
+## Clickable cockpit
+
+Every crewed aircraft's cockpit can be worked with the mouse, and with the gamepad's aim dot, from the cockpit view. The pilot looks at a control, such as the throttle, and clicks it, holds it, or turns the wheel on it. This only works if each clickable target sits exactly on the control the pilot sees. New aircraft must include it, and substantial cockpit changes must keep it working. See PRs #33 (C172), #57 (DR 400) and #58 (747), and use `src/aircraft/dr400/cabin.rs`, `src/aircraft/b747/deck.rs` and `src/aircraft/fa18/pit.rs` as the examples.
+
+- **How it works:** `aircraft::Hotspot` is a sphere in the body frame. Its `click`, `hold` and `wheel` fields name action ids from `bind::ACTIONS`, or from `c172::cabin::MOUSE_ACTIONS` for actions that only the mouse can do. A hotspot does exactly what that action's key does, so do not add separate game logic for the mouse. `aircraft::pick` finds the nearest sphere along the pointer ray. `cockpit::occluded` then rejects any hit that lies behind solid cockpit geometry.
+- **Attach hotspots to their pieces:** build each control as its own named `Builder` piece and set `b.pieces[piece].hotspot = Some(Hotspot::click/hold/wheel(...))`. The position is an offset from the piece's pivot. This way the target moves with the lever, knob or switch as it animates. Only use `Spec::hotspots` (body-frame, static) for targets that never move, and give those a real moving piece where possible.
+- **Accurate placement:** put the sphere's centre on the part the pilot would grab, such as the throttle knob, the key head, the switch toggle or the lever's grip. Do not put it on the pivot or the base. Make the radius roughly the size of that grip, about 1–4 cm. Avoid spheres that overlap a neighbouring control, so that the nearest pick never chooses the wrong one. Keep the visible geometry, pivot, axis, travel and hotspot consistent with one another and with the real cockpit layout.
+- **Match the real control's interaction:**
+  - `click` is for toggles and detented switches: master, gear, parking brake, canopy, speedbrake, fuel control.
+  - `hold` is for spring-loaded or momentary controls: the starter, the key to START, toe brakes, reverse levers.
+  - `wheel` is for continuous or notched controls: throttle, mixture, propeller, trim, flaps (one detent per notch), OBS and radio tuning.
+  - Several identical controls, such as four thrust levers or two fuel switches, each get their own hotspot.
+- **Moving controls show their state:** a clickable control should be an animated piece driven by the simulated state, using `Anim`/`Drive` with an `Input` such as `Throttle`, `GearHandle`, `ParkingBrake`, `Master`, `Ignition` or `Mixture`. Its position should always match the setting. Add an `Input` or a `Plane` field if you need one, rather than leaving the control static.
+- **Reachable and not clicked through:** the pilot must be able to aim at every hotspot from `Spec::eye`, using the normal head movement and lean, without a panel, glareshield, yoke, stick or seat in the way. If a cockpit's solid parts are not covered by the name list in `cockpit::blockers`, add them there, so that the mouse cannot click a control through a panel. Looking out ahead at the horizon must not hit any hotspot.
+- **Labels and state:** the hover label is the action's `action.<id>` key in `assets/locales/*.lng`, for `bind::ACTIONS` and for the mouse-only actions (`c172::cabin::action_label`) alike. The setting shown under the pointer comes from `hot_state` in `src/main.rs`. For any new action, add both: the `action.<id>` key in `eng.lng` (and `fr.lng`), and its `hot_state`. See `docs/translating.md`.
+- **Coverage:** at minimum, provide throttle(s), gear (on retractable-gear types), flaps, parking brake, the engine start controls (master/battery, ignition or fuel control, starter) and the aircraft's other primary controls. It should be possible to do a cold-and-dark start with the mouse alone wherever the simulated systems support one. Document the controls that remain unclickable or decorative.
+- **Verification:** `cargo test` runs `hotspot_tests` in `src/aircraft/mod.rs`. These tests check that every action exists, that throttle and gear targets are present, and that every control can be reached and seen from the pilot's eye with gear up and down. In the game, hover over every control from the seat and check the ring, the label and the state. Then try them with `--cursor`, `--click SEC[,HELD[,X,Y]]` and `--wheel SEC,N[,X,Y]`, and confirm that each one moves its piece and changes the simulated state.
+
 ## Exterior realism
 
 - Match the real aircraft's silhouette and construction, including intakes, exhausts, doors, access panels, control-surface gaps, gear wells, lights, and antennas.
@@ -44,6 +62,18 @@ Read the closest existing aircraft before adding or substantially changing one. 
 - Use appropriate paint, glass, rubber, fabric, and metal finishes. Base wear, markings, and liveries on references; identify fictional liveries as fictional.
 - Give moving parts correct pivots, axes, travel, and timing. Check the full movement of gear, doors, flaps, control surfaces, propellers, and canopies for interference and clipping.
 - Preserve exporter piece names, material identifiers, and animation/damage mappings. Read each Blender script's rebuild instructions before using it; a procedural rebuild can overwrite manual `.blend` edits. Keep source assets and exported assets consistent.
+
+## Liveries
+
+Paint schemes are offered in the hangar's aircraft picker (`src/hangar_ui.rs`). Use `c172::LIVERIES`, `dr400::LIVERIES`, `b747::LIVERIES` and `g650::LIVERIES` as the examples.
+
+- **How it works:** each type lists `aircraft::Livery` entries and is registered in `aircraft::liveries` (and `default_livery` if the default is not index 0). `livery_uniform` packs the four `colours` and the `title` into the shader's `PT` uniform. The type's livery function in `src/shaders/plane.wgsl` (`livery`, `livery_dr400`, `livery747`, ...) paints the design from the body-frame rest position, so the paint stays put on moving parts.
+- **Fields:** `colours` are linear RGB, not sRGB. `colours[0][3]` picks the design (the style the shader function draws); `colours[1][3]` is overwritten by `livery_uniform`; the other w's are free. `title` is an airline name in capitals, digits and spaces, at most 15 characters (the stroke-font glyphs). `swatch` is the picker's main colour over its trim. `paint` gives the scheme its own baked `Paint` instead of `Spec::paint`, like the G650's plain white skin.
+- **Shader schemes versus baked paint:** Rust-built aircraft draw their schemes procedurally in the shader. Blender aircraft use a baked `Paint` JPEG (top, bottom and side views, laid out from the GUIDE_* constants in the type's Blender script). A scheme on a baked type usually needs a plain bake without markings, with the shader adding the scheme over it. Gate new shader code with `livery_ours()` and `livery_style()` so that other aircraft drawn at the same time (multiplayer, traffic, wreckage) keep their own look.
+- **Placement:** follow the real aircraft's paint breaks, which line up with its panel lines, cheatlines, window belt, fin and engine cowls. Keep registrations and titles readable, the right way round on both sides, and clear of doors, windows and control-surface gaps. Respect the material: no metal sheen on the DR400's fabric, and keep paint off glass, rubber, and bare metal parts such as leading edges or exhausts where the real aircraft leaves them bare.
+- **Real versus fictional:** do not reproduce real airline or operator branding, logos or trademarks. Airline schemes use fictional carriers (such as Orivante and Kestralis, which can be shared across types). A historical or generic scheme based on references should be described as such in comments, and the comment should say which liveries are fictional.
+- **Picker picture:** every scheme needs a `still` (680 x 392 PNG in `assets/aircraft/liveries/`). Add the type's key and the picture names, in the same order as `LIVERIES`, to `assets/aircraft/liveries/stills.sh`, then run `cargo build --release && sh assets/aircraft/liveries/stills.sh <key>`.
+- **Verification:** run `cargo check` and `cargo test --test shaders`. Then select each scheme in the picker, or launch with `--aircraft <key> --livery <n>`, and look at it from several exterior angles and in the cockpit view. Check colours in daylight and at dusk, that markings line up across moving surfaces, and that another type flying nearby is unchanged.
 
 ## Flight behavior
 

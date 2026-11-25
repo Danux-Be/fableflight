@@ -134,6 +134,10 @@ pub struct Damage {
     pub fatigue: f32,
     pub flutter: f32,
     pub flap_stress: f32,
+    /// Persistent soft-body dent: body-frame impact center and support radius (m).
+    pub crumple: [f32; 4],
+    /// Direction the impact pushed into the airframe (xyz) and plastic dent depth (m).
+    pub crumple_dir: [f32; 4],
 }
 
 impl Damage {
@@ -163,6 +167,8 @@ impl Damage {
             fatigue: 0.0,
             flutter: 0.0,
             flap_stress: 0.0,
+            crumple: [0.0; 4],
+            crumple_dir: [0.0; 4],
         }
     }
 }
@@ -519,11 +525,13 @@ pub struct Shed {
     bounces: u8,
     resting: bool,
     sunk: bool,
+    track_prev: Option<DVec3>,
 }
 
 #[derive(Default)]
 pub struct Sheds {
     pub items: Vec<Shed>,
+    pub snow_marks: Vec<crate::snowtrack::Mark>,
 }
 
 impl Sheds {
@@ -608,6 +616,7 @@ impl Sheds {
                 bounces: 0,
                 resting: false,
                 sunk: false,
+                track_prev: None,
             });
             if first {
                 first = false;
@@ -655,9 +664,11 @@ impl Sheds {
             let (lat, lon, h) = geo::pos_to_lla(s.pos);
             let Some(g) = world.ground(lat, lon) else { continue };
             let mut floor = (g.h, g.water);
+            let mut on_building = false;
             if let Some(b) = world.building(lat, lon) {
                 if h < b.top + 1.0 && (!b.bridge || h > b.base) {
                     floor = (b.top, false);
+                    on_building = true;
                 }
             }
             let r = s.radius * 0.3;
@@ -667,6 +678,24 @@ impl Sheds {
                     continue;
                 }
                 s.pos += upw * (floor.0 + r - h);
+                if !on_building {
+                    let at = s.pos - upw * r;
+                    let radius = (s.radius as f32 * 0.55).clamp(0.28, 1.8);
+                    match s.track_prev {
+                        Some(p0) => {
+                            if (at - p0).length_squared() >= 0.12 * 0.12 {
+                                self.snow_marks.push(crate::snowtrack::Mark { a: p0, b: at, radius, clear: 0.88, berm: 0.80, rough: 0.75 });
+                                s.track_prev = Some(at);
+                            }
+                        }
+                        None => {
+                            self.snow_marks.push(crate::snowtrack::Mark { a: at, b: at, radius, clear: 0.88, berm: 0.80, rough: 0.75 });
+                            s.track_prev = Some(at);
+                        }
+                    }
+                } else {
+                    s.track_prev = None;
+                }
                 let vn = s.vel.dot(upw);
                 let tang = s.vel - upw * vn;
                 if vn < -2.0 && s.bounces < 2 {
@@ -682,6 +711,8 @@ impl Sheds {
                     s.vel = DVec3::ZERO;
                     s.omega = DVec3::ZERO;
                 }
+            } else {
+                s.track_prev = None;
             }
         }
         self.items.retain(|s| !s.sunk && s.age < 300.0);

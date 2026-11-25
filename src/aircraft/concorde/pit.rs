@@ -18,6 +18,7 @@
 //! model (concorde.py, mirrored by `fuse_at`), with the windscreen's and the
 //! side windows' openings left in it. Everything here is body frame (+X
 //! right, +Y up, -Z forward).
+use crate::aircraft::Hotspot;
 use super::*;
 use crate::aircraft::b747::deck::{legend_mat, rect, sid, style, Face};
 use crate::aircraft::c172::cabin::gauge;
@@ -53,7 +54,7 @@ const INSET: f32 = 0.045;
 /// stations; two side windows each side, between these angles.
 const WS_A: f32 = FRAC_PI_4;
 const WS_Z: [f32; 2] = [-25.3, -23.7];
-const SW_A: [f32; 2] = [0.3927, 0.8836];
+const SW_A: [f32; 2] = [std::f32::consts::FRAC_PI_8, 0.8836];
 const SW_Z: [[f32; 2]; 2] = [[-23.45, -23.02], [-22.94, -22.5]];
 
 /// A point `inset` inside the skin at station z, at angle a round the section
@@ -673,7 +674,8 @@ fn controls(b: &mut Builder, f: &Face) {
         let kc = piv + Vec3::new(0.0, 0.297, -0.008);
         m.lathe(&mt(mat::PLASTIC, 0.035, 0.035, 0.037), kc - Vec3::X * 0.017, Vec3::X, &[[0.0, 0.0], [0.014, 0.0], [0.016, 0.004], [0.013, 0.010], [0.013, 0.024], [0.016, 0.030], [0.014, 0.034], [0.0, 0.034]], 16, true);
         m.rbox(&mt(mat::PLASTIC, 0.02, 0.02, 0.022), piv + Vec3::new(0.0, 0.25, -0.022), Vec3::new(0.005, 0.028, 0.005), 0.002, Quat::from_rotation_x(-0.15));
-        b.add("thrust lever", G_ENGINE, m, Anim::hinge(Drive::new(Input::Throttle, -0.55).offset(0.28)), piv, Vec3::X, None);
+        let piece = b.add("thrust lever", G_ENGINE, m, Anim::hinge(Drive::new(Input::Throttle, -0.55).offset(0.28)), piv, Vec3::X, None);
+        b.pieces[piece].hotspot = Some(Hotspot::wheel(kc - piv, 0.018, "throttle_up", "throttle_down"));
     }
 
     for sx in [-1.0f32, 1.0] {
@@ -711,7 +713,8 @@ fn controls(b: &mut Builder, f: &Face) {
             let tilt = Quat::from_rotation_x(-0.35);
             p.rbox(&mt(mat::ALU, 0.35, 0.35, 0.36), pc + Vec3::new(0.0, 0.0, 0.01), Vec3::new(0.045, 0.085, 0.008), 0.006, tilt);
             p.rbox(&RUBBER.pat(pat::KNURL), pc + Vec3::new(0.0, 0.0, 0.019), Vec3::new(0.04, 0.075, 0.0025), 0.002, tilt);
-            b.add("rudder pedal", G_ENGINE, p, Anim::hinge(Drive::new(Input::Yaw, dx.signum() * 0.18)), pv, Vec3::X, None);
+            let piece = b.add("rudder pedal", G_ENGINE, p, Anim::hinge2(Drive::new(Input::Yaw, dx.signum() * 0.18), Drive::new(Input::Brake(dx.signum()), 0.14)), pv, Vec3::X, None);
+            b.pieces[piece].hotspot = Some(Hotspot::hold(pc - pv, 0.038, if dx < 0.0 { "brake_left" } else { "brake_right" }));
         }
     }
 
@@ -723,7 +726,8 @@ fn controls(b: &mut Builder, f: &Face) {
     let c = arm_top + w.n() * 0.004;
     gh.lathe(&mt(mat::PLASTIC, 0.75, 0.74, 0.70), c - w.ax * 0.012, w.ax, &[[0.0, 0.0], [0.016, 0.0], [0.019, 0.003], [0.019, 0.021], [0.016, 0.024], [0.0, 0.024]], 20, false);
     gh.lathe(&RED_LENS, c - w.ax * 0.013, w.ax, &[[0.0, 0.0], [0.009, 0.0], [0.009, 0.026], [0.0, 0.026]], 12, false);
-    b.add("gear lever", G_ENGINE, gh, Anim::slide(Drive::new(Input::GearHandle, 0.028), w.ay), w.o, Vec3::X, None);
+    let piece = b.add("gear lever", G_ENGINE, gh, Anim::slide(Drive::new(Input::GearHandle, -0.028), w.ay), w.o, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(c - w.o, 0.021, "gear"));
 
     // The nose and visor lever: hinged behind the panel, its knob in the slot
     // (up: nose and visor up; down by detents to the nose fully drooped).
@@ -732,7 +736,8 @@ fn controls(b: &mut Builder, f: &Face) {
     let mut nl = Mesh::default();
     nl.tube(&STEEL, &[piv, v.at_h(0.0, 0.0, 0.035)], &|_| 0.004, 8, false);
     nl.rbox(&mt(mat::PLASTIC, 0.72, 0.70, 0.66), v.at_h(0.0, 0.0, 0.043), Vec3::new(0.014, 0.009, 0.010), 0.004, v.rot());
-    b.add("nose lever", G_ENGINE, nl, Anim::hinge(Drive::new(Input::FlapLever, 0.80).offset(-0.40)), piv, Vec3::X, None);
+    let piece = b.add("nose lever", G_ENGINE, nl, Anim::hinge(Drive::new(Input::FlapLever, 0.80).offset(-0.40)), piv, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::wheel(v.at_h(0.0, 0.0, 0.043) - piv, 0.016, "flaps_up", "flaps_down"));
 
     // The nose wheel's tiller on the captain's side console.
     let mut t = Mesh::default();

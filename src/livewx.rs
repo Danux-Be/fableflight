@@ -47,12 +47,21 @@ pub struct Target {
     /// nimbostratus rain deck); 0 = none
     pub rain: f32,
     pub haze: f32,
+    /// the winds aloft at the model's pressure levels (empty: none to be had)
+    pub aloft: Vec<crate::weather::Aloft>,
     /// m/s, and where from (None: variable)
     pub wind: f64,
     pub wind_from: Option<f64>,
     pub gusts: f64,
     /// sea-level pressure, hPa (None: not reported)
     pub qnh: Option<f64>,
+    /// freezing level (m above sea level) from the surface temperature
+    /// (None: not reported)
+    pub freezing: Option<f64>,
+    /// snow blown up off the ground (METAR BLSN 1, DRSN 0.5), 0..1
+    pub blowing: f32,
+    /// surface relative humidity (0..1) from temperature and dew point when reported
+    pub humidity: Option<f32>,
     /// what it came from, for the weather panel: "EBBR" or "Open-Meteo",
     /// and the report itself (the raw METAR)
     pub station: String,
@@ -97,6 +106,7 @@ impl LiveWx {
     /// the last frame (s; 0 jumps straight to the report, as on the globe).
     pub fn step(&mut self, src: &Arc<Sources>, wx: &mut Weather, at: Option<(f64, f64)>, dt: f64) {
         if !wx.live {
+            wx.aloft.clear();
             self.settled = false;
             if self.owns_rain {
                 self.owns_rain = false;
@@ -107,6 +117,9 @@ impl LiveWx {
             }
             // Hand-set weather: the standard atmosphere.
             wx.qnh = 1013.25;
+            wx.freezing = None;
+            wx.blowing = 0.0;
+            wx.humidity = None;
             return;
         }
         let (got, radar) = {
@@ -172,11 +185,24 @@ impl LiveWx {
             (wx.deck_goal, wx.deck_tau) = (None, 6.0);
         }
         self.owns_rain = true;
+        // The winds aloft eased in like the rest (a new report must not jolt
+        // the aircraft), level by level in components.
+        let lat = at.map_or(0.0, |(la, _)| la.to_radians());
+        ease_aloft(wx, &t.aloft, lat, k);
         wx.wind += (t.wind - wx.wind) * k;
         wx.gusts += (t.gusts - wx.gusts) * k;
         if let Some(q) = t.qnh {
             wx.qnh += (q - wx.qnh) * k;
         }
+        wx.blowing = t.blowing;
+        wx.humidity = match (wx.humidity, t.humidity) {
+            (Some(a), Some(b)) => Some(a + (b - a) * k as f32),
+            (_, b) => b,
+        };
+        wx.freezing = match (wx.freezing, t.freezing) {
+            (Some(a), Some(b)) => Some(a + (b - a) * k),
+            (_, b) => b,
+        };
         if let Some(from) = t.wind_from {
             let d = (from - wx.wind_from + 540.0).rem_euclid(360.0) - 180.0;
             wx.wind_from = (wx.wind_from + d * k).rem_euclid(360.0);
@@ -206,7 +232,7 @@ impl LiveWx {
         let age = (now - r.time).clamp(0, RADAR_STALE) as f64;
         let cloud = |lat: f64, lon: f64| {
             let p = geo::lla_to_pos(lat.to_radians(), lon.to_radians(), 0.0);
-            let drift = wx.steady(p, 2000.0) * 1.6 * age;
+            let drift = wx.cloud_drift(p) * 1.6 * age;
             (p.normalize() * 6371.0 + (wx.cloud_off + drift) / 1000.0).normalize() * 6371.0
         };
         // A squall line stands as one (the shaders draw it across the wind
@@ -404,10 +430,19 @@ fn spawn(src: Arc<Sources>, shared: Arc<Mutex<Shared>>) {
                     Some((t, q)) => t.elapsed().as_secs_f64() > REFRESH || dist_km(p, q) > MOVE_KM,
                 };
                 if due {
-                    let res = metar(&src, p).or_else(|e| {
-                        log::info!("live weather: {e}; using Open-Meteo");
-                        open_meteo(&src, p)
-                    });
+                    let res = metar(&src, p)
+                        .or_else(|e| {
+                            log::info!("live weather: {e}; using Open-Meteo");
+                            open_meteo(&src, p)
+                        })
+                        .map(|mut t| {
+                            // The winds aloft from the model, where it answers.
+                            match winds_aloft(&src, p) {
+                                Ok(a) => t.aloft = a,
+                                Err(e) => log::info!("live weather: no winds aloft ({e})"),
+                            }
+                            t
+                        });
                     let mut s = shared.lock();
                     match res {
                         Ok(t) => {
@@ -514,6 +549,7 @@ fn from_metar(m: &serde_json::Value) -> Option<Target> {
     let clouds = if p.showers > 0.0 { clouds.max(0.45) } else { clouds };
     let foggy = ["FG", "BR", "HZ", "FU", "DU", "SA"].iter().any(|w| wx.contains(w));
     Some(Target {
+        aloft: Vec::new(),
         clouds,
         base_m,
         depth_m: depth(clouds, storms),
@@ -526,6 +562,9 @@ fn from_metar(m: &serde_json::Value) -> Option<Target> {
         wind_from,
         gusts: gust.map(|g| ((g - wind) / 8.0).clamp(0.0, 1.0)).unwrap_or(0.1),
         qnh: m["altim"].as_f64().filter(|q| (850.0..1100.0).contains(q)),
+        freezing: freezing_for(m["temp"].as_f64().filter(|t| (-80.0..60.0).contains(t)).map(|t| crate::snow::freezing_level(t, elev)), elev, p.snow),
+        blowing: p.blowing,
+        humidity: rh_from_td(m["temp"].as_f64(), m["dewp"].as_f64()),
         station,
         raw,
     })
@@ -534,11 +573,39 @@ fn from_metar(m: &serde_json::Value) -> Option<Target> {
 /// What falls, from a METAR's present weather ("-SHRA BR", "+TSRA", "DZ").
 #[derive(Debug, PartialEq)]
 struct Precip {
-    /// the rain deck (the Rain slider), 0..1
+    /// the rain deck (the Rain slider), 0..1: rain, or snow as heavy
     rain: f32,
     /// showers: the storm-cell slider they want (convective cloud), 0 = none
     showers: f32,
     thunder: bool,
+    /// how much of what falls is snow, when the report says (None: nothing
+    /// falls); 1 snow, snow grains or ice pellets, 0 rain or freezing rain
+    snow: Option<f32>,
+    /// snow blown up off the ground: BLSN 1, DRSN (drifting, low) 0.5
+    blowing: f32,
+}
+
+/// Surface relative humidity (0..1) from temperature and dew point (°C) via Magnus-Tetens.
+fn rh_from_td(temp_c: Option<f64>, dew_c: Option<f64>) -> Option<f32> {
+    let (t, d) = (temp_c?, dew_c?);
+    if !((-80.0..60.0).contains(&t) && (-90.0..60.0).contains(&d)) {
+        return None;
+    }
+    let es = |c: f64| (17.625 * c / (243.04 + c)).exp();
+    Some((es(d) / es(t)).clamp(0.05, 1.0) as f32)
+}
+
+/// The freezing level (m) moved, if need be, so that what the report says is
+/// falling at the station (height `elev`, m) falls as that: snow, rain or a mix.
+fn freezing_for(freezing: Option<f64>, elev: f64, snow: Option<f32>) -> Option<f64> {
+    let Some(s) = snow else { return freezing };
+    // (snow.rs `snow_share`: all snow 50 m under the freezing level, all rain 450 m under it.)
+    let at = elev + 50.0 + (1.0 - s as f64) * 400.0;
+    Some(match freezing {
+        Some(f) if s >= 0.99 => f.min(at),
+        Some(f) if s <= 0.01 => f.max(at),
+        _ => at,
+    })
 }
 
 /// Rain deck amount for each intensity (light, moderate, heavy): drizzle
@@ -549,7 +616,9 @@ const DRIZZLE: [f32; 3] = [0.12, 0.18, 0.25];
 const CONVECTIVE_DECK: f32 = 0.5;
 
 fn precip(wx: &str) -> Precip {
-    let mut p = Precip { rain: 0.0, showers: 0.0, thunder: false };
+    let mut p = Precip { rain: 0.0, showers: 0.0, thunder: false, snow: None, blowing: 0.0 };
+    // (rain amount, snow amount) falling here, to tell the mix.
+    let (mut wet, mut white) = (0.0f32, 0.0f32);
     for tok in wx.split_whitespace() {
         let (level, rest) = match tok.as_bytes().first() {
             Some(b'-') => (0, &tok[1..]),
@@ -563,12 +632,29 @@ fn precip(wx: &str) -> Precip {
         let ts = has("TS");
         let sh = has("SH");
         p.thunder |= ts;
+        // Blowing (BL) or drifting (DR) snow is lifted off the ground, not falling.
+        if has("BL") || has("DR") {
+            if has("SN") && near {
+                p.blowing = p.blowing.max(if has("BL") { 1.0 } else { 0.5 });
+            }
+            continue;
+        }
         let mut r = 0.0f32;
         if has("RA") {
             r = RAIN[level];
         } else if has("DZ") {
             r = DRIZZLE[level];
         }
+        // Snow (SN), snow grains (SG), ice pellets (PL), snow pellets (GS):
+        // as thick as rain of the same strength to the eye.
+        let w = if has("SN") || has("PL") { RAIN[level] } else if has("SG") || has("GS") { DRIZZLE[level] } else { 0.0 };
+        if near {
+            wet = wet.max(if has("FZ") { r.max(w) } else { r });
+            if !has("FZ") {
+                white = white.max(w);
+            }
+        }
+        r = r.max(w);
         if sh && !ts {
             // stronger showers, taller and more cells
             p.showers = p.showers.max(if near { [0.25, 0.35, 0.5][level] } else { 0.2 });
@@ -576,6 +662,9 @@ fn precip(wx: &str) -> Precip {
         if near && r > 0.0 {
             p.rain = p.rain.max(if ts || sh { r * CONVECTIVE_DECK } else { r });
         }
+    }
+    if wet + white > 0.0 {
+        p.snow = Some(white / (wet + white));
     }
     p
 }
@@ -608,10 +697,82 @@ fn haze(vis_km: Option<f64>, foggy: bool) -> f32 {
     }
 }
 
+/// Ease the weather's winds aloft towards the report's `target` levels by
+/// `k` (0..1). A report with a different set of levels first has the wind
+/// now sampled at its heights, so nothing jumps; a report with none (the
+/// model did not answer) eases towards the made-up profile and then drops
+/// the old levels, rather than keeping winds from wherever they were read.
+fn ease_aloft(wx: &mut Weather, target: &[crate::weather::Aloft], lat: f64, k: f64) {
+    use crate::weather::Aloft;
+    // (The levels are a kilometre and more up: the ground is taken at sea level.)
+    let sample = |wx: &Weather, alt: f64| {
+        let (speed, from) = wx.profile(lat, alt, alt);
+        Aloft { alt, speed, from }
+    };
+    let goal: Vec<Aloft> = if target.is_empty() {
+        if wx.aloft.is_empty() {
+            return;
+        }
+        let saved = std::mem::take(&mut wx.aloft);
+        let made_up = saved.iter().map(|l| sample(wx, l.alt)).collect();
+        wx.aloft = saved;
+        made_up
+    } else {
+        target.to_vec()
+    };
+    if wx.aloft.len() != goal.len() {
+        let now: Vec<Aloft> = goal.iter().map(|l| sample(wx, l.alt)).collect();
+        wx.aloft = now;
+    }
+    let v = |l: &Aloft| glam::DVec2::from_angle(l.from.to_radians()) * l.speed;
+    let mut off = 0.0f64;
+    for (a, b) in wx.aloft.iter_mut().zip(&goal) {
+        let w = v(a) + (v(b) - v(a)) * k;
+        a.alt += (b.alt - a.alt) * k;
+        a.speed = w.length();
+        a.from = w.to_angle().to_degrees().rem_euclid(360.0);
+        off = off.max((v(b) - w).length());
+    }
+    if target.is_empty() && off < 0.3 {
+        wx.aloft.clear();
+    }
+}
+
+/// The pressure levels the winds aloft are read at (hPa): about 1.5, 3, 5.5,
+/// 9 and 10.4 km up.
+const LEVELS: [u32; 5] = [850, 700, 500, 300, 250];
+
+/// The winds aloft at the player's spot, from Open-Meteo's model for this hour.
+fn winds_aloft(src: &Sources, (lat, lon): (f64, f64)) -> Result<Vec<crate::weather::Aloft>, String> {
+    let vars: Vec<String> = LEVELS.iter().flat_map(|l| [format!("wind_speed_{l}hPa"), format!("wind_direction_{l}hPa"), format!("geopotential_height_{l}hPa")]).collect();
+    let url = format!("https://api.open-meteo.com/v1/forecast?latitude={lat:.3}&longitude={lon:.3}&hourly={}&forecast_hours=1&wind_speed_unit=ms", vars.join(","));
+    let j = get_json(src, &url)?;
+    let a = aloft_from(&j);
+    if a.is_empty() { Err("unreadable Open-Meteo levels".into()) } else { Ok(a) }
+}
+
+/// The levels Open-Meteo gave (each its first hour), lowest first; a level
+/// missing any of its three values is left out.
+fn aloft_from(j: &serde_json::Value) -> Vec<crate::weather::Aloft> {
+    let h = &j["hourly"];
+    let first = |k: String| h[k.as_str()].get(0).and_then(|v| v.as_f64());
+    let mut out: Vec<crate::weather::Aloft> = LEVELS
+        .iter()
+        .filter_map(|l| {
+            let speed = first(format!("wind_speed_{l}hPa"))?;
+            let from = first(format!("wind_direction_{l}hPa"))?;
+            let alt = first(format!("geopotential_height_{l}hPa"))?;
+            (speed.is_finite() && (0.0..150.0).contains(&speed) && (0.0..20000.0).contains(&alt)).then_some(crate::weather::Aloft { alt, speed, from: from.rem_euclid(360.0) })
+        })
+        .collect();
+    out.sort_by(|a, b| a.alt.total_cmp(&b.alt));
+    out
+}
+
 /// Open-Meteo's model where there is no METAR near.
 fn open_meteo(src: &Sources, (lat, lon): (f64, f64)) -> Result<Target, String> {
     let url = format!(
-        "https://api.open-meteo.com/v1/forecast?latitude={lat:.3}&longitude={lon:.3}&current=temperature_2m,dew_point_2m,cloud_cover_low,cloud_cover_mid,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,weather_code,rain,showers,pressure_msl&wind_speed_unit=ms"
+        "https://api.open-meteo.com/v1/forecast?latitude={lat:.3}&longitude={lon:.3}&current=temperature_2m,dew_point_2m,cloud_cover_low,cloud_cover_mid,wind_speed_10m,wind_direction_10m,wind_gusts_10m,visibility,weather_code,rain,showers,snowfall,pressure_msl&wind_speed_unit=ms"
     );
     let j = get_json(src, &url)?;
     from_open_meteo(&j).ok_or_else(|| "unreadable Open-Meteo answer".to_string())
@@ -631,13 +792,20 @@ fn from_open_meteo(j: &serde_json::Value) -> Option<Target> {
     };
     let storms = match code {
         95..=99 => 0.75,
-        80 => 0.25,
+        80 | 85 => 0.25,
         81 => 0.35,
-        82 => 0.5,
+        82 | 86 => 0.5,
         _ => 0.0,
     };
-    // WMO weather codes: drizzle 51-57, rain 61-67, showers 80-82, storms 95-99.
+    // WMO weather codes: drizzle 51-57, rain 61-67, snow 71-77, showers 80-82,
+    // snow showers 85-86, storms 95-99.
     let by_code = match code {
+        71 => RAIN[0],
+        73 => RAIN[1],
+        75 => RAIN[2],
+        77 => DRIZZLE[1],
+        85 => RAIN[0] * CONVECTIVE_DECK,
+        86 => RAIN[2] * CONVECTIVE_DECK,
         51 | 56 => DRIZZLE[0],
         53 => DRIZZLE[1],
         55 | 57 => DRIZZLE[2],
@@ -653,23 +821,36 @@ fn from_open_meteo(j: &serde_json::Value) -> Option<Target> {
     // heavy from 7.6.
     let mm = f("rain").unwrap_or(0.0) + f("showers").unwrap_or(0.0);
     let by_amount = if mm < 0.1 { 0.0 } else if mm < 2.5 { RAIN[0] } else if mm < 7.6 { RAIN[1] } else { RAIN[2] };
-    let rain = if by_code > 0.0 || (50..=99).contains(&code) { by_code } else { by_amount };
+    // Snowfall (cm/h): about a centimetre an hour is moderate snow.
+    let cm = f("snowfall").unwrap_or(0.0);
+    let by_snow = if cm < 0.05 { 0.0 } else if cm < 0.5 { RAIN[0] } else if cm < 2.0 { RAIN[1] } else { RAIN[2] };
+    let rain = if by_code > 0.0 || (50..=99).contains(&code) { by_code } else { by_amount.max(by_snow) };
+    let snow = match code {
+        71..=77 | 85 | 86 => Some(1.0),
+        51..=67 | 80..=82 | 95..=99 => Some(if cm > 0.05 && mm > 0.1 { 0.5 } else if cm > 0.05 { 1.0 } else { 0.0 }),
+        _ if rain > 0.0 => Some(if mm < 0.1 { 1.0 } else if by_snow > 0.0 { 0.5 } else { 0.0 }),
+        _ => None,
+    };
     let clouds = if low > 0.05 { low } else { mid * 0.6 }.max(0.03);
-    let clouds = if (80..=82).contains(&code) { clouds.max(0.45) } else { clouds };
+    let clouds = if matches!(code, 80..=82 | 85 | 86) { clouds.max(0.45) } else { clouds };
     let wind = f("wind_speed_10m")?;
     Some(Target {
+        aloft: Vec::new(),
         clouds,
         base_m: base,
         depth_m: depth(clouds, storms),
         alto: mid,
         storms,
-        showers_only: (80..=82).contains(&code),
+        showers_only: matches!(code, 80..=82 | 85 | 86),
         rain,
         haze: haze(f("visibility").map(|v| v / 1000.0), matches!(code, 45 | 48)),
         wind,
         wind_from: f("wind_direction_10m"),
         gusts: f("wind_gusts_10m").map(|g| ((g - wind) / 8.0).clamp(0.0, 1.0)).unwrap_or(0.1),
         qnh: f("pressure_msl").filter(|q| (850.0..1100.0).contains(q)),
+        freezing: freezing_for(f("temperature_2m").filter(|t| (-80.0..60.0).contains(t)).map(|t| crate::snow::freezing_level(t, elev)), elev, snow),
+        blowing: 0.0,
+        humidity: rh_from_td(f("temperature_2m"), f("dew_point_2m")),
         station: "Open-Meteo".into(),
         raw: String::new(),
     })
@@ -680,10 +861,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn winds_aloft_ease_in_and_out_without_jumps() {
+        use crate::weather::Aloft;
+        let lat = 50f64.to_radians();
+        let mut wx = Weather::new(0.1);
+        (wx.wind, wx.wind_from) = (6.0, 240.0);
+        let report = vec![Aloft { alt: 1500.0, speed: 12.0, from: 250.0 }, Aloft { alt: 5500.0, speed: 30.0, from: 290.0 }, Aloft { alt: 9300.0, speed: 50.0, from: 300.0 }];
+        let probe = |wx: &Weather| wx.profile(lat, 7000.0, 7000.0).0;
+        // A first report, then a step of it: only a little of the way.
+        let before = probe(&wx);
+        ease_aloft(&mut wx, &report, lat, 0.05);
+        assert_eq!(wx.aloft.len(), 3);
+        assert!((probe(&wx) - before).abs() < 0.1 * (39.0 - before).abs() + 0.5, "{before} -> {}", probe(&wx));
+        ease_aloft(&mut wx, &report, lat, 1.0);
+        assert!(wx.aloft.iter().zip(&report).all(|(a, b)| (a.alt - b.alt).abs() < 1e-9 && (a.speed - b.speed).abs() < 1e-9 && (a.from - b.from).abs() < 1e-9));
+        // The model stops answering: it eases back to the made-up profile, then lets go.
+        let mut last = probe(&wx);
+        for _ in 0..300 {
+            ease_aloft(&mut wx, &[], lat, 0.05);
+            let p = probe(&wx);
+            assert!((p - last).abs() < 2.0, "{last} -> {p}");
+            last = p;
+        }
+        assert!(wx.aloft.is_empty());
+    }
+
+    #[test]
+    fn winds_aloft_from_open_meteo() {
+        // The shape Open-Meteo's hourly answer has (one hour); 500 hPa missing its height.
+        let j = serde_json::json!({"hourly":{"time":["2026-11-19T22:00"],
+            "wind_speed_850hPa":[12.5],"wind_direction_850hPa":[250.0],"geopotential_height_850hPa":[1480.0],
+            "wind_speed_700hPa":[18.0],"wind_direction_700hPa":[262.0],"geopotential_height_700hPa":[3050.0],
+            "wind_speed_500hPa":[27.0],"wind_direction_500hPa":[270.0],"geopotential_height_500hPa":[null],
+            "wind_speed_300hPa":[45.0],"wind_direction_300hPa":[275.0],"geopotential_height_300hPa":[9300.0],
+            "wind_speed_250hPa":[52.0],"wind_direction_250hPa":[-80.0],"geopotential_height_250hPa":[10500.0]}});
+        let a = aloft_from(&j);
+        assert_eq!(a.len(), 4);
+        assert_eq!((a[0].alt, a[0].speed, a[0].from), (1480.0, 12.5, 250.0));
+        assert_eq!(a[3].from, 280.0);
+        assert!(a.windows(2).all(|w| w[0].alt < w[1].alt));
+    }
+
+    #[test]
     fn metar() {
-        let m = serde_json::json!({"icaoId":"EGLL","rawOb":"METAR EGLL 151720Z 24015G28KT 9999 -TSRA FEW012 BKN025CB OVC080 12/10 Q1002","altim":1002,"elev":25,"wdir":240,"wspd":15,"wgst":28,"visib":"6+","wxString":"-TSRA","clouds":[{"cover":"FEW","base":1200},{"cover":"BKN","base":2500},{"cover":"OVC","base":8000}]});
+        let m = serde_json::json!({"icaoId":"EGLL","rawOb":"METAR EGLL 151720Z 24015G28KT 9999 -TSRA FEW012 BKN025CB OVC080 12/10 Q1002","altim":1002,"elev":25,"temp":12,"wdir":240,"wspd":15,"wgst":28,"visib":"6+","wxString":"-TSRA","clouds":[{"cover":"FEW","base":1200},{"cover":"BKN","base":2500},{"cover":"OVC","base":8000}]});
         let t = from_metar(&m).unwrap();
         assert_eq!((t.station.as_str(), t.qnh), ("EGLL", Some(1002.0)));
+        // 12 °C at 25 m: the freezing level about 1850 m up (snow.rs).
+        assert!((t.freezing.unwrap() - (25.0 + 12.0 / 0.0065)).abs() < 1e-6);
         assert_eq!(t.wind_from, Some(240.0));
         assert!((t.wind - 15.0 / 1.94384).abs() < 1e-6);
         assert!(t.gusts > 0.8);
@@ -717,6 +942,28 @@ mod tests {
     }
 
     #[test]
+    fn reports_set_the_freezing_level() {
+        // +2 °C at 500 m would put the freezing level 300 m up, all snow there;
+        // the report says rain: it goes up to where rain reaches the ground.
+        let warm = freezing_for(Some(800.0), 500.0, Some(0.0)).unwrap();
+        assert!((crate::snow::snow_share(500.0, warm)).abs() < 1e-9, "{warm}");
+        // Snow reported at +3 °C (wet bulb): brought down to snow at the station.
+        let s = freezing_for(Some(960.0), 500.0, Some(1.0)).unwrap();
+        assert!((crate::snow::snow_share(500.0, s) - 1.0).abs() < 1e-9, "{s}");
+        // A mix: half and half.
+        let m = freezing_for(Some(3000.0), 500.0, Some(0.5)).unwrap();
+        assert!((crate::snow::snow_share(500.0, m) - 0.5).abs() < 1e-9);
+        // Nothing falling: the temperature alone; snow with no temperature: at the station.
+        assert_eq!(freezing_for(Some(1234.0), 500.0, None), Some(1234.0));
+        assert_eq!(freezing_for(None, 500.0, Some(1.0)), Some(550.0));
+        // Open-Meteo: moderate snow at the grid cell.
+        let j = serde_json::json!({"elevation":37.0,"current":{"temperature_2m":1.0,"dew_point_2m":0.0,"cloud_cover_low":100,"cloud_cover_mid":100,"wind_speed_10m":17.0,"wind_direction_10m":20,"wind_gusts_10m":25.0,"visibility":400.0,"weather_code":73,"rain":0.0,"showers":0.0,"snowfall":1.2,"pressure_msl":1008.0}});
+        let t = from_open_meteo(&j).unwrap();
+        assert_eq!(t.rain, RAIN[1]);
+        assert!(crate::snow::snow_share(37.0, t.freezing.unwrap()) > 0.99);
+    }
+
+    #[test]
     fn present_weather() {
         let p = |s| precip(s);
         assert_eq!(p("").rain, 0.0);
@@ -730,7 +977,19 @@ mod tests {
         assert_eq!(p("-DZ RA").rain, RAIN[1]);
         assert!(p("+DZ").rain < p("-RA").rain);
         assert_eq!(p("-RASN").rain, RAIN[0]);
-        assert_eq!(p("SN").rain, 0.0);
+        assert_eq!(p("-RASN").snow, Some(0.5));
+        assert_eq!((p("SN").rain, p("SN").snow), (RAIN[1], Some(1.0)));
+        assert_eq!((p("+SHSN").rain, p("+SHSN").showers, p("+SHSN").snow), (RAIN[2] * CONVECTIVE_DECK, 0.5, Some(1.0)));
+        assert_eq!(p("-FZRA").snow, Some(0.0));
+        assert_eq!(p("RA").snow, Some(0.0));
+        assert_eq!(p("BR").snow, None);
+        // Blowing snow alone: nothing falls, but it blows.
+        let bl = p("BLSN");
+        assert_eq!((bl.rain, bl.snow, bl.blowing), (0.0, None, 1.0));
+        let bz = p("+SN BLSN");
+        assert_eq!((bz.rain, bz.snow, bz.blowing), (RAIN[2], Some(1.0), 1.0));
+        assert_eq!(p("-SN DRSN").blowing, 0.5);
+        assert_eq!(p("VCBLSN").blowing, 0.0);
         let sh = p("+SHRA");
         assert_eq!((sh.rain, sh.showers, sh.thunder), (RAIN[2] * CONVECTIVE_DECK, 0.5, false));
         let ts = p("TSRA");
@@ -757,6 +1016,8 @@ mod tests {
         assert_eq!(t.base_m, Some(300.0));
         assert_eq!(t.wind_from, Some(203.0));
         assert_eq!(t.station, "Open-Meteo");
+        // 10 °C at the grid cell's 37 m.
+        assert!((t.freezing.unwrap() - (37.0 + 10.0 / 0.0065)).abs() < 1e-6);
 
         let om = |code: u32, rain: f64, showers: f64| {
             let j = serde_json::json!({"elevation":0.0,"current":{"cloud_cover_low":30,"cloud_cover_mid":0,"wind_speed_10m":3.0,"weather_code":code,"rain":rain,"showers":showers}});

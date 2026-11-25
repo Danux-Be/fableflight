@@ -72,8 +72,12 @@ fn path() -> Option<PathBuf> {
 
 impl Display {
     pub fn load() -> Self {
-        let j: serde_json::Value = path().and_then(|p| std::fs::read(p).ok()).and_then(|d| serde_json::from_slice(&d).ok()).unwrap_or_default();
-        Self::from_json(&j)
+        match path().and_then(|p| std::fs::read(p).ok()).and_then(|d| serde_json::from_slice::<serde_json::Value>(&d).ok()) {
+            Some(j) => Self::from_json(&j),
+            // Not chosen here yet: the full-screen switch in settings.json
+            // (Settings, General; on by default) says window or full screen.
+            None => Display { mode: if crate::settings::Settings::load().fullscreen { Mode::Fullscreen } else { Mode::Windowed }, ..Self::default() },
+        }
     }
     fn from_json(j: &serde_json::Value) -> Self {
         let d = Self::default();

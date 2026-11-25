@@ -15,7 +15,7 @@
 //! Google key (gmaps.rs).
 use crate::menu::{self, ACCENT, DIM, TEXT};
 use crate::padui::{self, Hint};
-use crate::{bind, gmaps, i18n, t, tiles3d, Game};
+use crate::{bind, geo, gmaps, i18n, mp, mp_proto, padmap, t, tiles3d, Game};
 use egui::{pos2, vec2, Align, Align2, Color32, Layout, Painter, Pos2, Rect, RichText, Sense, Stroke, Ui};
 
 /// The widest the content column gets, however wide the window.
@@ -30,10 +30,11 @@ pub enum Section {
     Camera,
     Controls,
     Map,
+    Multiplayer,
 }
 
 impl Section {
-    pub const ALL: [Section; 6] = [Section::General, Section::Graphics, Section::Sound, Section::Camera, Section::Controls, Section::Map];
+    pub const ALL: [Section; 7] = [Section::General, Section::Graphics, Section::Sound, Section::Camera, Section::Controls, Section::Map, Section::Multiplayer];
 
     /// The name the command line goes by (`--settings graphics`, `--pause-menu settings:graphics`).
     pub fn name(self) -> &'static str {
@@ -44,28 +45,31 @@ impl Section {
             Section::Camera => "camera",
             Section::Controls => "controls",
             Section::Map => "map",
+            Section::Multiplayer => "multiplayer",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Section::General => t!("General", "Général"),
-            Section::Graphics => t!("Graphics", "Graphismes"),
-            Section::Sound => t!("Sound", "Son"),
-            Section::Camera => t!("Camera and view", "Caméra et vue"),
-            Section::Controls => t!("Controls", "Commandes"),
-            Section::Map => t!("Map and data", "Carte et données"),
+            Section::General => t!("settings.general"),
+            Section::Graphics => t!("settings.graphics"),
+            Section::Sound => t!("settings.sound"),
+            Section::Camera => t!("settings.camera_and_view"),
+            Section::Controls => t!("settings.controls"),
+            Section::Map => t!("settings.map_and_data"),
+            Section::Multiplayer => t!("settings.multiplayer"),
         }
     }
 
     fn blurb(self) -> &'static str {
         match self {
-            Section::General => t!("Language, the HUD, the minimap and live traffic.", "Langue, HUD, mini-carte et trafic réel."),
-            Section::Graphics => t!("How hard the renderer works. Changes apply at once.", "L'effort demandé au rendu. Les changements s'appliquent aussitôt."),
-            Section::Sound => t!("Engine, wind, warnings and the world around you.", "Moteur, vent, alarmes et le monde autour de vous."),
-            Section::Camera => t!("Where the camera starts and how wide the cockpit view is.", "Le point de vue de départ et l'ouverture de la vue cockpit."),
-            Section::Controls => t!("Mouse, joysticks, pedals, gamepads and keys.", "Souris, joysticks, palonniers, manettes et touches."),
-            Section::Map => t!("Map imagery, Google's 3D cities and real-world data.", "Imagerie, villes 3D de Google et données réelles."),
+            Section::General => t!("settings.language_the_hud_the_minimap"),
+            Section::Graphics => t!("settings.how_hard_the_renderer_works"),
+            Section::Sound => t!("settings.engine_wind_warnings_and_the"),
+            Section::Camera => t!("settings.where_the_camera_starts_and"),
+            Section::Controls => t!("settings.mouse_joysticks_pedals_gamepads_and"),
+            Section::Map => t!("settings.map_imagery_googles_3d_cities"),
+            Section::Multiplayer => t!("settings.fly_with_the_other_players"),
         }
     }
 
@@ -77,6 +81,7 @@ impl Section {
             "camera" | "view" | "cam" => Section::Camera,
             "controls" | "bindings" | "input" | "keys" => Section::Controls,
             "map" | "data" | "imagery" | "google" => Section::Map,
+            "multiplayer" | "mp" | "online" | "network" => Section::Multiplayer,
             _ => return None,
         })
     }
@@ -89,7 +94,7 @@ impl Section {
     }
 
     /// A small line icon for the sidebar, `s` points across, centred on `c`.
-    fn icon(self, p: &Painter, c: Pos2, s: f32, col: Color32) {
+    pub(crate) fn icon(self, p: &Painter, c: Pos2, s: f32, col: Color32) {
         let st = Stroke::new(1.6, col);
         let u = s / 2.0;
         match self {
@@ -147,6 +152,18 @@ impl Section {
                     c + vec2(a.cos() * u * 0.4, a.sin() * u * 0.95)
                 }).collect();
                 p.line(pts, st);
+            }
+            // two people, one a step behind the other
+            Section::Multiplayer => {
+                for (dx, k) in [(u * 0.42, 0.82), (-u * 0.22, 1.0)] {
+                    let h = c + vec2(dx, -u * 0.38 * k);
+                    p.circle_stroke(h, u * 0.3 * k, st);
+                    let pts: Vec<Pos2> = (0..=10).map(|i| {
+                        let a = std::f32::consts::PI * (1.0 + i as f32 / 10.0);
+                        pos2(c.x + dx + a.cos() * u * 0.62 * k, c.y + u * 0.88 + a.sin() * u * 0.7 * k)
+                    }).collect();
+                    p.line(pts, st);
+                }
             }
         }
     }
@@ -235,10 +252,10 @@ impl Game {
             // The sidebar: title, the sections, Back at the foot.
             let mut s = ui.new_child(egui::UiBuilder::new().max_rect(side.shrink2(vec2(16.0, 28.0))).layout(Layout::top_down(Align::Min)));
             s.add_space(10.0);
-            menu::screen_heading(&mut s, t!("Settings", "Réglages"));
+            menu::screen_heading(&mut s, t!("settings.settings"));
             s.add_space(24.0);
             s.spacing_mut().item_spacing.y = 2.0;
-            // the chosen tab's marker, slid to it from the last one
+            // the chosen tab's marker slides to it.
             let marker = s.painter().add(egui::Shape::Noop);
             let mut on_rect = None;
             for sec in Section::ALL {
@@ -260,12 +277,12 @@ impl Game {
             let foot = Rect::from_min_max(pos2(side.left() + 16.0, side.bottom() - 100.0), pos2(side.right() - 16.0, side.bottom() - 24.0));
             let mut f = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(Layout::bottom_up(Align::Min)));
             if padui::active() {
-                padui::prompts(&mut f, &[("LB / RB", crate::tr("section")), ("B", crate::tr("back"))], 18.0, 12.0, DIM);
+                padui::prompts(&mut f, &[("LB / RB", crate::tr_en("section")), ("B", crate::tr_en("back"))], 18.0, 12.0, DIM);
             } else {
-                f.label(RichText::new(t!("Changes are saved as you make them.", "Les changements sont enregistrés aussitôt.")).font(menu::caption()).color(DIM));
+                f.label(RichText::new(t!("settings.changes_are_saved_as_you")).font(menu::caption()).color(DIM));
             }
             f.add_space(6.0);
-            let back = if in_flight { t!("Back to the pause menu", "Retour au menu pause") } else { t!("Back", "Retour") };
+            let back = if in_flight { t!("settings.back_to_the_pause_menu") } else { t!("settings.back") };
             if menu::wide_button(&mut f, back, Hint::of("Esc", "B"), false, true).clicked() {
                 closed = true;
             }
@@ -292,6 +309,7 @@ impl Game {
                             Section::Camera => self.set_camera(ui, in_flight),
                             Section::Controls => self.set_controls(ui),
                             Section::Map => self.set_map(ui),
+                            Section::Multiplayer => self.set_multiplayer(ui, in_flight),
                         }
                         ui.add_space(40.0);
                     });
@@ -324,111 +342,161 @@ impl Game {
     }
 
     fn set_general(&mut self, ui: &mut Ui) {
-        card(ui, t!("Language", "Langue"), |ui| {
-            row(ui, t!("Interface language", "Langue de l'interface"), "", |ui| self.language_picker(ui));
+        card(ui, t!("settings.language"), |ui| {
+            row(ui, t!("settings.interface_language"), "", |ui| self.language_picker(ui));
         });
-        card(ui, t!("HUD and minimap", "HUD et mini-carte"), |ui| {
-            row(ui, "HUD", t!("key H in flight", "touche H en vol"), |ui| {
+        card(ui, t!("settings.display"), |ui| {
+            row(ui, t!("settings.full_screen"), t!("settings.f11_or_alt_enter_switches_at"), |ui| {
+                let mut on = self.display.mode != crate::display::Mode::Windowed;
+                if menu::switch(ui, &mut on).changed() {
+                    self.set_fullscreen(on);
+                }
+            });
+        });
+        card(ui, t!("settings.hud_and_minimap"), |ui| {
+            row(ui, "HUD", t!("settings.key_h_in_flight"), |ui| {
                 menu::switch(ui, &mut self.show_hud);
             });
-            row(ui, t!("HUD in the cockpit", "HUD dans le cockpit"), t!("off: the cockpit's own instruments only; key H in the cockpit", "désactivé : seuls les instruments du cockpit ; touche H dans le cockpit"), |ui| {
+            row(ui, t!("settings.hud_in_the_cockpit"), t!("settings.off_the_cockpits_own_instruments"), |ui| {
                 ui.add_enabled_ui(self.show_hud, |ui| menu::switch(ui, &mut self.hud_cockpit));
             });
-            row(ui, t!("Minimap", "Mini-carte"), t!("key ` (left of 1) in flight", "touche ² (à gauche de 1) en vol"), |ui| {
+            row(ui, t!("settings.flight_path_marker"), t!("settings.a_ring_on_the_hud"), |ui| {
+                ui.add_enabled_ui(self.show_hud, |ui| menu::switch(ui, &mut self.path_marker));
+            });
+            row(ui, t!("settings.minimap"), t!("settings.key_left_of_1_in"), |ui| {
                 menu::switch(ui, &mut self.minimap.visible);
             });
-            row(ui, t!("Minimap size", "Taille de la mini-carte"), t!("it fits the window and keeps this size", "elle s'adapte à la fenêtre et garde cette taille"), |ui| {
+            row(ui, t!("settings.minimap_size"), t!("settings.it_fits_the_window_and"), |ui| {
                 if ui.add(egui::Slider::new(&mut self.minimap.size.x, 240.0..=640.0).step_by(10.0).suffix(" px")).changed() {
                     self.minimap.size.y = self.minimap.size.x;
                 }
             });
-            row(ui, t!("Minimap style", "Style de la mini-carte"), "", |ui| {
+            row(ui, t!("settings.minimap_style"), "", |ui| {
                 menu::segments(ui, |ui| {
-                    menu::seg(ui, &mut self.minimap.plan, false, t!("Satellite", "Satellite"));
-                    menu::seg(ui, &mut self.minimap.plan, true, t!("Plan", "Plan"));
+                    menu::seg(ui, &mut self.minimap.plan, false, t!("settings.satellite"));
+                    menu::seg(ui, &mut self.minimap.plan, true, t!("settings.plan"));
                 });
             });
-            row(ui, t!("Minimap orientation", "Orientation de la mini-carte"), "", |ui| {
+            row(ui, t!("settings.minimap_orientation"), "", |ui| {
                 menu::segments(ui, |ui| {
-                    menu::seg(ui, &mut self.minimap.heading_up, false, t!("North up", "Nord en haut"));
-                    menu::seg(ui, &mut self.minimap.heading_up, true, t!("Heading up", "Cap en haut"));
+                    menu::seg(ui, &mut self.minimap.heading_up, false, t!("settings.north_up"));
+                    menu::seg(ui, &mut self.minimap.heading_up, true, t!("settings.heading_up"));
                 });
             });
-            row(ui, t!("Landing guidance", "Aide à l’atterrissage"), t!("approach arrows and tunnel", "flèches et tunnel d’approche"), |ui| {
+            row(ui, t!("settings.landing_guidance"), t!("settings.approach_arrows_and_tunnel"), |ui| {
                 menu::switch(ui, &mut self.minimap.landing_guidance);
             });
         });
-        card(ui, t!("Air traffic", "Trafic aérien"), |ui| {
-            row(ui, t!("Live air traffic", "Trafic aérien réel"), t!("real aircraft around you, from adsb.lol", "les vrais avions autour de vous, via adsb.lol"), |ui| {
+        card(ui, t!("settings.mode"), |ui| {
+            row(ui, t!("settings.arcade_mode"), t!("settings.missiles_boost_on_any_aircraft"), |ui| {
+                menu::switch(ui, &mut self.arcade);
+            });
+            row(ui, t!("settings.topple_buildings"), t!("settings.a_building_you_crash_into"), |ui| {
+                menu::switch(ui, &mut self.topple_buildings);
+            });
+        });
+        card(ui, t!("settings.air_traffic"), |ui| {
+            row(ui, t!("settings.live_air_traffic"), t!("settings.real_aircraft_around_you_from"), |ui| {
                 let mut on = self.live.enabled();
                 if menu::switch(ui, &mut on).changed() {
                     self.live.set_enabled(on);
                 }
             });
         });
-        let t = if padui::active() { t!("In flight, View switches the camera; Y + View opens the flight panel.", "En vol, View change de caméra ; Y + View ouvre le panneau de vol.") } else { t!("Shortcuts in flight: U sound, C camera, H HUD, ` minimap, F2 anti-aliasing, Tab the flight panel.", "Raccourcis en vol : U son, C caméra, H HUD, ` mini-carte, F2 anticrénelage, Tab le panneau de vol.") };
+        let t = if padui::active() { t!("settings.in_flight_view_switches_the") } else { t!("settings.shortcuts_in_flight_u_sound") };
         note(ui, t);
     }
 
     fn set_graphics(&mut self, ui: &mut Ui) {
         let before = self.gfx;
         let size = self.window.inner_size();
-        card(ui, t!("Preset", "Préréglage"), |ui| self.gfx.preset_ui(ui));
-        card(ui, t!("Quality", "Qualité"), |ui| self.gfx.quality_ui(ui));
-        card(ui, t!("Display", "Affichage"), |ui| self.gfx.display_ui(ui, (size.width, size.height), self.fps));
+        card(ui, t!("settings.preset"), |ui| self.gfx.preset_ui(ui));
+        card(ui, t!("settings.quality"), |ui| self.gfx.quality_ui(ui));
+        card(ui, t!("settings.display"), |ui| self.gfx.display_ui(ui, (size.width, size.height), self.fps));
         // Window, full screen, or one view across several monitors (display.rs).
-        card(ui, t!("Screens", "Écrans"), |ui| self.display_settings(ui));
-        let on = if self.src.google.photoreal() { t!("on", "activées") } else { t!("off", "désactivées") };
-        note(ui, &t!("Google's photorealistic 3D cities ({}) have their own switch and detail level under Map and data.", "Les villes 3D photoréalistes de Google ({}) ont leur propre réglage dans Carte et données.", on));
+        card(ui, t!("settings.screens"), |ui| self.display_settings(ui));
+        let cx = crate::graphics::UpscaleCx { gpu: &self.r.gpu, window: (size.width, size.height), active: self.r.up.active(), fsr4_blocked: crate::fsr4::blocked(&self.r.gpu, self.r.up.fsr4_error()), fsr4_provider: self.r.up.fsr4_provider().map(str::to_owned) };
+        card(ui, t!("settings.upscaling"), |ui| self.gfx.upscaler_ui(ui, &cx));
+        card(ui, t!("settings.scenery"), |ui| {
+            use crate::snow::Mode;
+            row(ui, t!("settings.snow_on_the_ground"), t!("settings.automatic_from_the_date_the"), |ui| {
+                menu::segments(ui, |ui| {
+                    menu::seg(ui, &mut self.snow, Mode::Auto, t!("settings.automatic"));
+                    menu::seg(ui, &mut self.snow, Mode::Off, t!("settings.off"));
+                    menu::seg(ui, &mut self.snow, Mode::Always, t!("settings.always"));
+                });
+            });
+        });
+        let on = if self.src.google.photoreal() { t!("settings.on") } else { t!("settings.off_2") };
+        note(ui, &t!("settings.googles_photorealistic_3d_cities_have", on));
         if self.gfx != before {
             self.gfx.save();
         }
     }
 
     fn set_sound(&mut self, ui: &mut Ui) {
-        card(ui, t!("Sound", "Son"), |ui| {
-            row(ui, t!("Sound", "Son"), t!("key U in flight", "touche U en vol"), |ui| {
+        card(ui, t!("settings.sound"), |ui| {
+            row(ui, t!("settings.sound"), t!("settings.key_u_in_flight"), |ui| {
                 menu::switch(ui, &mut self.sound_on);
             });
-            row(ui, t!("Volume", "Volume"), "", |ui| {
+            row(ui, t!("settings.volume"), "", |ui| {
                 ui.add_enabled(self.sound_on, egui::Slider::new(&mut self.volume, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
             });
         });
     }
 
     fn set_camera(&mut self, ui: &mut Ui, in_flight: bool) {
-        card(ui, t!("Camera", "Caméra"), |ui| {
-            let hint = if in_flight { t!("C switches it in flight", "C la change en vol") } else { t!("the view you start in; C switches it", "la vue au départ ; C la change") };
-            row(ui, t!("Camera", "Caméra"), hint, |ui| {
+        card(ui, t!("settings.camera"), |ui| {
+            let hint = if in_flight { t!("settings.c_switches_it_in_flight") } else { t!("settings.the_view_you_start_in") };
+            row(ui, t!("settings.camera"), hint, |ui| {
+                let previous = self.cam_mode;
                 menu::segments(ui, |ui| {
-                    menu::seg(ui, &mut self.cam_mode, 0, t!("Chase", "Extérieure"));
+                    menu::seg(ui, &mut self.cam_mode, 0, t!("settings.chase"));
+                    menu::seg(ui, &mut self.cam_mode, crate::settings::TAIL_VIEW, t!("settings.fixed_rear"));
                     menu::seg(ui, &mut self.cam_mode, 1, "Cockpit");
                 });
+                if self.cam_mode == crate::settings::TAIL_VIEW && previous != self.cam_mode {
+                    self.view_before_tail = previous;
+                    self.cancel_cockpit_input();
+                }
             });
-            row(ui, t!("Cockpit field of view", "Champ de vision cockpit"), t!("the mouse wheel zooms for a moment", "la molette zoome un instant"), |ui| {
+            row(ui, t!("settings.cockpit_field_of_view"), t!("settings.the_mouse_wheel_zooms_for"), |ui| {
                 ui.add(egui::Slider::new(&mut self.cockpit_fov, 35.0..=85.0).custom_formatter(|v, _| format!("{v:.0}° vertical")));
+            });
+            row(ui, t!("settings.invert_cockpit_view"), t!("settings.invert_view_hint"), |ui| {
+                menu::switch(ui, &mut self.invert_look_cockpit);
+            });
+            row(ui, t!("settings.invert_outside_horizontal"), t!("settings.invert_view_hint"), |ui| {
+                menu::switch(ui, &mut self.invert_look_outside_x);
+            });
+            row(ui, t!("settings.invert_outside_vertical"), t!("settings.invert_view_hint"), |ui| {
+                menu::switch(ui, &mut self.invert_look_outside_y);
             });
         });
     }
 
     fn set_controls(&mut self, ui: &mut Ui) {
         self.binds_capture_banner(ui);
-        card(ui, t!("Mouse", "Souris"), |ui| {
-            row(ui, t!("Mouse look speed", "Vitesse du regard (souris)"), t!("dragging to look around", "glisser pour regarder autour"), |ui| {
+        card(ui, t!("settings.mouse"), |ui| {
+            row(ui, t!("settings.mouse_look_speed"), t!("settings.dragging_to_look_around"), |ui| {
                 ui.add(egui::Slider::new(&mut self.look_sens, 0.25..=3.0).logarithmic(true).custom_formatter(|v, _| format!("{v:.2}×")));
             });
         });
-        card(ui, t!("Connected devices", "Périphériques connectés"), |ui| self.binds_devices(ui));
-        card(ui, t!("Axes", "Axes"), |ui| self.binds_axes(ui));
-        card(ui, t!("Buttons (joystick, throttle, wheel)", "Boutons (joystick, manette des gaz, volant)"), |ui| self.binds_buttons(ui));
-        card(ui, t!("Keyboard", "Clavier"), |ui| self.binds_keys(ui));
-        if ui.add_enabled(self.binds.capture.is_none(), egui::Button::new(t!("Reset all bindings", "Tout réinitialiser"))).clicked() {
+        card(ui, t!("settings.connected_devices"), |ui| self.binds_devices(ui));
+        // One search over every bindings table below (and the key reference).
+        let words = menu::search_box(ui, "bindings", t!("menu.search_bindings"), ui.available_width().min(460.0));
+        ui.add_space(6.0);
+        card(ui, t!("settings.gamepad"), |ui| self.binds_pad(ui, &words));
+        card(ui, t!("settings.joystick_axes"), |ui| self.binds_axes(ui, &words));
+        card(ui, t!("settings.buttons_joystick_throttle_wheel"), |ui| self.binds_buttons(ui, &words));
+        card(ui, t!("settings.keyboard"), |ui| self.binds_keys(ui, &words));
+        if ui.add_enabled(self.binds.capture.is_none(), egui::Button::new(t!("settings.reset_all_bindings"))).clicked() {
             self.binds = bind::Bindings::default();
             self.keys.clear();
         }
         ui.add_space(14.0);
-        card(ui, t!("Key reference", "Aide-mémoire des touches"), |ui| {
-            let t = if padui::active() { t!("In flight, Y + View shows the flight panel (instruments, places, weather) and Menu pauses.", "En vol, Y + View affiche le panneau de vol (instruments, destinations, météo) et Menu met en pause.") } else { t!("In flight, Tab shows the flight panel (instruments, places, weather) and Esc pauses.", "En vol, Tab affiche le panneau de vol (instruments, destinations, météo) et Échap met en pause.") };
+        card(ui, t!("settings.key_reference"), |ui| {
+            let t = if padui::active() { t!("settings.in_flight_y_view_shows") } else { t!("settings.in_flight_tab_shows_the") };
             note(ui, t);
             ui.add_space(6.0);
             menu::controls_list(ui);
@@ -438,40 +506,40 @@ impl Game {
     fn set_map(&mut self, ui: &mut Ui) {
         let g = self.src.google.clone();
         let has_key = !self.gkey.trim().is_empty();
-        let need_key = t!("Enter a Google Maps Platform API key first", "Saisissez d'abord une clé API Google Maps Platform");
-        card(ui, t!("Map imagery", "Imagerie cartographique"), |ui| {
-            row(ui, t!("Google API key", "Clé API Google"), t!("Map Tiles API, billed to you", "Map Tiles API, facturée à vous"), |ui| {
+        let need_key = t!("settings.enter_a_google_maps_platform");
+        card(ui, t!("settings.map_imagery"), |ui| {
+            row(ui, t!("settings.google_api_key"), t!("settings.map_tiles_api_billed_to"), |ui| {
                 ui.horizontal(|ui| {
-                    let r = ui.add(egui::TextEdit::singleline(&mut self.gkey).password(!self.gkey_show).hint_text(t!("Google Maps Platform key", "Clé Google Maps Platform")).desired_width((ui.available_width() - 60.0).min(380.0)));
+                    let r = ui.add(egui::TextEdit::singleline(&mut self.gkey).password(!self.gkey_show).hint_text(t!("settings.google_maps_platform_key")).desired_width((ui.available_width() - 60.0).min(380.0)));
                     if r.lost_focus() || (r.changed() && self.gkey.trim().is_empty()) {
                         g.set_key(&self.gkey);
                     }
-                    if ui.button(if self.gkey_show { t!("Hide", "Masquer") } else { t!("Show", "Afficher") }).clicked() {
+                    if ui.button(if self.gkey_show { t!("settings.hide") } else { t!("settings.show") }).clicked() {
                         self.gkey_show = !self.gkey_show;
                     }
                 });
                 ui.horizontal_wrapped(|ui| {
-                    ui.hyperlink_to(RichText::new(t!("How to get a key", "Obtenir une clé")).font(menu::caption()), "https://developers.google.com/maps/documentation/tile/get-api-key");
+                    ui.hyperlink_to(RichText::new(t!("settings.how_to_get_a_key")).font(menu::caption()), "https://developers.google.com/maps/documentation/tile/get-api-key");
                     ui.label(RichText::new("·").font(menu::caption()).color(DIM));
-                    ui.hyperlink_to(RichText::new(t!("Cloud console: credentials", "Console Cloud : identifiants")).font(menu::caption()), "https://console.cloud.google.com/google/maps-apis/credentials");
+                    ui.hyperlink_to(RichText::new(t!("settings.cloud_console_credentials")).font(menu::caption()), "https://console.cloud.google.com/google/maps-apis/credentials");
                 });
             });
-            row(ui, t!("Satellite imagery", "Imagerie satellite"), if has_key { t!("Google Maps", "Google Maps") } else { need_key }, |ui| {
+            row(ui, t!("settings.satellite_imagery"), if has_key { t!("settings.google_maps") } else { need_key }, |ui| {
                 let mut on = g.enabled();
                 if ui.add_enabled_ui(has_key, |ui| menu::switch(ui, &mut on)).inner.changed() {
                     g.set_key(&self.gkey);
                     g.set_enabled(on);
                 }
-                note(ui, if on { t!("Terrain and roofs take Google's tiles (Map Tiles API); what has loaded already is redone. Tiles not yet on disk are billed to your key.", "Le terrain et les toits utilisent les tuiles de Google (Map Tiles API) ; ce qui est déjà chargé est refait. Les tuiles absentes du disque sont facturées sur votre clé.") } else { t!("Off: the free default imagery. On: Google's Map Tiles API with your own key, billed per tile request.", "Désactivé : l'imagerie gratuite par défaut. Activé : la Map Tiles API de Google avec votre propre clé, facturée à la tuile.") });
+                note(ui, if on { t!("settings.terrain_and_roofs_take_googles") } else { t!("settings.off_the_free_default_imagery") });
             });
             let status = g.status.lock().clone();
             if !status.is_empty() {
                 ui.label(RichText::new(status.chars().take(160).collect::<String>()).font(menu::caption()).color(Color32::from_rgb(255, 150, 70)));
             }
         });
-        card(ui, t!("Photorealistic 3D cities", "Villes 3D photoréalistes"), |ui| {
+        card(ui, t!("settings.photorealistic_3d_cities"), |ui| {
             let mut photo = g.photoreal();
-            row(ui, t!("Google 3D tiles", "Tuiles 3D Google"), if has_key { t!("beta", "bêta") } else { need_key }, |ui| {
+            row(ui, t!("settings.google_3d_tiles"), if has_key { t!("settings.beta") } else { need_key }, |ui| {
                 if ui.add_enabled_ui(has_key, |ui| menu::switch(ui, &mut photo)).inner.changed() {
                     g.set_key(&self.gkey);
                     g.set_photoreal(photo);
@@ -479,15 +547,15 @@ impl Game {
             });
             let detail = g.detail();
             let zone_km = tiles3d::Params::of(detail).zone_r / 1000.0;
-            row(ui, t!("3D detail", "Détail 3D"), "", |ui| {
+            row(ui, t!("settings.3d_detail"), "", |ui| {
                 ui.add_enabled_ui(photo, |ui| {
                     let mut d = detail;
                     menu::segments(ui, |ui| {
                         for c in gmaps::Detail::ALL {
                             let name = match c {
-                                gmaps::Detail::Low => t!("Low", "Faible"),
-                                gmaps::Detail::Medium => t!("Medium", "Moyen"),
-                                gmaps::Detail::High => t!("High", "Élevé"),
+                                gmaps::Detail::Low => t!("settings.low"),
+                                gmaps::Detail::Medium => t!("settings.medium"),
+                                gmaps::Detail::High => t!("settings.high"),
                                 gmaps::Detail::Ultra => "Ultra",
                             };
                             menu::seg(ui, &mut d, c, name);
@@ -496,46 +564,268 @@ impl Game {
                     if d != detail {
                         g.set_detail(d);
                     }
-                    note(ui, &t!("{} One billed session per flight at every level; the first minute over a city takes up to a third more.", "{} Une session facturée par vol à chaque niveau ; la première minute au-dessus d'une ville consomme jusqu'à un tiers de plus.", crate::detail_hint(detail)));
+                    note(ui, &t!("settings.one_billed_session_per_flight", crate::detail_hint(detail)));
                 });
             });
-            note(ui, &if photo { t!("Google's photogrammetry meshes replace the ground, buildings and trees within about {zone_km:.0} km of the aircraft; at night they light up with our street lamps and windows. Each flight opens one billed 3D session (a root request, good for about 3 hours); the tiles under it are kept on disk only for the 4 hours Google allows.", "Les maillages photogrammétriques de Google remplacent le sol, les bâtiments et les arbres dans un rayon d'environ {zone_km:.0} km autour de l'avion ; la nuit, nos lampadaires et fenêtres les éclairent. Chaque vol ouvre une session 3D facturée (une requête racine, valable environ 3 heures) ; les tuiles sont gardées sur le disque seulement pendant les 4 heures autorisées par Google.", zone_km = zone_km) } else { t!("Off: our own 3D world everywhere. On: Google's Photorealistic 3D Tiles near the aircraft, one billed session per flight.", "Désactivé : notre propre monde 3D partout. Activé : les Photorealistic 3D Tiles de Google près de l'avion, une session facturée par vol.").to_string() });
+            note(ui, &if photo { t!("settings.googles_photogrammetry_meshes_replace_th", zone_km = zone_km) } else { t!("settings.off_our_own_3d_world").to_string() });
         });
-        card(ui, t!("Google usage", "Utilisation de Google"), |ui| {
+        card(ui, t!("settings.google_usage"), |ui| {
             let u = g.usage.lock().clone();
-            let req = |n: u64| i18n::plural(n, "request", "requests", "requête", "requêtes");
+            let req = |n: u64| i18n::plural(n, "settings.requests");
             let line = |ui: &mut Ui, k: &str, v: String| row(ui, k, "", |ui| {
                 ui.label(RichText::new(v).font(menu::caption()).color(TEXT));
             });
-            line(ui, t!("This session", "Cette session"), format!("{} · {}", req(u.session_requests as u64), crate::bytes(u.session_bytes)));
-            line(ui, t!("   imagery", "   imagerie"), t!("{} tiles downloaded · {} from disk", "{} tuiles téléchargées · {} depuis le disque", u.session_tiles, u.session_cached));
+            line(ui, t!("settings.this_session"), format!("{} · {}", req(u.session_requests as u64), crate::bytes(u.session_bytes)));
+            line(ui, t!("settings.imagery"), t!("settings.tiles_downloaded_from_disk", u.session_tiles, u.session_cached));
             if u.session_roots > 0 || u.total_roots > 0 {
-                let ses = i18n::plural(u.session_roots as u64, "session", "sessions", "session", "sessions");
-                line(ui, "   3D", t!("{} (billed) · {} tiles · {} from disk", "{} (facturées) · {} tuiles · {} depuis le disque", ses, u.session_3d, u.session_3d_cached));
+                let ses = i18n::plural(u.session_roots as u64, "settings.sessions");
+                line(ui, "   3D", t!("settings.billed_tiles_from_disk", ses, u.session_3d, u.session_3d_cached));
             }
             if u.session_errors > 0 {
-                line(ui, t!("   failed", "   échecs"), format!("{}", u.session_errors));
+                line(ui, t!("settings.failed"), format!("{}", u.session_errors));
             }
-            line(ui, &t!("Month {}", "Mois {}", u.month), format!("{} · {}", req(u.month_requests as u64), crate::bytes(u.month_bytes)));
-            line(ui, t!("All time", "Depuis le début"), format!("{} · {}", req(u.total_requests as u64), crate::bytes(u.total_bytes)));
+            line(ui, &t!("settings.month", u.month), format!("{} · {}", req(u.month_requests as u64), crate::bytes(u.month_bytes)));
+            line(ui, t!("settings.all_time"), format!("{} · {}", req(u.total_requests as u64), crate::bytes(u.total_bytes)));
             if u.total_roots > 0 {
-                line(ui, t!("3D sessions", "Sessions 3D"), t!("{} this month · {} all time", "{} ce mois-ci · {} au total", u.month_roots, u.total_roots));
+                line(ui, t!("settings.3d_sessions"), t!("settings.this_month_all_time", u.month_roots, u.total_roots));
             }
-            note(ui, t!("Counts only calls that reach Google; tiles already on disk are free. Check the Cloud console for billing.", "Ne compte que les appels qui atteignent Google ; les tuiles déjà sur le disque sont gratuites. Consultez la console Cloud pour la facturation."));
+            note(ui, t!("settings.counts_only_calls_that_reach"));
         });
-        card(ui, t!("Real-world data", "Données réelles"), |ui| {
-            row(ui, t!("Real weather", "Météo réelle"), t!("METAR, else Open-Meteo; radar", "METAR, sinon Open-Meteo ; radar"), |ui| {
+        card(ui, t!("settings.real_world_data"), |ui| {
+            row(ui, t!("settings.real_weather"), t!("settings.metar_else_open_meteo_radar"), |ui| {
                 menu::switch(ui, &mut self.wx.live);
             });
-            row(ui, t!("Real time", "Heure réelle"), t!("the sun where you are, now; off once a time is set by hand", "le soleil là où vous êtes, maintenant ; coupée dès qu'on règle l'heure"), |ui| {
+            row(ui, t!("settings.real_time"), t!("settings.the_sun_where_you_are"), |ui| {
                 menu::switch(ui, &mut self.wx.real_time);
             });
-            row(ui, t!("Live air traffic", "Trafic aérien réel"), t!("real aircraft around you, from adsb.lol", "les vrais avions autour de vous, via adsb.lol"), |ui| {
+            row(ui, t!("settings.live_air_traffic"), t!("settings.real_aircraft_around_you_from"), |ui| {
                 let mut on = self.live.enabled();
                 if menu::switch(ui, &mut on).changed() {
                     self.live.set_enabled(on);
                 }
             });
+        });
+    }
+
+    // ---- multiplayer (mp.rs)
+
+    /// Opens the settings screen at `sec`; its Back button (and Esc) return to `back`.
+    pub(crate) fn open_settings(&mut self, sec: Section, back: crate::menu::Screen) {
+        self.settings_sec = sec;
+        self.menu.set_back = back;
+        self.menu.screen = crate::menu::Screen::Settings;
+        self.pad_home = true;
+    }
+
+    /// Where multiplayer stands in a few words, and its colour (the
+    /// settings, the main menu's Multiplayer bar and the globe use it).
+    pub(crate) fn mp_line(&self) -> (Color32, String) {
+        if !self.mp_on {
+            return (DIM, t!("settings.not_connected").to_string());
+        }
+        let server = self.mp.as_ref().map(|m| self.mp_server_name(&m.server)).unwrap_or_default();
+        match self.mp.as_ref().map(|m| m.status()) {
+            None => (ACCENT, t!("settings.looking_for_the_fastest_server").to_string()),
+            Some(mp::Status::Connecting) => (ACCENT, t!("settings.connecting_to", server)),
+            Some(mp::Status::Error(e)) => (menu::BAD, t!("settings.no_connection", e.chars().take(60).collect::<String>())),
+            Some(mp::Status::Connected) => (menu::OK, t!("settings.connected_to", server)),
+        }
+    }
+
+    /// The same in a word or two, for the main menu's Multiplayer bar.
+    pub(crate) fn mp_short(&self) -> (Color32, String) {
+        let (col, _) = self.mp_line();
+        let text = if let Some(n) = self.mp_flying() {
+            n
+        } else {
+            match (self.mp_on, self.mp.as_ref().map(|m| m.status())) {
+                (false, _) => t!("settings.off_3").to_string(),
+                (true, Some(mp::Status::Connected)) => t!("settings.connected").to_string(),
+                (true, Some(mp::Status::Error(_))) => t!("settings.no_connection_2").to_string(),
+                (true, _) => t!("settings.connecting").to_string(),
+            }
+        };
+        (col, text)
+    }
+
+    /// How many fly, as the menus show it ("12 pilots flying"), once the relay has said.
+    pub(crate) fn mp_flying(&self) -> Option<String> {
+        let connected = self.mp.as_ref().is_some_and(|m| m.status() == mp::Status::Connected);
+        (connected && self.mp_world_known).then(|| i18n::plural(self.mp_world_total as u64, "mp.pilots_flying"))
+    }
+
+    fn set_multiplayer(&mut self, ui: &mut Ui, in_flight: bool) {
+        card(ui, t!("settings.connection"), |ui| {
+            // Where it stands, and the one button that changes it.
+            let (col, line) = self.mp_line();
+            let sub = if !self.mp_on {
+                t!("settings.connect_to_see_the_other").to_string()
+            } else if in_flight {
+                i18n::plural(self.mp_players.len() as u64, "mp.pilots_nearby")
+            } else if let Some(n) = self.mp_flying() {
+                t!("settings.on_the_network_they_are", n)
+            } else if self.mp.as_ref().is_some_and(|m| m.status() == mp::Status::Connected) {
+                t!("settings.this_server_does_not_send").to_string()
+            } else {
+                String::new()
+            };
+            ui.horizontal(|ui| {
+                let bw = 190.0;
+                ui.allocate_ui_with_layout(vec2((ui.available_width() - bw - 16.0).max(120.0), 46.0), Layout::top_down(Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(vec2(10.0, 18.0), Sense::hover());
+                        ui.painter().circle_filled(r.center(), 4.5, col);
+                        ui.add(egui::Label::new(RichText::new(line).font(menu::label()).color(TEXT)).truncate());
+                    });
+                    if !sub.is_empty() {
+                        ui.add(egui::Label::new(RichText::new(sub).font(menu::caption()).color(DIM)).wrap());
+                    }
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.allocate_ui(vec2(bw, 46.0), |ui| {
+                        let (text, primary) = if self.mp_on { (t!("settings.disconnect"), false) } else { (t!("settings.connect"), true) };
+                        if menu::wide_button(ui, text, Hint::None, primary, true).clicked() {
+                            self.mp_on = !self.mp_on;
+                            self.mp_held = false;
+                        }
+                    });
+                });
+            });
+            ui.add_space(10.0);
+            row(ui, t!("settings.your_name"), t!("settings.shown_to_the_others_left"), |ui| {
+                ui.add(egui::TextEdit::singleline(&mut self.mp_name).desired_width(240.0).char_limit(mp_proto::NAME_MAX).hint_text(t!("settings.your_name")));
+            });
+            row(ui, t!("settings.server"), t!("settings.the_servers_form_one_network"), |ui| self.mp_server_picker(ui));
+        });
+        if !in_flight && self.mp_on && !self.mp_world.is_empty() {
+            card(ui, t!("settings.flying_now"), |ui| self.mp_pilots(ui));
+        }
+        if in_flight && !self.mp_players.is_empty() {
+            card(ui, t!("settings.nearby"), |ui| {
+                let me = self.plane.pos;
+                for p in self.mp_players.iter().take(12) {
+                    let ac = mp_proto::AIRCRAFT.get(p.aircraft as usize).copied().unwrap_or("?");
+                    let alt = geo::pos_to_lla(p.pos).2 * 3.28084;
+                    row(ui, &p.name, ac, |ui| {
+                        ui.label(RichText::new(format!("{:.1} km  ·  {:.0} ft  ·  {:.0} kt", (p.pos - me).length() / 1000.0, alt, p.vel.length() * 1.94384)).font(menu::data()).color(TEXT));
+                    });
+                }
+            });
+        }
+        note(ui, t!("settings.only_while_you_are_connected"));
+    }
+
+    /// The pilots flying on the network (start screen): name, aircraft,
+    /// where and how high; Show turns the globe to them.
+    fn mp_pilots(&mut self, ui: &mut Ui) {
+        let mut look: Option<(f64, f64)> = None;
+        let shown = 16;
+        for s in self.mp_world.iter().take(shown) {
+            let ac = mp_proto::AIRCRAFT.get(s.aircraft as usize).copied().unwrap_or("?");
+            let (lat, lon) = (s.lat_deg(), s.lon_deg());
+            let place = match crate::menu::Menu::near_city(lat, lon) {
+                Some((c, d)) if d < 120_000.0 => t!("settings.near", crate::tr_en(c)),
+                // (to a tenth of a degree: the world map is no finer than that)
+                _ => format!("{:.1}°{}  {:.1}°{}", lat.abs(), if lat >= 0.0 { "N" } else { "S" }, lon.abs(), if lon >= 0.0 { "E" } else { "W" }),
+            };
+            let how = if s.flags & mp_proto::F_GROUND != 0 { t!("settings.on_the_ground").to_string() } else { format!("{:.0} ft  ·  {} kt", s.alt_m() * 3.28084, s.speed) };
+            ui.horizontal(|ui| {
+                let w = ui.available_width();
+                ui.allocate_ui_with_layout(vec2((w - 96.0).max(100.0), 40.0), Layout::top_down(Align::Min), |ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    ui.add(egui::Label::new(RichText::new(format!("{}  ·  {ac}", s.name)).font(menu::label()).color(TEXT)).truncate());
+                    ui.add(egui::Label::new(RichText::new(format!("{place}  ·  {how}")).font(menu::caption()).color(DIM)).truncate());
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button(t!("settings.show_2")).on_hover_text(t!("settings.turn_the_globe_to_them")).clicked() {
+                        look = Some((lat, lon));
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        }
+        let more = (self.mp_world_total as usize).saturating_sub(self.mp_world.len().min(shown));
+        if more > 0 {
+            note(ui, &i18n::plural(more as u64, "settings.more"));
+        }
+        if let Some((lat, lon)) = look {
+            self.menu.look_at(lat, lon, 400_000.0);
+            self.menu.screen = crate::menu::Screen::Fly;
+            self.pad_home = true;
+        }
+    }
+
+    /// The server: the network's servers with their pilots and ping,
+    /// "automatic" (the fastest), or an address typed in.
+    fn mp_server_picker(&mut self, ui: &mut Ui) {
+        let dir = self.mp_directory();
+        let (servers, err, stale) = (dir.servers(), dir.error(), dir.stale());
+        let best = dir.best();
+        let auto = self.mp_auto();
+        let current = mp::with_port(&self.mp_server);
+        let listed = servers.iter().any(|s| s.address == current);
+        let label = |s: &mp::ServerEntry| {
+            let state = match (s.up, s.ping_ms) {
+                (false, _) => t!("settings.offline").to_string(),
+                (true, Some(ms)) => format!("{ms} ms"),
+                (true, None) => t!("settings.no_answer").to_string(),
+            };
+            format!("{}  ·  {}  ·  {}", s.name, i18n::plural(s.flying as u64, "mp.pilots"), state)
+        };
+        let selected = if auto {
+            match &best {
+                Some(b) => t!("settings.automatic_2", b.name),
+                None => t!("settings.automatic_the_fastest").to_string(),
+            }
+        } else if let Some(s) = servers.iter().find(|s| s.address == current) {
+            label(s)
+        } else {
+            t!("settings.other", self.mp_server.trim())
+        };
+        let mut pick: Option<String> = None;
+        egui::ComboBox::from_id_salt("mp_server").selected_text(selected).width(ui.available_width().min(340.0)).show_ui(ui, |ui| {
+            if ui.selectable_label(auto, t!("settings.automatic_the_fastest")).clicked() {
+                pick = Some("auto".into());
+            }
+            for s in &servers {
+                ui.add_enabled_ui(s.up, |ui| {
+                    if ui.selectable_label(!auto && s.address == current, label(s)).clicked() {
+                        pick = Some(s.address.clone());
+                    }
+                });
+            }
+            if ui.selectable_label(!auto && !listed, t!("settings.other_address")).clicked() {
+                pick = Some(String::new());
+            }
+        });
+        match pick.as_deref() {
+            Some("") => {
+                self.mp_custom = true;
+                if auto || listed {
+                    self.mp_server.clear();
+                }
+            }
+            Some(a) => {
+                self.mp_custom = false;
+                self.mp_server = a.to_string();
+            }
+            None => {}
+        }
+        if self.mp_custom || (!auto && !listed) {
+            ui.add(egui::TextEdit::singleline(&mut self.mp_server).desired_width(ui.available_width().min(340.0)).char_limit(100).hint_text("host[:port]"));
+        }
+        ui.horizontal(|ui| {
+            let text = match (&err, servers.is_empty()) {
+                (Some(_), false) if stale => t!("settings.last_known_list_the_list").to_string(),
+                (Some(e), _) => t!("settings.server_list_unavailable", e.chars().take(50).collect::<String>()),
+                (None, true) => t!("settings.reading_the_server_list").to_string(),
+                (None, false) => i18n::plural(servers.iter().filter(|s| s.up).count() as u64, "mp.servers_online"),
+            };
+            ui.label(RichText::new(text).font(menu::caption()).color(DIM));
+            if ui.small_button(t!("settings.refresh")).clicked() {
+                self.mp_directory().refresh();
+            }
         });
     }
 
@@ -548,19 +838,31 @@ impl Game {
         let label = |id: &str| ACTIONS.iter().find(|a| a.id == id).map(|a| a.label()).unwrap_or("?");
         let what = match &c {
             Capture::Axis(a) => a.how().to_string(),
-            Capture::Button(id) => t!("Press the button for: {}", "Appuyez sur le bouton pour : {}", label(id)),
-            Capture::Key(id) => t!("Press the key for: {}  (Esc: cancel)", "Appuyez sur la touche pour : {}  (Échap : annuler)", label(id)),
+            Capture::Button(id) => t!("settings.press_the_button_for", label(id)),
+            Capture::Key(id) => t!("settings.press_the_key_for_esc", label(id)),
+            Capture::Pad(id) => t!("settings.press_a_button_for_or", padmap::label(id)),
+            Capture::PadAxis(a) => format!("{}: {}", a.label(), a.how()),
         };
+        // From the pad: B held calls it off (a tap of B binds B), and how far through that is.
+        let from_pad = c.from_pad();
+        let cancelling = self.binds.pad_catch.cancelling(self.real);
         egui::Frame::new().fill(ACCENT.gamma_multiply(0.22)).corner_radius(menu::R_PANEL).inner_margin(10.0).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(RichText::new(what).font(menu::body()).color(Color32::WHITE));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button(t!("Cancel", "Annuler")).clicked() {
+                    if ui.button(t!("settings.cancel")).clicked() {
                         self.binds.capture = None;
+                    }
+                    if from_pad {
+                        ui.label(RichText::new(t!("settings.hold_to_cancel")).font(menu::caption()).color(Color32::WHITE));
+                        padui::glyphs(ui, "B", 20.0);
                     }
                 });
             });
+            if cancelling > 0.0 {
+                ui.add(egui::ProgressBar::new(cancelling).desired_height(4.0));
+            }
         });
         ui.add_space(12.0);
     }
@@ -568,60 +870,160 @@ impl Game {
     fn binds_devices(&mut self, ui: &mut Ui) {
         let devices: Vec<(bind::Uuid, String, bool)> = self.gilrs.as_ref().map(|g| g.gamepads().map(|(_, p)| (p.uuid(), p.name().to_string(), self.binds.uses(&p.uuid()))).collect()).unwrap_or_default();
         if devices.is_empty() {
-            note(ui, t!("No joystick, pedals or gamepad found.", "Aucun joystick, palonnier ni manette détecté."));
+            note(ui, t!("settings.no_joystick_pedals_or_gamepad"));
         }
         for (k, (uuid, name, bound)) in devices.into_iter().enumerate() {
-            let role = if bound { t!("bound", "assigné") } else { t!("gamepad layout", "disposition manette") };
+            let role = if bound { t!("settings.bound") } else { t!("settings.gamepad_layout") };
             row(ui, &name, role, |ui| {
                 ui.horizontal(|ui| {
-                    egui::ComboBox::from_id_salt(("preset", k)).selected_text(t!("Apply a preset…", "Appliquer un préréglage…")).width(260.0).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt(("preset", k)).selected_text(t!("settings.apply_a_preset")).width(260.0).show_ui(ui, |ui| {
                         for p in bind::PRESETS {
                             if ui.selectable_label(false, p.label()).clicked() {
                                 self.binds.apply_preset(p, uuid, &name, true);
                             }
                         }
                     });
-                    if bound && ui.button(t!("Remove its bindings", "Retirer ses assignations")).clicked() {
+                    if bound && ui.button(t!("settings.remove_its_bindings")).clicked() {
                         self.binds.clear_device(&uuid);
                     }
                 });
             });
         }
-        note(ui, t!("A device with anything bound to it no longer works as a gamepad.", "Un périphérique dès qu'on lui assigne quelque chose ne sert plus de manette de jeu."));
+        note(ui, t!("settings.a_gamepad_has_its_own"));
     }
 
-    fn binds_axes(&mut self, ui: &mut Ui) {
+    /// The gamepad's flying layout (padmap.rs): the sticks and triggers,
+    /// then every action, each bound from the pad itself.
+    fn binds_pad(&mut self, ui: &mut Ui, words: &[String]) {
+        use bind::Capture;
+        use padmap::{AxisSrc, PadAxis, Thumb};
+        let busy = self.binds.capture.is_some();
+        note(ui, t!("settings.in_the_menus_the_pad"));
+        if self.pad_note.1 > self.real {
+            ui.add_space(4.0);
+            ui.label(RichText::new(&self.pad_note.0).font(menu::caption()).color(ACCENT));
+        }
+        ui.add_space(8.0);
+        let cw = ui.available_width();
+        let mut lost = Vec::new();
+        bind_grid(ui, "pad_binds", |ui| {
+            for a in PadAxis::ALL {
+                let src = self.binds.pad.axis(a);
+                if !menu::matches(words, &[a.label(), &src.map(|s| s.stick.spec()).unwrap_or_default()]) {
+                    continue;
+                }
+                grid_label(ui, a.label(), cw);
+                pad_cell(ui, src.map(|s| s.stick.spec()), self.binds.pad.axis_moved(a));
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!busy, egui::Button::new(t!("settings.change"))).clicked() {
+                        self.binds.start_capture(Capture::PadAxis(a));
+                    }
+                    if src.is_some() && ui.add_enabled(!busy, egui::Button::new(t!("settings.clear"))).clicked() {
+                        lost = self.binds.pad.set_axis(a, None);
+                    }
+                    if self.binds.pad.axis_moved(a) && ui.add_enabled(!busy, egui::Button::new(t!("settings.default"))).clicked() {
+                        lost = self.binds.pad.reset_axis(a);
+                    }
+                    if let Some(s) = src {
+                        let mut inv = s.inverted(a);
+                        if menu::toggle(ui, &mut inv, t!("settings.invert")).changed() {
+                            self.binds.pad.set_axis(a, Some(AxisSrc { sign: -s.sign, ..s }));
+                        }
+                    }
+                });
+                ui.end_row();
+            }
+            // Each thumbstick's dead zone, for a pad that drifts at rest.
+            for t in Thumb::ALL {
+                let mut d = self.binds.pad.dead(t);
+                grid_label(ui, t.label(), cw);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().slider_width = 70.0;
+                    if ui.add(egui::Slider::new(&mut d, 0.0..=padmap::DEAD_MAX).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)))
+                        .on_hover_text(t!("settings.dead_zone_how_much_travel"))
+                        .changed()
+                    {
+                        self.binds.pad.set_dead(t, d);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    dead_zone_box(ui, t, d, self.pad_live);
+                    if d != t.default_dead() && ui.add_enabled(!busy, egui::Button::new(t!("settings.default"))).clicked() {
+                        self.binds.pad.set_dead(t, t.default_dead());
+                    }
+                });
+                ui.end_row();
+            }
+            // (one grid for both, so the columns line up)
+            for _ in 0..3 {
+                ui.allocate_space(vec2(0.0, 4.0));
+            }
+            ui.end_row();
+            for &(id, _) in padmap::actions() {
+                let moved = self.binds.pad.is_moved(id);
+                let chord = self.binds.pad.chord(id);
+                if !menu::matches(words, &[padmap::label(id), id, &chord.map(|c| c.spec()).unwrap_or_default()]) {
+                    continue;
+                }
+                grid_label(ui, padmap::label(id), cw);
+                pad_cell(ui, chord.map(|c| if c == padmap::Y_ALONE { t!("settings.y_let_go").to_string() } else { c.spec() }), moved);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!busy, egui::Button::new(t!("settings.change"))).clicked() {
+                        self.binds.start_capture(Capture::Pad(id));
+                    }
+                    if chord.is_some() && ui.add_enabled(!busy, egui::Button::new(t!("settings.clear"))).clicked() {
+                        self.binds.pad.clear(id);
+                    }
+                    if moved && ui.add_enabled(!busy, egui::Button::new(t!("settings.default"))).clicked() {
+                        lost = self.binds.pad.reset(id);
+                    }
+                });
+                ui.end_row();
+            }
+        });
+        if !lost.is_empty() {
+            self.pad_note = (t!("settings.no_longer_bound", lost.join(", ")), self.real + 8.0);
+        }
+        ui.add_space(8.0);
+        if ui.add_enabled(!busy && !self.binds.pad.is_default(), egui::Button::new(t!("settings.back_to_the_flight_simulator"))).clicked() {
+            self.binds.pad = padmap::PadMap::default();
+            self.pad_note = (String::new(), 0.0);
+        }
+    }
+
+    fn binds_axes(&mut self, ui: &mut Ui, words: &[String]) {
         use bind::{AxisAct, Capture};
         let busy = self.binds.capture.is_some();
-        note(ui, t!("Binding · then its live value and dead zone (travel that does nothing)", "Assignation · puis sa valeur en direct et sa zone morte (course sans effet)"));
+        note(ui, t!("settings.binding_then_its_live_value"));
         ui.add_space(6.0);
         let cw = ui.available_width();
         bind_grid(ui, "bind_axes", |ui| {
-            for a in AxisAct::ALL {
+            let shown: Vec<_> = AxisAct::ALL.into_iter().filter(|a| menu::matches(words, &[a.label(), &self.binds.describe_axis(*a).unwrap_or_default()])).collect();
+            for a in shown {
                 grid_label(ui, a.label(), cw);
                 binding_cell(ui, self.binds.describe_axis(a), false);
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!busy, egui::Button::new(t!("Assign", "Assigner"))).clicked() {
+                    if ui.add_enabled(!busy, egui::Button::new(t!("settings.assign"))).clicked() {
                         self.binds.start_capture(Capture::Axis(a));
                     }
-                    if self.binds.axes.contains_key(&a) && ui.button(t!("Clear", "Effacer")).clicked() {
+                    if self.binds.axes.contains_key(&a) && ui.button(t!("settings.clear")).clicked() {
                         self.binds.axes.remove(&a);
                     }
                 });
                 ui.horizontal(|ui| {
-                    // (0 until the axis has moved since the game started)
+                    // 0 until the axis moves.
                     if let Some(v) = self.binds.axis(a).or_else(|| self.binds.axes.contains_key(&a).then_some(0.0)) {
                         let f = if a.centred() { (v as f32 + 1.0) * 0.5 } else { v as f32 };
                         ui.add(egui::ProgressBar::new(f).desired_width(64.0).desired_height(6.0));
                     }
-                    // The dead zone: round the centre, or at the idle end of a throttle or brake.
+                    // the dead zone.
                     if let Some(b) = self.binds.axes.get_mut(&a) {
                         ui.spacing_mut().slider_width = 70.0;
                         ui.add(egui::Slider::new(&mut b.dead, 0.0..=0.3).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)))
-                            .on_hover_text(t!("Dead zone: how much travel does nothing", "Zone morte : la course qui ne fait rien"));
+                            .on_hover_text(t!("settings.dead_zone_how_much_travel"));
                         // The sign is learnt when binding; this flips it.
                         let mut inv = b.sign < 0.0;
-                        if menu::toggle(ui, &mut inv, t!("Invert", "Inverser")).changed() {
+                        if menu::toggle(ui, &mut inv, t!("settings.invert")).changed() {
                             b.sign = -b.sign;
                         }
                     }
@@ -631,19 +1033,20 @@ impl Game {
         });
     }
 
-    fn binds_buttons(&mut self, ui: &mut Ui) {
+    fn binds_buttons(&mut self, ui: &mut Ui, words: &[String]) {
         use bind::{Capture, ACTIONS};
         let busy = self.binds.capture.is_some();
         let cw = ui.available_width();
         bind_grid(ui, "bind_buttons", |ui| {
-            for a in ACTIONS {
+            let shown: Vec<_> = ACTIONS.iter().filter(|a| menu::matches(words, &[a.label(), a.id, &self.binds.describe_button(a.id).unwrap_or_default()])).collect();
+            for a in shown {
                 grid_label(ui, a.label(), cw);
                 binding_cell(ui, self.binds.describe_button(a.id), false);
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!busy, egui::Button::new(t!("Assign", "Assigner"))).clicked() {
+                    if ui.add_enabled(!busy, egui::Button::new(t!("settings.assign"))).clicked() {
                         self.binds.start_capture(Capture::Button(a.id));
                     }
-                    if self.binds.buttons.contains_key(a.id) && ui.button(t!("Clear", "Effacer")).clicked() {
+                    if self.binds.buttons.contains_key(a.id) && ui.button(t!("settings.clear")).clicked() {
                         self.binds.buttons.remove(a.id);
                     }
                 });
@@ -653,21 +1056,29 @@ impl Game {
         });
     }
 
-    fn binds_keys(&mut self, ui: &mut Ui) {
+    fn binds_keys(&mut self, ui: &mut Ui, words: &[String]) {
         use bind::{Capture, ACTIONS};
         let busy = self.binds.capture.is_some();
         let cw = ui.available_width();
         bind_grid(ui, "bind_keys", |ui| {
             for a in ACTIONS.iter().filter(|a| a.keyboard) {
-                grid_label(ui, a.label(), cw);
                 let moved = self.binds.keys.contains_key(a.id);
-                binding_cell(ui, self.binds.key_of(a).map(bind::key_name), moved);
+                let keys = if a.id == "tail_view" && !moved && self.binds.map_key(winit::keyboard::KeyCode::IntlBackslash) == Some(a.key) {
+                    Some(i18n::tr("text.controls.f6_iso_key").to_string())
+                } else {
+                    self.binds.key_of(a).map(bind::key_name)
+                };
+                if !menu::matches(words, &[a.label(), a.id, keys.as_deref().unwrap_or_default()]) {
+                    continue;
+                }
+                grid_label(ui, a.label(), cw);
+                binding_cell(ui, keys, moved);
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(!busy, egui::Button::new(t!("Change", "Changer"))).clicked() {
+                    if ui.add_enabled(!busy, egui::Button::new(t!("settings.change"))).clicked() {
                         self.binds.start_capture(Capture::Key(a.id));
                         self.keys.clear();
                     }
-                    if moved && ui.button(t!("Default", "Par défaut")).clicked() {
+                    if moved && ui.button(t!("settings.default")).clicked() {
                         self.binds.reset_key(a.id);
                         self.keys.clear();
                     }
@@ -679,14 +1090,62 @@ impl Game {
     }
 }
 
-/// The grid every bindings table shares (action · binding · buttons · extras),
-/// so the three cards line up column for column.
+/// the grid every bindings table shares, so their columns line up.
+/// Where a thumbstick (or the triggers) is now, against its dead zone: a
+/// box with the zone shaded and a dot for the stick, lit once it gets
+/// through; the triggers as two bars. Then how far off centre it reads, to
+/// see what a pad at rest drifts to.
+fn dead_zone_box(ui: &mut Ui, t: padmap::Thumb, d: f32, live: Option<padmap::Live>) {
+    let side = 56.0;
+    let (r, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
+    let p = ui.painter();
+    let zone = ACCENT.gamma_multiply(0.22);
+    p.rect_filled(r, 3.0, Color32::from_black_alpha(90));
+    let v = live.map(|l| l.at(t)).unwrap_or_default();
+    let lit = live.map(|l| l.through(t, d)).unwrap_or_default();
+    if t == padmap::Thumb::Triggers {
+        // LT and RT, filling up from the bottom; the zone along the bottom.
+        let gap = 6.0;
+        let w = (side - gap * 3.0) * 0.5;
+        for (i, (v, lit)) in v.into_iter().zip(lit).enumerate() {
+            let x = r.left() + gap + i as f32 * (w + gap);
+            let bar = Rect::from_min_max(pos2(x, r.top() + 4.0), pos2(x + w, r.bottom() - 4.0));
+            p.rect_stroke(bar, 1.0, Stroke::new(1.0, DIM), egui::StrokeKind::Inside);
+            p.rect_filled(Rect::from_min_max(pos2(bar.left(), bar.bottom() - bar.height() * d), bar.max), 0.0, zone);
+            if live.is_some() {
+                let col = if lit { ACCENT } else { TEXT };
+                p.rect_filled(Rect::from_min_max(pos2(bar.left(), bar.bottom() - bar.height() * v.clamp(0.0, 1.0)), bar.max), 0.0, col.gamma_multiply(0.8));
+            }
+        }
+    } else {
+        // Each way reads nothing inside its band: a cross, shaded.
+        let (c, h) = (r.center(), side * 0.5);
+        p.rect_filled(Rect::from_center_size(c, vec2(side * d, side)), 0.0, zone);
+        p.rect_filled(Rect::from_center_size(c, vec2(side, side * d)), 0.0, zone);
+        p.line_segment([pos2(c.x, r.top()), pos2(c.x, r.bottom())], Stroke::new(1.0, DIM.gamma_multiply(0.5)));
+        p.line_segment([pos2(r.left(), c.y), pos2(r.right(), c.y)], Stroke::new(1.0, DIM.gamma_multiply(0.5)));
+        if live.is_some() {
+            let dot = pos2(c.x + v[0].clamp(-1.0, 1.0) * h, c.y - v[1].clamp(-1.0, 1.0) * h);
+            p.circle_filled(dot, 3.5, if lit[0] || lit[1] { ACCENT } else { TEXT });
+        }
+    }
+    p.rect_stroke(r, 3.0, Stroke::new(1.0, DIM), egui::StrokeKind::Inside);
+    // The reading, in the slider's terms.
+    let text = match live {
+        Some(_) => {
+            let (a, b) = if t == padmap::Thumb::Triggers { ("LT", "RT") } else { ("X", "Y") };
+            format!("{a} {:.0}%  {b} {:.0}%", v[0].abs() * 100.0, v[1].abs() * 100.0)
+        }
+        None => t!("settings.no_gamepad").to_string(),
+    };
+    ui.add_sized(vec2(96.0, side), egui::Label::new(RichText::new(text).font(menu::caption()).color(DIM)));
+}
+
 fn bind_grid(ui: &mut Ui, id: &str, body: impl FnOnce(&mut Ui)) {
     egui::Grid::new(id).num_columns(4).spacing([16.0, 6.0]).min_row_height(30.0).show(ui, body);
 }
 
-/// What an action is bound to, in a fixed-width column: a key cap, or a
-/// dim dash when nothing is bound. `moved`: changed from the default.
+/// what an action is bound to, as a key cap.
 fn binding_cell(ui: &mut Ui, what: Option<String>, moved: bool) {
     ui.allocate_ui_with_layout(vec2(180.0, 26.0), Layout::left_to_right(Align::Center), |ui| {
         ui.set_min_width(180.0);
@@ -698,7 +1157,26 @@ fn binding_cell(ui: &mut Ui, what: Option<String>, moved: bool) {
                 }
             }
             None => {
-                ui.label(RichText::new(t!("Not bound", "Non assigné")).font(menu::caption()).color(menu::FAINT));
+                ui.label(RichText::new(t!("settings.not_bound")).font(menu::caption()).color(menu::FAINT));
+            }
+        }
+    });
+}
+
+/// What a pad action is bound to, drawn as the pad's buttons, in the same
+/// column as `binding_cell`. `moved`: changed from the default.
+fn pad_cell(ui: &mut Ui, spec: Option<String>, moved: bool) {
+    ui.allocate_ui_with_layout(vec2(180.0, 26.0), Layout::left_to_right(Align::Center), |ui| {
+        ui.set_min_width(180.0);
+        match spec {
+            Some(s) => {
+                let r = padui::glyphs(ui, &s, 22.0);
+                if moved {
+                    ui.painter().rect_stroke(r.rect.expand(3.0), menu::R_WIDGET, Stroke::new(1.0, ACCENT), egui::StrokeKind::Outside);
+                }
+            }
+            None => {
+                ui.label(RichText::new(t!("settings.not_bound")).font(menu::caption()).color(menu::FAINT));
             }
         }
     });
@@ -716,10 +1194,109 @@ mod tests {
         }
         assert_eq!(Section::parse("bindings"), Some(Section::Controls));
         assert_eq!(Section::parse("Graphics"), Some(Section::Graphics));
-        assert_eq!(Section::Map.cycle(true), Section::General);
+        assert_eq!(Section::Map.cycle(true), Section::Multiplayer);
+        assert_eq!(Section::Multiplayer.cycle(true), Section::General);
+        assert_eq!(Section::parse("mp"), Some(Section::Multiplayer));
         assert_eq!(Section::parse("nope"), None);
         // `--pause-menu controls` is the key list, not the settings section.
         assert_eq!(crate::menu::Page::parse("controls"), Some(crate::menu::Page::Controls));
         assert_eq!(crate::menu::Page::parse("graphics"), None);
+    }
+
+    #[test]
+    fn controls_ui_does_not_panic() {
+        let ctx = egui::Context::default();
+        let binds = bind::Bindings::default();
+        let mut look_sens = 1.0f32;
+        for _ in 0..2 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        card(ui, t!("settings.mouse"), |ui| {
+                            row(ui, t!("settings.mouse_look_speed"), t!("settings.dragging_to_look_around"), |ui| {
+                                ui.add(egui::Slider::new(&mut look_sens, 0.25..=3.0).logarithmic(true).custom_formatter(|v, _| format!("{v:.2}×")));
+                            });
+                        });
+                        let _words = menu::search_box(ui, "bindings", t!("menu.search_bindings"), ui.available_width().min(460.0));
+                        ui.add_space(6.0);
+                        card(ui, t!("settings.gamepad"), |ui| {
+                            let cw = ui.available_width();
+                            bind_grid(ui, "pad_binds", |ui| {
+                                for a in padmap::PadAxis::ALL {
+                                    let src = binds.pad.axis(a);
+                                    grid_label(ui, a.label(), cw);
+                                    pad_cell(ui, src.map(|s| s.stick.spec()), binds.pad.axis_moved(a));
+                                    ui.horizontal(|ui| {
+                                        let _ = ui.button(t!("settings.change"));
+                                    });
+                                    ui.end_row();
+                                }
+                                for _ in 0..3 {
+                                    ui.allocate_space(vec2(0.0, 4.0));
+                                }
+                                ui.end_row();
+                                for &(id, _) in padmap::actions() {
+                                    let moved = binds.pad.is_moved(id);
+                                    let chord = binds.pad.chord(id);
+                                    grid_label(ui, padmap::label(id), cw);
+                                    pad_cell(ui, chord.map(|c| if c == padmap::Y_ALONE { t!("settings.y_let_go").to_string() } else { c.spec() }), moved);
+                                    ui.horizontal(|ui| {
+                                        let _ = ui.button(t!("settings.change"));
+                                    });
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                        card(ui, t!("settings.joystick_axes"), |ui| {
+                            let cw = ui.available_width();
+                            bind_grid(ui, "bind_axes", |ui| {
+                                for a in bind::AxisAct::ALL {
+                                    grid_label(ui, a.label(), cw);
+                                    binding_cell(ui, binds.describe_axis(a), false);
+                                    ui.horizontal(|ui| {
+                                        let _ = ui.button(t!("settings.assign"));
+                                    });
+                                    ui.horizontal(|_ui| {});
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                        card(ui, t!("settings.buttons_joystick_throttle_wheel"), |ui| {
+                            let cw = ui.available_width();
+                            bind_grid(ui, "bind_buttons", |ui| {
+                                for a in bind::ACTIONS {
+                                    grid_label(ui, a.label(), cw);
+                                    binding_cell(ui, binds.describe_button(a.id), false);
+                                    ui.horizontal(|ui| {
+                                        let _ = ui.button(t!("settings.assign"));
+                                    });
+                                    ui.label("");
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                        card(ui, t!("settings.keyboard"), |ui| {
+                            let cw = ui.available_width();
+                            bind_grid(ui, "bind_keys", |ui| {
+                                for a in bind::ACTIONS.iter().filter(|a| a.keyboard) {
+                                    grid_label(ui, a.label(), cw);
+                                    let keys = binds.key_of(a).map(bind::key_name);
+                                    binding_cell(ui, keys, false);
+                                    ui.horizontal(|ui| {
+                                        let _ = ui.button(t!("settings.change"));
+                                    });
+                                    ui.label("");
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                        card(ui, t!("settings.key_reference"), |ui| {
+                            menu::controls_list(ui);
+                        });
+                    });
+                });
+            });
+            out.textures_delta.clear();
+        }
     }
 }

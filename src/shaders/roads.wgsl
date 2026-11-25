@@ -40,11 +40,33 @@ struct GOut { @location(0) c: vec4f, @location(1) n: vec4f, @location(2) amb: f3
     let s = G.scorch[i];
     if (s.w > 0.0) { albedo = mix(albedo, vec3f(0.012), smoothstep(1.0, 0.3, length(in.P - s.xyz) / s.w) * 0.9); }
   }
+  // Dirt tracks and footpaths are not cleared: they disappear under the snow
+  // like the ground around them (snow.rs; the terrain's own noise is left
+  // out, so their edges stay a little softer than the fields' patches).
+  let rclass = in.kind & 15u;
+  var snowy = 0.0;
+  if ((rclass == 7u || rclass == 8u) && snow_on()) {
+    snowy = snow_at(in.P, N, N, 0.0);
+    let ks_orig = snowy;
+    var sc = SNOW_ALBEDO;
+    if (snowy > 0.005) {
+      let tr = snow_track_at(in.P, dist, fw);
+      if (tr.x > 0.002 || tr.y > 0.002) {
+        let reveal = smoothstep(0.12, 0.68, tr.x);
+        snowy = clamp(ks_orig * (1.0 - reveal) + tr.y * 0.30 * ks_orig, 0.0, 1.0);
+        sc *= mix(1.0, 0.78, tr.x * (1.0 - reveal * 0.45));
+        albedo *= 1.0 - 0.32 * reveal * ks_orig;
+        let n_fade = (1.0 - smoothstep(180.0, 480.0, dist)) * ks_orig;
+        N = normalize(N - (G.snow_tr_e.xyz * tr.z + G.snow_tr_n.xyz * tr.w) * (1.05 * n_fade));
+      }
+    }
+    albedo = mix(albedo, sc, snowy);
+  }
   // Wet-look sheen toward the sun at grazing angles.
   let V = normalize(in.P);
   let Hh = normalize(G.sun_dir.xyz - V);
   let l = light_at(in.P);
-  let spec = pow(max(dot(N, Hh), 0.0), 40.0) * 0.04 * shadow_at(in.P, N);
+  let spec = pow(max(dot(N, Hh), 0.0), 40.0) * 0.04 * shadow_at(in.P, N) * (1.0 - snowy);
   // Pools of light under the street lamps.
   var lamps = vec3f(0.0);
   let night = night_at(l.upn);

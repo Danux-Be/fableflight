@@ -20,6 +20,7 @@
 //! (pit18.wgsl). Everything here is body
 //! frame (+X right, +Y up, -Z forward): stations are the model's, moved
 //! forward to the centre of gravity (`st`, `row`).
+use crate::aircraft::Hotspot;
 use super::*;
 use crate::aircraft::b747::deck::{legend_mat, rect, screen_quad, sid, style, Face};
 use crate::aircraft::c172::cabin::gauge;
@@ -188,7 +189,7 @@ pub fn build(b: &mut Builder) {
 
     let mut p = Mesh::default();
     let f = panel_face();
-    panel(&mut p, &f);
+    panel(&mut p, &f, b);
     hood(&mut p);
     rear_panel(&mut p);
     b.fixed("instrument panel", G_ENGINE, p);
@@ -322,7 +323,7 @@ fn panel_face() -> Face {
 const GEAR_U: f32 = -0.292;
 const GEAR_V: f32 = -0.105;
 
-fn panel(m: &mut Mesh, f: &Face) {
+fn panel(m: &mut Mesh, f: &Face, b: &mut Builder) {
     // The panel: its upper corners cut to clear the windscreen's panes.
     let outline = vec![Vec2::new(0.33, -0.17), Vec2::new(-0.33, -0.17), Vec2::new(-0.33, 0.09), Vec2::new(-0.295, 0.15), Vec2::new(0.295, 0.15), Vec2::new(0.33, 0.09)];
     m.slab(&BLK, &hp::wind(outline, false), &[], f.o, f.ax, f.ay, 0.03);
@@ -372,8 +373,11 @@ fn panel(m: &mut Mesh, f: &Face) {
     m.rbox(&mt(mat::BLACK, 0.004, 0.004, 0.004), f.at_h(GEAR_U, GEAR_V + 0.03, 0.0), Vec3::new(0.005, 0.034, 0.002), 0.002, f.rot());
     // The drag chute's handle in the upper left corner: a striped T on its stalk.
     let c = f.at_h(-0.272, 0.108, 0.0);
-    m.tube(&STEEL, &[c, c + f.n() * 0.028], &|_| 0.0035, 8, false);
-    m.tube(&hp::stripes(0.010, true), &[c + f.n() * 0.030 - f.ax * 0.024, c + f.n() * 0.030 + f.ax * 0.024], &|_| 0.0062, 10, true);
+    let mut handle = Mesh::default();
+    handle.tube(&STEEL, &[c, c + f.n() * 0.028], &|_| 0.0035, 8, false);
+    handle.tube(&hp::stripes(0.010, true), &[c + f.n() * 0.030 - f.ax * 0.024, c + f.n() * 0.030 + f.ax * 0.024], &|_| 0.0062, 10, true);
+    let piece = b.add("drag chute handle", G_ENGINE, handle, Anim::slide(Drive::new(Input::Spoiler(-1.0), 0.025), f.n()), c, f.n(), None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(f.n() * 0.030, 0.022, "speedbrake"));
     // Under the right instruments: a row of switches.
     hp::plate(m, f, 0.065, -0.166, 0.325, -0.124, 33.0);
     let gg = f.sub(0.0, 0.0, 0.0043);
@@ -510,7 +514,7 @@ fn consoles(m: &mut Mesh, z0: f32, z1: f32, seed: f32, left: &[(f32, f32, &str)]
 /// landing gear handle in its slot on the panel.
 fn controls(b: &mut Builder, f: &Face) {
     let mut h = Builder::default();
-    hp::controls(&mut h);
+    hp::controls(&mut h, 0.0);
     let off = b.pieces.len();
     let mut at = Vec::new();
     for mut p in h.pieces {
@@ -533,7 +537,8 @@ fn controls(b: &mut Builder, f: &Face) {
     let c = arm_top + w.n() * 0.004;
     gh.lathe(&mt(mat::PLASTIC, 0.75, 0.74, 0.70), c - w.ax * 0.011, w.ax, &[[0.0, 0.0], [0.015, 0.0], [0.018, 0.003], [0.018, 0.019], [0.015, 0.022], [0.0, 0.022]], 22, false);
     gh.lathe(&RED_LENS, c - w.ax * 0.012, w.ax, &[[0.0, 0.0], [0.0085, 0.0], [0.0085, 0.024], [0.0, 0.024]], 14, false);
-    b.add("gear handle", G_ENGINE, gh, Anim::slide(Drive::new(Input::GearHandle, 0.028), w.ay), w.o, Vec3::X, None);
+    let piece = b.add("gear handle", G_ENGINE, gh, Anim::slide(Drive::new(Input::GearHandle, -0.028), w.ay), w.o, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(c - w.o, 0.021, "gear"));
 }
 
 /// Looking down or behind from the front seat, the view is mostly of the cockpit.

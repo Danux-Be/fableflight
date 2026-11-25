@@ -20,6 +20,7 @@ pub struct Head {
     pub yaw: f64,
     pub pitch: f64,
     lean: DVec3,
+    seat_offset: glam::DVec2,
     roll: f64,
     /// zoom asked for (a factor on the field of view), and where it is now
     pub zoom: f64,
@@ -52,7 +53,7 @@ pub fn look(yaw: f64, pitch: f64) -> DQuat {
 
 impl Head {
     pub fn new(yaw: f64, pitch: f64) -> Head {
-        Head { yaw, pitch, lean: DVec3::ZERO, roll: 0.0, zoom: 1.0, zoom_s: 1.0, adapt: 0.55, inside: 0.5, rear: false }
+        Head { yaw, pitch, lean: DVec3::ZERO, seat_offset: glam::DVec2::ZERO, roll: 0.0, zoom: 1.0, zoom_s: 1.0, adapt: 0.55, inside: 0.5, rear: false }
     }
 
     /// Snap to the asked-for look at once (entering the cockpit, respawning).
@@ -60,7 +61,19 @@ impl Head {
         self.yaw = yaw;
         self.pitch = pitch;
         self.lean = DVec3::ZERO;
+        self.center_seat();
         self.roll = 0.0;
+    }
+
+    /// Move sideways or bend down to see past the yoke or panel lip.
+    /// The displacement stays inside the seated pilot's reach.
+    pub fn lean_by(&mut self, dx: f64, dy: f64) {
+        self.seat_offset += glam::DVec2::new(dx, dy);
+        self.seat_offset = self.seat_offset.clamp(glam::DVec2::new(-0.17, -0.40), glam::DVec2::new(0.17, 0.06));
+    }
+
+    pub fn center_seat(&mut self) {
+        self.seat_offset = glam::DVec2::ZERO;
     }
 
     pub fn zoom_by(&mut self, steps: f64) {
@@ -98,7 +111,8 @@ impl Head {
 
         let q = look(self.yaw, self.pitch);
         // The eyes swing round the neck joint behind them.
-        let eye = spec.eye2.filter(|_| self.rear).unwrap_or(spec.eye).as_dvec3() + shake + self.lean - NECK + q * NECK;
+        let offset = DVec3::new(self.seat_offset.x, self.seat_offset.y, self.seat_offset.y.min(0.0) * 0.35);
+        let eye = spec.eye2.filter(|_| self.rear).unwrap_or(spec.eye).as_dvec3() + shake + self.lean + offset + NECK - q * NECK;
 
         // Tilt part of the way back toward the horizon (only near level).
         let d = rot * (q * DVec3::NEG_Z);
@@ -163,8 +177,8 @@ fn lookup(t: &[f32], d: DVec3) -> f32 {
 }
 /// For each look direction from the seat, how much of it lands inside the cabin.
 fn table(spec: &'static Spec) -> &'static [f32] {
-    // (one for each type, by its id)
-    static T: [std::sync::OnceLock<Vec<f32>>; 9] = [const { std::sync::OnceLock::new() }; 9];
+    // (one for each type, by its id: room for more than there are)
+    static T: [std::sync::OnceLock<Vec<f32>>; 16] = [const { std::sync::OnceLock::new() }; 16];
     T[spec.id as usize].get_or_init(|| {
         let mut t = vec![0.0f32; LW * LH];
         std::thread::scope(|s| {
@@ -200,5 +214,99 @@ mod tests {
         assert!(lookup(t, dir_of(0.0, -1.5).as_dvec3()) > 0.7);
         // Out of the left front window (straight left is the door post).
         assert!(lookup(t, dir_of(-1.15, 0.25).as_dvec3()) < 0.4);
+    }
+}
+
+/// Fractional trackpad motion belongs to the control it started on.
+#[derive(Default)]
+pub struct WheelSteps {
+    target: Option<usize>,
+    fraction: f64,
+}
+impl WheelSteps {
+    pub fn steps(&mut self, target: usize, delta: f64) -> i32 {
+        if self.target != Some(target) {
+            self.fraction = 0.0;
+            self.target = Some(target);
+        }
+        self.fraction += delta;
+        let steps = self.fraction.trunc() as i32;
+        self.fraction -= steps as f64;
+        steps
+    }
+}
+
+/// Coarse local bounds avoid testing triangles in pieces the pointer cannot meet.
+pub fn blockers(pieces: &[crate::airframe::Piece]) -> Vec<(usize, Vec3, Vec3)> {
+    pieces.iter().enumerate().filter(|(_, p)| !p.glass &&
+        (p.hotspot.is_some() || matches!(p.name, "cabin" | "yoke" | "pedal" | "cockpit tub" |
+            "ejection seat" | "rear ejection seat" | "instrument panel" | "consoles" | "stick" |
+            "flight deck panels" | "flight deck furnishings" | "pedestal" | "crew seats" | "control column") ||
+         p.anim != crate::airframe::Anim::Fixed && p.group == crate::airframe::G_FUSE))
+        .filter_map(|(i, p)| {
+            if p.mesh.v.is_empty() { return None; }
+            let (lo, hi) = p.mesh.v.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo,hi), v| {
+                let v = Vec3::from(v.pos); (lo.min(v), hi.max(v))
+            });
+            Some((i, lo, hi))
+        }).collect()
+}
+
+fn triangle_depth(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let (e1,e2) = (b-a,c-a);
+    let h = d.cross(e2);
+    let det = e1.dot(h);
+    if det.abs() < 1e-8 { return None; }
+    let s = o-a;
+    let u = s.dot(h) / det;
+    let q = s.cross(e1);
+    let v = d.dot(q) / det;
+    if u < 0.0 || v < 0.0 || u+v > 1.0 { return None; }
+    let t = e2.dot(q) / det;
+    (t > 0.001).then_some(t)
+}
+
+pub fn occluded(pieces: &[crate::airframe::Piece], pose: &[glam::Mat4], bounds: &[(usize, Vec3, Vec3)], o: Vec3, d: Vec3, depth: f32) -> bool {
+    for &(i, lo, hi) in bounds {
+        let inv = pose[i].inverse();
+        let (o,d) = (inv.transform_point3(o), inv.transform_vector3(d));
+        let mut near = 0.0f32;
+        let mut far = depth;
+        for axis in 0..3 {
+            if d[axis].abs() < 1e-8 {
+                if o[axis] < lo[axis] || o[axis] > hi[axis] { far = -1.0; }
+            } else {
+                let (a,b) = ((lo[axis]-o[axis])/d[axis],(hi[axis]-o[axis])/d[axis]);
+                near = near.max(a.min(b)); far = far.min(a.max(b));
+            }
+        }
+        if near > far { continue; }
+        let m = &pieces[i].mesh;
+        for t in m.i.chunks_exact(3) {
+            // Lining windows are shader-cut; they are not solid blockers.
+            if m.v[t[0] as usize].mat[1] == crate::airframe::pat::LINING { continue; }
+            if triangle_depth(o,d,m.v[t[0] as usize].pos.into(),m.v[t[1] as usize].pos.into(),m.v[t[2] as usize].pos.into()).is_some_and(|t| t < depth) { return true; }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+    #[test]
+    fn fractional_scroll_does_not_leak_between_controls() {
+        let mut wheel = WheelSteps::default();
+        assert_eq!(wheel.steps(0,0.6),0);
+        assert_eq!(wheel.steps(1,0.6),0);
+        assert_eq!(wheel.steps(1,0.6),1);
+        assert_eq!(wheel.steps(1,-1.4),-1);
+    }
+    #[test]
+    fn obstruction_depth_is_double_sided() {
+        let (a,b,c) = (Vec3::new(-1.0,-1.0,-1.0),Vec3::new(1.0,-1.0,-1.0),Vec3::new(0.0,1.0,-1.0));
+        assert!((triangle_depth(Vec3::ZERO,Vec3::NEG_Z,a,b,c).unwrap()-1.0).abs()<1e-6);
+        assert!(triangle_depth(Vec3::ZERO,Vec3::NEG_Z,a,c,b).is_some());
+        assert!(triangle_depth(Vec3::ZERO,Vec3::Z,a,b,c).is_none());
     }
 }

@@ -299,6 +299,7 @@ pub static SPEC: Spec = Spec {
     // (the weapon systems officer's, 1.45 m behind)
     eye2: Some(Vec3::new(0.0, 1.10, -3.65)),
     sees_inside: pit::sees_inside,
+    hotspots: &[],
     contacts: &[
         ([0.0, -0.33, -9.8], Part::Nose),
         ([0.0, -0.76, -7.9], Part::Nose),
@@ -397,6 +398,7 @@ pub static SPEC: Spec = Spec {
     slats_at: 1,
     lever: None,
     gear_rate: 1.0 / 6.0,
+    electric_actuators: false,
     // 750 kt, Mach 2.23.
     vne: 750.0 * KT,
     mmo: 2.23,

@@ -101,23 +101,40 @@ fn rain_light(vd: vec3f, k: f32) -> vec3f {
   return (amb * 0.18 + lt.sun * (0.002 + 0.03 * glint)) * k;
 }
 
+// Snow (snow.rs, main.rs): G.flakes.w of what falls here is snow, and blown
+// snow (G.flakes_v.w) fills the air near the ground in a blizzard. Each
+// particle is a raindrop or a snowflake; flakes ride their own field, falling
+// at about 1 m/s and swirling.
+const BLOW_K = 0.8;
+fn flake_amount() -> f32 { return fract(G.rain[0].w) * G.flakes.w + BLOW_K * G.flakes_v.w; }
+
 @vertex fn vs_rain(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> RainOut {
   var o: RainOut;
   o.clip = vec4f(2.0, 2.0, 2.0, 1.0);
   // (Hail in the whole part, in fifteenths; main.rs.)
-  let inten = fract(G.rain[0].w);
+  let rain = fract(G.rain[0].w);
   let hail = floor(G.rain[0].w) / 15.0;
+  let fl = flake_amount();
+  let inten = clamp(rain * (1.0 - G.flakes.w) + fl, 0.0, 1.0);
   let h0 = pcg(ii * 2654435761u + 7u);
   // The heavier the rain, the more drops (and the bigger): the count grows
   // faster than the intensity, the faintness makes up the rest.
   if (u01(h0) > sqrt(inten)) { return o; }
+  let flake = u01(pcg(h0 ^ 0x68e31da4u)) * inten < fl;
   var B = 200.0;
   if (ii < RAIN_N0) { B = 8.0; } else if (ii < RAIN_N1) { B = 20.0; } else if (ii < RAIN_N2) { B = 50.0; }
   let h1 = pcg(h0);
   let h2 = pcg(h1);
   let h3 = pcg(h2);
   let h4 = pcg(h3);
-  let l = (fract(vec3f(u01(h1), u01(h2), u01(h3)) + G.rain[0].xyz / B) - 0.5) * B;
+  let off = select(G.rain[0].xyz, G.flakes.xyz, flake);
+  var l = (fract(vec3f(u01(h1), u01(h2), u01(h3)) + off / B) - 0.5) * B;
+  if (flake) {
+    // Each flake swirls about its path, a few tens of centimetres.
+    let ph = u01(h2) * 6.2832;
+    let f = 0.6 + 0.8 * u01(h3);
+    l += vec3f(sin(G.time.x * f + ph), cos(G.time.x * f * 0.8 + ph * 1.7), 0.0) * 0.25;
+  }
   let P = G.east.xyz * l.x + G.north.xyz * l.y + G.up.xyz * l.z;
   let dist = length(P);
   let near = G.rain[1].w;
@@ -129,11 +146,16 @@ fn rain_light(vd: vec3f, k: f32) -> vec3f {
   if (cp.w > 0.0 && any(abs(cp.xy) > vec2f(cp.w * 1.3 + 2.0))) { return o; }
   // In a supercell's core some of it is hail: stones a centimetre or two
   // across, falling 15-25 m/s faster than the rain, white and opaque.
-  let stone = u01(pcg(h4 ^ 0x5bd1e995u)) < 0.4 * hail;
+  let stone = !flake && u01(pcg(h4 ^ 0x5bd1e995u)) < 0.4 * hail;
   var D = mix(0.0007, 0.004, u01(h4) * u01(h4)) * (0.6 + 0.6 * inten);
   // Blurred along its motion relative to the camera over the exposure: at
   // flying speeds the drops rush at the camera as long streaks.
   var v = G.rain[1].xyz;
+  if (flake) {
+    // Flakes: aggregates of a few millimetres to a centimetre or two.
+    D = mix(0.003, 0.015, u01(h4) * u01(h4));
+    v = G.flakes_v.xyz;
+  }
   if (stone) {
     D = mix(0.008, 0.025, u01(h3));
     v -= G.up.xyz * mix(15.0, 25.0, u01(h2));
@@ -156,14 +178,20 @@ fn rain_light(vd: vec3f, k: f32) -> vec3f {
   // faint streaks rushing past, not a bright starfield. (A square root on the
   // drop's size: a softer falloff than the physics, or all but the nearest
   // few vanish.)
-  let blur = pow(0.03 / (ls + 0.03), 0.7);
-  let alpha = clamp(1.6 * sqrt(min(core / w * 1.6, 1.0)) * blur, 0.0, select(0.25, 0.6, stone)) * fade * mix(0.45, 1.0, inten);
+  var blur = pow(0.03 / (ls + 0.03), 0.7);
+  var alpha = clamp(1.6 * sqrt(min(core / w * 1.6, 1.0)) * blur, 0.0, select(0.25, 0.6, stone)) * fade * mix(0.45, 1.0, inten);
+  if (flake) {
+    // White and opaque: a flake hides what is behind it, smeared along its
+    // streak at flying speeds (the "hyperspace" of snow in the landing lights).
+    blur = pow(0.02 / (ls + 0.02), 0.5);
+    alpha = clamp(1.4 * sqrt(min(core / w * 1.4, 1.0)) * blur, 0.0, 0.85) * fade;
+  }
   o.clip = ln.clip;
   o.q = vec3f(ln.q.xy, dist);
   o.p = vec3f(w * 0.5, ln.q.z, max(w * 0.5, 1.0));
   // (The drops catch a little more light than the haze of rain around them:
   // the brighter sky towards the horizon.)
-  o.col = vec4f(rain_light(P / max(dist, 1e-3), select(2.5, 6.0, stone)), alpha);
+  o.col = vec4f(rain_light(P / max(dist, 1e-3), select(select(2.5, 6.0, stone), 7.0, flake)), alpha);
   return o;
 }
 
@@ -193,10 +221,17 @@ struct VeilOut {
   let uv = vec2f(f32((vi << 1u) & 2u), f32(vi & 2u));
   o.clip = vec4f(uv * 2.0 - 1.0, 0.9999, 1.0);
   let inten = fract(G.rain[0].w);
-  o.col = vec4f(rain_light(-G.up.xyz, 1.0), VEIL_MAX * pow(inten, 0.8));
+  // Snow hides far more than rain of the same strength: white, and the
+  // visibility in moderate snow is a kilometre or less, in heavy snow a few
+  // hundred metres; blowing snow near the ground less still (a whiteout).
+  let sn = G.flakes.w;
+  let blow = G.flakes_v.w;
+  o.col = vec4f(rain_light(-G.up.xyz, mix(1.0, 2.6, max(sn, blow))), mix(VEIL_MAX * pow(inten, 0.8), 0.8 * pow(inten, 0.6), sn));
   // Under the rain deck the cloud pass draws its rain as a veil already (clouds.wgsl nimbo_rain).
-  if (G.nimbo[0].w > 0.0) { o.col.a *= 1.0 - 0.5 * nimbo_area(-G.planet.xyz); }
-  o.dv = mix(3000.0, 700.0, inten);
+  if (G.nimbo[0].w > 0.0) { o.col.a *= 1.0 - 0.5 * mix(nimbo_area(-G.planet.xyz), 0.0, sn); }
+  o.col.a = max(o.col.a, 0.9 * blow);
+  o.dv = mix(mix(3000.0, 700.0, inten), mix(1800.0, 250.0, inten), sn);
+  o.dv = mix(o.dv, 90.0, blow);
   return o;
 }
 @fragment fn fs_veil(in: VeilOut) -> @location(0) vec4f {

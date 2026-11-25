@@ -84,6 +84,7 @@ fn handshake_tools_and_offline_error() {
         "set_aircraft_config",
         "set_engine",
         "set_radios",
+        "set_autopilot",
         "set_environment",
         "place_aircraft",
         "take_screenshot",

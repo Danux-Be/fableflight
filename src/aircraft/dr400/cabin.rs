@@ -9,6 +9,7 @@
 //! with their belts, the rear bench and the baggage space behind it; vinyl
 //! side panels with armrests, map pockets and air vents; and the canopy, a
 //! fixed windscreen and the bubble that slides forward over it on its frame.
+use crate::aircraft::Hotspot;
 use super::*;
 use crate::aircraft::c172::cabin::{gauge, rect, strap};
 use glam::{Mat3, Quat, Vec2, Vec3};
@@ -60,8 +61,8 @@ const STACK: [f32; 4] = [0.27, 0.40, -0.17, 0.08];
 pub fn build(b: &mut Builder) {
     let mut m = Mesh::default();
     lining(&mut m);
-    panel(&mut m);
-    console(&mut m);
+    panel(&mut m, b);
+    console(&mut m, b);
     seats(&mut m);
     extras(&mut m);
     b.fixed("cabin", G_FUSE, m);
@@ -251,7 +252,7 @@ fn panel_top(x: f32) -> f32 {
     if x < 0.25 { 0.13 - 0.005 * (x / 0.25).powi(2) } else { 0.125 - 0.025 * ((x - 0.25) / 0.25) }
 }
 
-fn panel(m: &mut Mesh) {
+fn panel(m: &mut Mesh, b: &mut Builder) {
     let z = PANEL_Z;
     let w = 0.50;
     let outline: Vec<Vec2> = [(-w, -0.25), (w, -0.25), (w, 0.10), (0.25, 0.125), (0.0, 0.13), (-0.25, 0.125), (-w, 0.10)].iter().map(|&(x, y)| Vec2::new(x, y)).collect();
@@ -331,8 +332,12 @@ fn panel(m: &mut Mesh) {
     }
     // The magneto key switch, its key in at BOTH.
     m.lathe(&CHROME, Vec3::new(-0.44, -0.17, f), Vec3::Z, &[[0.016, 0.0], [0.016, 0.004], [0.012, 0.007], [0.0, 0.007]], 24, false);
-    m.rbox(&mt(mat::STEEL, 0.6, 0.55, 0.4), Vec3::new(-0.44, -0.17, f + 0.014), Vec3::new(0.003, 0.009, 0.008), 0.0015, Quat::from_rotation_z(-0.5));
-    m.rbox(&BLACK, Vec3::new(-0.44, -0.17, f + 0.027), Vec3::new(0.004, 0.012, 0.009), 0.003, Quat::from_rotation_z(-0.5));
+    let mut key = Mesh::default();
+    key.rbox(&mt(mat::STEEL, 0.6, 0.55, 0.4), Vec3::new(-0.44, -0.17, f + 0.014), Vec3::new(0.003, 0.009, 0.008), 0.0015, Quat::from_rotation_z(-0.5));
+    key.rbox(&BLACK, Vec3::new(-0.44, -0.17, f + 0.027), Vec3::new(0.004, 0.012, 0.009), 0.003, Quat::from_rotation_z(-0.5));
+    let center = Vec3::new(-0.44, -0.17, f);
+    let piece = b.add("magneto key", G_FUSE, key, Anim::hinge(Drive::new(Input::Ignition, -0.8)), center, Vec3::Z, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(Vec3::Z * 0.027, 0.016, "ignition"));
     m.disc(&mt(mat::PLASTIC, 0.32, 0.32, 0.31).pat(pat::PLACARD), Vec3::new(-0.44, -0.17, f - 0.0002), Vec3::Z, Vec3::Y, 0.026, 32);
     // The warning lamps: alternator, fuel pressure, starter engaged.
     for (i, col) in [mt(mat::PLASTIC, 0.25, 0.015, 0.01), mt(mat::PLASTIC, 0.30, 0.13, 0.01), mt(mat::PLASTIC, 0.25, 0.015, 0.01)].iter().enumerate() {
@@ -342,12 +347,22 @@ fn panel(m: &mut Mesh) {
         label(m, Vec3::new(x, -0.157, f), 0.011, 0.003, Quat::IDENTITY);
     }
     // The rocker switches: master (battery and alternator, red), fuel pump,
-    // beacon, strobes, nav lights, landing light, avionics; their labels.
+    // taxi and landing lights, navigation lights and beacon.
     for i in 0..7 {
         let x = -0.37 + i as f32 * 0.03;
         let col = if i < 2 { RED } else { mt(mat::PLASTIC, 0.03, 0.03, 0.03) };
         m.rbox(&BLACK, Vec3::new(x, -0.19, f + 0.002), Vec3::new(0.008, 0.013, 0.002), 0.0015, Quat::IDENTITY);
-        m.rbox(&col, Vec3::new(x, -0.19, f + 0.006), Vec3::new(0.0062, 0.011, 0.004), 0.002, Quat::from_rotation_x(if i % 2 == 0 { 0.18 } else { -0.18 }));
+        let center = Vec3::new(x, -0.19, f + 0.006);
+        let mut rocker = Mesh::default();
+        rocker.rbox(&col, center, Vec3::new(0.0062, 0.011, 0.004), 0.002, Quat::IDENTITY);
+        match i {
+            0 | 4 => {
+                let (input, action) = if i == 0 { (Input::Master, "master") } else { (Input::LandingLights, "landing_lights") };
+                let piece = b.add("rocker", G_FUSE, rocker, Anim::hinge(Drive::new(input, -0.36).offset(0.18)), center, Vec3::X, None);
+                b.pieces[piece].hotspot = Some(Hotspot::click(Vec3::ZERO, 0.011, action));
+            }
+            _ => m.append(&rocker),
+        }
         label(m, Vec3::new(x, -0.214, f), 0.011, 0.0035, Quat::IDENTITY);
     }
     label(m, Vec3::new(-0.295, -0.232, f), 0.08, 0.004, Quat::IDENTITY);
@@ -406,7 +421,7 @@ fn con_face(x: f32, s: f32) -> (Vec3, Quat) {
     (Vec3::new(x, p.y, p.x) + n * 0.0005, Quat::from_mat3(&Mat3::from_cols(Vec3::X, up, n)))
 }
 
-fn console(m: &mut Mesh) {
+fn console(m: &mut Mesh, b: &mut Builder) {
     let col = PANEL_COL.pat(pat::PANEL);
     // The console: a wedge from behind the panel down to the floor.
     let outline: Vec<Vec2> = [(PANEL_Z - 0.25, -0.25), (CON_TOP.x, CON_TOP.y), (CON_FOOT.x, CON_FOOT.y), (PANEL_Z - 0.25, FLOOR_Y)].iter().map(|&(z, y)| Vec2::new(z, y)).collect();
@@ -424,19 +439,37 @@ fn console(m: &mut Mesh) {
     label(m, q + rot * Vec3::new(-0.048, -0.03, 0.0022), 0.006, 0.012, rot);
     let n = rot * Vec3::Z;
     let mx = q + rot * Vec3::new(0.025, 0.02, 0.0);
-    m.tube(&CHROME, &[mx - n * 0.02, mx + n * 0.075], &|_| 0.0042, 10, false);
-    m.lathe(&RED.pat(pat::KNURL), mx + n * 0.075, n, &[[0.0042, 0.0], [0.012, 0.004], [0.013, 0.016], [0.011, 0.02], [0.0, 0.021]], 18, true);
+    let mut mixture = Mesh::default();
+    mixture.tube(&CHROME, &[mx - n * 0.02, mx + n * 0.075], &|_| 0.0042, 10, false);
+    mixture.lathe(&RED.pat(pat::KNURL), mx + n * 0.075, n, &[[0.0042, 0.0], [0.012, 0.004], [0.013, 0.016], [0.011, 0.02], [0.0, 0.021]], 18, true);
+    let piece = b.add("mixture lever", G_FUSE, mixture, Anim::hinge(Drive::new(Input::Mixture, -0.50).offset(0.25)), mx, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::wheel(n * 0.086, 0.014, "mixture_rich", "mixture_lean"));
     // The fuel selector (main tank, wings, off) and the parking brake handle.
     let (fs, rot) = con_face(0.0, 0.55);
     let n = rot * Vec3::Z;
     m.lathe(&CHROME, fs, n, &[[0.05, 0.0], [0.05, 0.003], [0.048, 0.004]], 32, false);
-    m.disc(&FACE.x(gauge::FUEL_SEL), fs + n * 0.0035, n, rot * Vec3::Y, 0.046, 32);
-    m.rbox(&RED, fs + n * 0.012, Vec3::new(0.009, 0.036, 0.008), 0.004, rot);
+    m.disc(&FACE.x(gauge::FUEL_SEL_MAIN), fs + n * 0.0045, n, rot * Vec3::Y, 0.046, 32);
+    let mut selector = Mesh::default();
+    selector.rbox(&RED, fs + n * 0.012 + rot * Vec3::Y * 0.014, Vec3::new(0.008, 0.022, 0.007), 0.004, rot);
+    let piece = b.add("tank selector", G_FUSE, selector, Anim::hinge(Drive::new(Input::FuelValve, -FRAC_PI_2)), fs, n, None);
+    let mut target = Hotspot::wheel(n * 0.012 + rot * Vec3::Y * 0.020, 0.021, "fuel_next", "fuel_prev");
+    target.click = Some("fuel_valve");
+    b.pieces[piece].hotspot = Some(target);
     m.lathe(&CHROME, fs + n * 0.004, n, &[[0.008, 0.0], [0.008, 0.008], [0.0, 0.009]], 12, false);
-    let (pb, rot) = con_face(0.0, 0.82);
+    let (pb, rot) = con_face(0.042, 0.70);
     let n = rot * Vec3::Z;
-    m.tube(&CHROME, &[pb - n * 0.01, pb + n * 0.03], &|_| 0.0035, 8, false);
-    m.rbox(&RED, pb + n * 0.034, Vec3::new(0.026, 0.0065, 0.0065), 0.005, rot);
+    let mut brake = Mesh::default();
+    brake.tube(&CHROME, &[pb - n * 0.01, pb + n * 0.03], &|_| 0.0035, 8, false);
+    brake.rbox(&RED, pb + n * 0.034, Vec3::new(0.026, 0.0065, 0.0065), 0.005, rot);
+    let piece = b.add("parking brake", G_FUSE, brake, Anim::slide(Drive::new(Input::ParkingBrake, 0.025), n), pb, n, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click(n * 0.034, 0.020, "parking_brake"));
+    // DR400/180 handbook items 44 and 45: separate starter pushbutton and trim wheel.
+    let (start, rot) = con_face(-0.045, 0.67);
+    let normal = rot * Vec3::Z;
+    let mut button = Mesh::default();
+    button.lathe(&BLACK, start, normal, &[[0.010, 0.0], [0.010, 0.006], [0.008, 0.008], [0.0, 0.008]], 16, true);
+    let piece = b.fixed("starter button", G_FUSE, button);
+    b.pieces[piece].hotspot = Some(Hotspot::hold(start + normal * 0.008, 0.012, "starter"));
     label(m, pb + rot * Vec3::new(0.0, 0.018, 0.0), 0.02, 0.0045, rot);
     for (x, y) in [(-0.06f32, 0.06f32), (0.06, 0.06), (-0.06, -0.06), (0.06, -0.06)] {
         let (p, r) = con_face(x, 0.45 + y * 1.2);
@@ -632,7 +665,8 @@ fn controls(b: &mut Builder) {
                 p.rbox(&RUBBER, pc + tilt * Vec3::new(0.0, -0.045 + k as f32 * 0.028, 0.0055), Vec3::new(0.03, 0.0045, 0.0015), 0.001, tilt);
             }
             p.tube(&BLACK, &[pc + tilt * Vec3::new(0.0, 0.02, -0.006), pc + tilt * Vec3::new(0.0, 0.03, -0.06)], &|_| 0.008, 8, true);
-            b.add("pedal", G_FUSE, p, Anim::hinge(Drive::new(Input::Yaw, -dx.signum() * 0.18)), pv, Vec3::X, None);
+            let piece = b.add("pedal", G_FUSE, p, Anim::hinge2(Drive::new(Input::Yaw, -dx.signum() * 0.18), Drive::new(Input::Brake(dx.signum()), -0.14)), pv, Vec3::X, None);
+            b.pieces[piece].hotspot = Some(Hotspot::hold(pc - pv, 0.038, if dx < 0.0 { "brake_left" } else { "brake_right" }));
         }
     }
     // The throttle, in the quadrant's left slot (forward for power).
@@ -642,7 +676,8 @@ fn controls(b: &mut Builder) {
     let tp = q - n * 0.05;
     t.tube(&CHROME, &[tp, tp + n * 0.13], &|_| 0.0045, 10, false);
     t.lathe(&KNOB, tp + n * 0.13, n, &[[0.0045, 0.0], [0.014, 0.004], [0.019, 0.016], [0.018, 0.028], [0.010, 0.036], [0.0, 0.038]], 20, true);
-    b.add("throttle", G_FUSE, t, Anim::hinge(Drive::new(Input::Throttle, -0.5).offset(0.25)), tp, Vec3::X, None);
+    let piece = b.add("throttle", G_FUSE, t, Anim::hinge(Drive::new(Input::Throttle, -0.5).offset(0.25)), tp, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::wheel(n * 0.15, 0.021, "throttle_up", "throttle_down"));
     // The pitch trim wheel, half sunk in the tunnel.
     let mut w = Mesh::default();
     let wc = Vec3::new(0.0, FLOOR_Y + 0.085, -0.66);
@@ -657,7 +692,8 @@ fn controls(b: &mut Builder) {
     fl.rbox(&CHROME, (fp + tip) * 0.5, Vec3::new(0.006, 0.012, 0.13), 0.004, Quat::from_rotation_x(d.y.atan2(-d.z)));
     fl.tube(&BLACK, &[fp + d * 0.15, tip + d * 0.02], &|t| 0.013 + 0.002 * (t * PI).sin(), 14, true);
     fl.lathe(&RED, tip + d * 0.02, d, &[[0.007, 0.0], [0.007, 0.006], [0.0, 0.008]], 12, true);
-    b.add("flap lever", G_FUSE, fl, Anim::hinge(Drive::new(Input::FlapLever, 0.6)), fp, Vec3::X, None);
+    let piece = b.add("flap lever", G_FUSE, fl, Anim::hinge(Drive::new(Input::FlapLever, 0.6)), fp, Vec3::X, None);
+    b.pieces[piece].hotspot = Some(Hotspot::wheel(tip - fp, 0.022, "flaps_up", "flaps_down"));
 }
 
 // ---------------------------------------------------------------- canopy
@@ -748,7 +784,8 @@ fn canopy(b: &mut Builder) {
         f.rbox(&BLACK, p, Vec3::new(0.012, 0.004, 0.016), 0.003, Quat::IDENTITY);
         f.screw(&SCREW_BLACK, p - Vec3::Y * 0.004, Vec3::NEG_Y, 0.0022, p.x);
     }
-    b.add("canopy frame", G_FUSE, f, open(), Vec3::ZERO, Vec3::Z, None);
+    let piece = b.add("canopy frame", G_FUSE, f, open(), Vec3::ZERO, Vec3::Z, None);
+    b.pieces[piece].hotspot = Some(Hotspot::click((hl[1] + hl[2]) * 0.5, 0.034, "canopy"));
     // Fixed: the windscreen's top edge and the rails on the sills.
     let mut r = Mesh::default();
     let arc: Vec<Vec3> = (0..=40).map(|k| canopy_pt(SCREEN_Z - 0.004, k as f32 / 20.0) + Vec3::Y * 0.002).collect();

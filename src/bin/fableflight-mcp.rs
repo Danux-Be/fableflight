@@ -121,6 +121,7 @@ fn initialize(params: &Value) -> Value {
             Read get_aircraft_state before acting. Units: feet, knots, ft/min, degrees true, hPa, kg. \
             You may set the throttle, aircraft configuration, engine, radios, weather, time and the aircraft's position. \
             You cannot move the stick; the human pilot keeps attitude. \
+            You may engage and set the autopilot (set_autopilot) when the pilot asks; any firm input of theirs disconnects it. \
             Do not change weather, time or position unless the pilot asks. \
             Use get_navigation and get_airport_info for approach and radio work. \
             take_screenshot returns an image when seeing the panel or the view helps."
@@ -140,12 +141,15 @@ fn call_game(port: u16, name: &str, args: &Value) -> Result<Value, String> {
     stream.set_write_timeout(Some(GAME_TIMEOUT)).map_err(|e| e.to_string())?;
     let mut writer = stream.try_clone().map_err(|e| e.to_string())?;
     let mut reader = BufReader::new(stream);
-    let request = json!({
+    let mut request = json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
         "params": { "name": name, "arguments": args }
     });
+    if let Some(token) = rpc::read_token(port) {
+        request["token"] = Value::String(token);
+    }
     let mut text = serde_json::to_string(&request).map_err(|e| e.to_string())?;
     text.push('\n');
     writer.write_all(text.as_bytes()).map_err(|e| format!("writing to FableFlight: {e}"))?;

@@ -290,9 +290,7 @@ pub enum Hint<'a> {
 }
 
 impl<'a> Hint<'a> {
-    /// The pad's buttons while a pad is plugged in, else nothing. (The key
-    /// is named for the reader of the code only: key names on buttons read as
-    /// clutter, and the keys work all the same.)
+    /// the pad's buttons while a pad is in use, else nothing.
     pub fn of(_key: &'a str, pad: &'a str) -> Self {
         if active() && !pad.is_empty() { Hint::Pad(pad) } else { Hint::None }
     }
@@ -313,13 +311,79 @@ pub fn focus_ring(ctx: &egui::Context, col: Color32) {
     p.rect_stroke(rect.expand(2.0), crate::menu::R_WIDGET, Stroke::new(2.0, col), egui::StrokeKind::Outside);
 }
 
-/// At the end of a scroll area's contents: scroll a widget the gamepad has
-/// just moved to into view.
+/// The scroll areas and the gamepad. The right stick's scrolling: how far
+/// this frame asks for (points, + moves the content down, showing what is
+/// above), and which area takes it: the one holding the focused widget, else
+/// the largest in view, as seen on the previous pass (an area only knows
+/// what it holds once its contents are laid out). And the widget each area
+/// last brought into view, to follow the focus as the d-pad moves it.
+struct Scroll {
+    amount: f32,
+    target: Option<egui::Id>,
+    /// this pass's areas: (id, visible area, holds the focus)
+    seen: Vec<(egui::Id, f32, bool)>,
+    /// (area, the focused widget it last scrolled to)
+    followed: Vec<(egui::Id, egui::Id)>,
+}
+
+thread_local! {
+    static SCROLL: std::cell::RefCell<Scroll> = const { std::cell::RefCell::new(Scroll { amount: 0.0, target: None, seen: Vec::new(), followed: Vec::new() }) };
+}
+
+/// The right stick's scroll for this frame (points; 0 when it is centred).
+pub fn set_scroll(points: f32) {
+    SCROLL.with(|s| s.borrow_mut().amount = points);
+}
+
+/// At the start of a UI pass: settle which scroll area the stick works.
+pub fn begin_pass() {
+    SCROLL.with(|s| {
+        let s = &mut *s.borrow_mut();
+        s.target = s.seen.iter().find(|a| a.2).or_else(|| s.seen.iter().max_by(|a, b| a.1.total_cmp(&b.1))).map(|a| a.0);
+        s.seen.clear();
+    });
+}
+
+/// At the end of a scroll area's contents: scroll a widget the gamepad (or
+/// the keyboard) has moved the focus to into view, and let the right stick
+/// scroll the area (pages of text have nothing for the d-pad to move to).
+///
+/// The move is noticed by the focused widget changing, not by
+/// `Response::gained_focus`: egui moves the focus at the end of a pass, so
+/// by the next one that already reads false.
 pub fn follow_focus(ui: &Ui) {
     let ctx = ui.ctx();
-    let Some(id) = ctx.memory(|m| m.focused()) else { return };
-    let Some(r) = ctx.read_response(id) else { return };
-    if r.gained_focus() && r.layer_id == ui.layer_id() && ui.min_rect().contains_rect(r.rect) {
-        ui.scroll_to_rect(r.rect.expand(8.0), None);
-    }
+    let focus = ctx.memory(|m| m.focused()).and_then(|id| ctx.read_response(id));
+    let held = focus.filter(|r| r.layer_id == ui.layer_id() && ui.min_rect().contains_rect(r.rect));
+    let area = ui.scope_id();
+    let shown = ui.clip_rect().intersect(ui.min_rect());
+    let vis = if shown.is_positive() { shown.area() } else { 0.0 };
+    SCROLL.with(|s| {
+        let s = &mut *s.borrow_mut();
+        let last = s.followed.iter().position(|f| f.0 == area);
+        match (&held, last) {
+            (Some(r), Some(k)) if s.followed[k].1 == r.id => {}
+            (Some(r), _) => {
+                ui.scroll_to_rect(r.rect.expand(8.0), None);
+                match last {
+                    Some(k) => s.followed[k].1 = r.id,
+                    None => s.followed.push((area, r.id)),
+                }
+            }
+            // the focus left: coming back to the same widget scrolls to it again
+            (None, Some(k)) => {
+                s.followed.swap_remove(k);
+            }
+            (None, None) => {}
+        }
+        if !active() {
+            return;
+        }
+        s.seen.push((area, vis, held.is_some()));
+        if s.target == Some(area) && s.amount != 0.0 {
+            ui.scroll_with_delta_animation(vec2(0.0, s.amount), egui::style::ScrollAnimation::none());
+            s.amount = 0.0;
+            ctx.request_repaint();
+        }
+    });
 }

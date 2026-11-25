@@ -10,20 +10,136 @@ env:
 
 jobs:
   build-and-test:
-    name: Build and test (${{ matrix.os }})
+    name: Build, test and run (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      # Windows: line tables in the PDB so a crash dump's stack has function
+      # names and lines (see "Crash stack" below). Build and Test share it, so
+      # the test step doesn't rebuild.
+      CARGO_PROFILE_RELEASE_DEBUG: ${{ matrix.os == 'windows-latest' && 'line-tables-only' || 'none' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - name: Linux libraries (audio, gamepads)
+      - name: Linux libraries (audio, gamepads, a virtual screen and a software GPU)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libudev-dev pkg-config \
+            xvfb mesa-vulkan-drivers libvulkan1 libxkbcommon-x11-0 libxcursor1 libxi6 libxrandr2
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Build
         run: cargo build --release --locked
+
       - name: Test
-        run: cargo test --release --locked
+        run: "cargo test --release --locked -- --skip aircraft::"
+
+      # Every built-in aircraft: a detailed outside at the Spec's scale, a
+      # cockpit with a panel and a view out, reachable clickable controls
+      # (src/aircraft/standards.rs and the hotspot tests in src/aircraft/mod.rs).
+      - name: Aircraft standards
+        if: success() || failure()
+        run: "cargo test --release --locked --bin fablegame aircraft:: -- --nocapture"
+
+      # lavapipe compiles shaders on the CPU, slowly; keep its cache between runs.
+      - name: Mesa shader cache
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mesa_shader_cache
+          key: mesa-shaders-${{ hashFiles('src/shaders/**') }}
+          restore-keys: mesa-shaders-
+
+      # Launch the game for real: the start menu and a flight scene, each a
+      # scripted screenshot that must come out as a proper picture.
+      # Linux runners have no GPU and lavapipe compiles the flight scene's
+      # shaders far too slowly (minutes per frame), so Linux checks the menu;
+      # Windows and macOS fly the scene too.
+      - name: Run the game (Linux, lavapipe on a virtual screen; menu only)
+        if: runner.os == 'Linux'
+        env:
+          SMOKE_RUNS: menu
+        run: xvfb-run -a -s "-screen 0 1280x720x24" python .github/scripts/smoke.py target/release/fablegame smoke-shots
+      # The runner's built-in WARP corrupts its own heap while JIT-compiling
+      # one of the flight scene's pixel shaders (cdb: HEAP "modified past
+      # requested size" freeing d3d10warp!PixelShaderJIT, inside
+      # ExecuteCommandLists), so the game died at random a moment later.
+      # Use Microsoft's current WARP from NuGet: D3D12 loads d3d10warp.dll
+      # from the executable's folder first. Pinned and checked by hash.
+      - name: Newer WARP (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ver = '1.0.22'
+          $sha = 'AFC058F4D1066EDC4231A38F3AB3592B1930F7287D4AC700E6A056E0874BB0BE'
+          $pkg = "$env:RUNNER_TEMP\warp.zip"
+          Invoke-WebRequest "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.warp/$ver/microsoft.direct3d.warp.$ver.nupkg" -OutFile $pkg
+          if ((Get-FileHash $pkg -Algorithm SHA256).Hash -ne $sha) { throw "WARP package hash mismatch" }
+          Expand-Archive $pkg "$env:RUNNER_TEMP\warp" -Force
+          Copy-Item "$env:RUNNER_TEMP\warp\build\native\bin\x64\d3d10warp.dll" target\release\
+          Write-Host "WARP $ver next to fablegame.exe"
+      # A native crash (access violation, say) leaves no Rust backtrace, so
+      # have Windows Error Reporting write a minidump of the game when it dies.
+      - name: Crash dumps on (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = "$env:GITHUB_WORKSPACE\smoke-shots\dumps"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\fablegame.exe'
+          New-Item -Force $key | Out-Null
+          New-ItemProperty -Force $key -Name DumpFolder -PropertyType ExpandString -Value $dir | Out-Null
+          New-ItemProperty -Force $key -Name DumpType -PropertyType DWord -Value 1 | Out-Null
+          New-ItemProperty -Force $key -Name DumpCount -PropertyType DWord -Value 4 | Out-Null
+      - name: Run the game (Windows, WARP)
+        if: runner.os == 'Windows'
+        run: python .github/scripts/smoke.py target/release/fablegame.exe smoke-shots
+      # Print the crashing thread's stack (and every thread's) from the dump,
+      # with our PDB and Microsoft's public symbols for the driver and DXC.
+      - name: Crash stack (Windows)
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe', 'C:\Program Files\Windows Kits\10\Debuggers\x64\cdb.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $cdb) { $cdb = Get-ChildItem 'C:\Program Files*\Windows Kits' -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue | Where-Object FullName -like '*x64*' | Select-Object -First 1 }
+          if (-not $cdb) { Write-Host "cdb.exe not found"; exit 0 }
+          Write-Host "cdb: $($cdb.FullName)"
+          $sym = "$env:GITHUB_WORKSPACE\target\release;srv*$env:RUNNER_TEMP\symbols*https://msdl.microsoft.com/download/symbols"
+          $stack = '.echo ===== crashing thread; .ecxr; kn 80; .echo ===== all threads; ~*kn 40; .echo ===== modules; lmo; q'
+          $dumps = Get-ChildItem "$env:GITHUB_WORKSPACE\smoke-shots\dumps" -Filter *.dmp -ErrorAction SilentlyContinue
+          foreach ($d in $dumps) {
+            Write-Host "===== dump $($d.Name)"
+            & $cdb.FullName -z $d.FullName -y $sym -lines -c ".symopt+0x40; $stack"
+          }
+          if ($dumps) { exit 0 }
+          # No dump from WER: fly the scene again under the debugger and stop
+          # on the crash itself (second chance, so handled exceptions pass).
+          Write-Host "no crash dump was written; running the scene under cdb"
+          $exe = "$env:GITHUB_WORKSPACE\target\release\fablegame.exe"
+          $gameArgs = '--offline --mute --no-mcp --headless --graphics low --width 640 --height 360 --lang en --no-menu --aircraft c172 --lat 37.6 --lon -122.37 --alt 600 --time 12 --clouds 0.3 --shot smoke-shots\debug-scene.png@6'
+          $on = "sxd -c2 `"$stack`""
+          # (heap corruption, 0xC0000374, is reported through a breakpoint: bpe)
+          $cmd = ".symopt+0x40; $on av; $on dz; $on sov; $on c000001d; $on c0000409; $on c0000374; sxe -c `"$stack`" bpe; g"
+          $env:RUST_LOG = 'warn,fablegame=info'
+          $env:FABLE_NO_PAD = '1'
+          & $cdb.FullName -G -y $sym -lines -c $cmd $exe $gameArgs.Split(' ') 2>&1 | Tee-Object smoke-shots\debug-scene.txt | Select-Object -Last 400
+
+      - name: Run the game (macOS, Metal)
+        if: runner.os == 'macOS'
+        run: python .github/scripts/smoke.py target/release/fablegame smoke-shots
+
+      - name: Upload screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.os }}
+          path: smoke-shots/
+          if-no-files-found: ignore
