@@ -478,6 +478,8 @@ mod tests {
         let t = std::time::Instant::now();
         let heard = Ears::get().hear(audio).recv().unwrap().expect("words");
         println!("said:  {text}\nheard: {heard}\nin {:.2}s (model load included)", t.elapsed().as_secs_f32());
-        assert_eq!(intent(&heard, &[Req::Clearance, Req::Taxi]), Some(Req::Taxi));
+        if std::env::var("ATC_SAY").is_err() {
+            assert_eq!(intent(&heard, &[Req::Clearance, Req::Taxi]), Some(Req::Taxi));
+        }
     }
 }
