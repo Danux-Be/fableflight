@@ -85,16 +85,10 @@ pub fn models() -> &'static Models {
             .iter()
             .map(|name| {
                 let o = objs.get(name).unwrap_or_else(|| panic!("balloons model: no piece \"{name}\""));
-                // (Colour alpha, inst.wgsl's material: 1.5 fabric that lets
-                // the sun through, 2 the flame, 1 plain diffuse.)
-                let m = if name.starts_with("env") || name == "skirt" {
-                    1.5
-                } else if name == "flame" {
-                    2.0
-                } else {
-                    1.0
-                };
-                let v = o.mesh.v.iter().map(|v| MeshVertex { pos: v.pos, nrm: v.nrm, col: [v.col[0], v.col[1], v.col[2], m] }).collect();
+                // (Colour alpha: inst.wgsl's material, from balloons.py's
+                // MAT_CODE: nylon, seams, tapes, Nomex, wicker, leather,
+                // rope, steel, the flame; 1 plain diffuse.)
+                let v = o.mesh.v.iter().map(|v| MeshVertex { pos: v.pos, nrm: v.nrm, col: [v.col[0], v.col[1], v.col[2], if v.mat[0] > 0.5 { v.mat[0] } else { 1.0 }] }).collect();
                 (v, o.mesh.i.clone())
             })
             .collect();
@@ -403,7 +397,7 @@ pub struct Balloons {
     pending: Vec<(usize, usize, Plan)>,
     check: f64,
     /// asked for on the command line: balloons up around (km, bearing) now
-    forced: Option<(f64, f64, u32)>,
+    forced: Option<(f64, f64, u32, Option<f64>)>,
 }
 
 impl Default for Balloons {
@@ -421,7 +415,7 @@ const NEAR_MODEL: f64 = 2_500.0;
 
 impl Balloons {
     /// With a group of `n` balloons asked for, flying now `km` away on `bearing`.
-    pub fn with_forced(forced: Option<(f64, f64, u32)>) -> Self {
+    pub fn with_forced(forced: Option<(f64, f64, u32, Option<f64>)>) -> Self {
         Balloons { forced, ..Default::default() }
     }
 
@@ -455,8 +449,11 @@ impl Balloons {
             self.check = 0.0;
         }
         self.day = Some((day, utc));
-        if let Some((km, brg, n)) = self.forced.take() {
-            self.spawn_here(cam, km, brg, n, env);
+        // (Once the ground under the camera is known, so the heights are right.)
+        if self.forced.is_some() && (env.ground)(cam).is_some() {
+            if let Some((km, brg, n, agl)) = self.forced.take() {
+                self.spawn_here(cam, km, brg, n, agl, env);
+            }
         }
         // Which sites are near, now and then.
         self.check -= dt;
@@ -558,15 +555,15 @@ impl Balloons {
 
     /// `n` balloons in the air around a point `km` away on `bearing` (the
     /// command line's --balloons-at): for trying them out anywhere.
-    fn spawn_here(&mut self, cam: DVec3, km: f64, brg: f64, n: u32, env: &Env) {
-        let (e, nn, up) = geo::enu(cam);
+    fn spawn_here(&mut self, cam: DVec3, km: f64, brg: f64, n: u32, agl: Option<f64>, env: &Env) {
+        let (e, nn, _) = geo::enu(cam);
         let a = brg.to_radians();
         let c = cam + (e * a.sin() + nn * a.cos()) * km * 1000.0;
         let mut rng = Rng(0x1234_5678_9ABC_DEF1 ^ n as u64);
         for i in 0..n {
             // (A small group close together, a big one spread over a few km.)
             let spread = (150.0 + 120.0 * n as f64).min(2500.0);
-            let off = (e * rng.range(-1.0, 1.0) + nn * rng.range(-1.0, 1.0)) * spread;
+            let off = if n == 1 { DVec3::ZERO } else { (e * rng.range(-1.0, 1.0) + nn * rng.range(-1.0, 1.0)) * spread };
             let p = c + off;
             let (la, lo, _) = geo::pos_to_lla(p);
             let g = (env.ground)(p).unwrap_or(0.0);
@@ -574,8 +571,13 @@ impl Balloons {
             let mut b = Balloon::new(plan, usize::MAX, g);
             b.phase = Phase::Flying;
             b.flown = 300.0;
-            b.p += up * rng.range(80.0, 500.0);
-            b.p = b.p.normalize() * (geo::R + g + (b.p.length() - geo::R - g));
+            // (At the height asked for, holding it; else somewhere up to 500 m.)
+            let h = agl.unwrap_or_else(|| rng.range(80.0, 500.0));
+            b.p = b.p.normalize() * (geo::R + g + h);
+            if agl.is_some() {
+                b.plan.cruise = (h, h);
+                b.plan.minutes = 600.0;
+            }
             self.list.push(b);
         }
     }
@@ -628,13 +630,13 @@ impl Balloons {
             let env_s = DVec3::new(ks * (1.0 - 0.45 * b.collapse), ks * squash, ks * (1.0 - 0.45 * b.collapse));
             let scheme = b.plan.scheme as u32 % SCHEMES.len() as u32;
             if d > NEAR_MODEL {
-                out.push((ENV_FAR + scheme, inst(base(env_s, MOUTH[big]))));
+                out.push((ENV_FAR + scheme, scaled(base(env_s, MOUTH[big]), ks)));
                 if d < 9_000.0 {
                     out.push((RIG_FAR, inst(base(DVec3::splat(if b.plan.large { 1.6 } else { 1.0 }), 0.0))));
                 }
             } else {
-                out.push((ENV + scheme, inst(base(env_s, MOUTH[big]))));
-                out.push((SKIRT, inst(base(DVec3::splat(ks), MOUTH[big]))));
+                out.push((ENV + scheme, scaled(base(env_s, MOUTH[big]), ks)));
+                out.push((SKIRT, scaled(base(DVec3::splat(ks), MOUTH[big]), ks)));
                 if b.collapse < 0.3 {
                     out.push((if b.plan.large { WIRES_LARGE } else { WIRES_SPORT }, inst(base(DVec3::ONE, 0.0))));
                 }
@@ -662,8 +664,14 @@ fn hours_between(a: f64, b: f64) -> f64 {
 }
 
 fn inst(m: Mat4) -> Inst {
+    scaled(m, 1.0)
+}
+
+/// An instance of a piece drawn `k` times its size (inst.wgsl's ext.x keeps
+/// the weave of the cloth at its real size).
+fn scaled(m: Mat4, k: f64) -> Inst {
     let c = m.to_cols_array_2d();
-    Inst { m: [[c[0][0], c[1][0], c[2][0], c[3][0]], [c[0][1], c[1][1], c[2][1], c[3][1]], [c[0][2], c[1][2], c[2][2], c[3][2]]], tint: [1.0, 1.0, 1.0, 0.0], ext: [0.0; 4] }
+    Inst { m: [[c[0][0], c[1][0], c[2][0], c[3][0]], [c[0][1], c[1][1], c[2][1], c[3][1]], [c[0][2], c[1][2], c[2][2], c[3][2]]], tint: [1.0, 1.0, 1.0, 0.0], ext: [k as f32, 0.0, 0.0, 0.0] }
 }
 
 #[cfg(test)]

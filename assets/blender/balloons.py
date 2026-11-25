@@ -109,7 +109,7 @@ CREAM = c(0.78, 0.64, 0.36)
 WHITE = c(0.76, 0.76, 0.73)
 BLACK = c(0.018, 0.018, 0.022)
 TEAL = c(0.02, 0.32, 0.32)
-WICKER = c(0.42, 0.29, 0.14)
+WICKER = c(0.52, 0.37, 0.18)
 WICKER_DK = c(0.27, 0.17, 0.07)
 LEATHER = c(0.10, 0.055, 0.03)
 SUEDE = c(0.20, 0.10, 0.05)
@@ -240,12 +240,128 @@ def colour_layer(bm):
     return bm.loops.layers.color.get("Col") or bm.loops.layers.color.new("Col")
 
 
+# Materials, kept as each face's material index and exported as the game's
+# material code (inst.wgsl draws each one: woven nylon, its seams and load
+# tapes, wicker, leather, rope, metal, the skirt's Nomex, the flame).
+TRIM, WICKER_M, LEATHER_M, ROPE_M, METAL_M, NOMEX_M, FABRIC_M, SEAM_M, TAPE_M, FLAME_M = range(10)
+MAT_CODE = [1.0, 1.2, 1.25, 1.3, 1.36, 1.45, 1.5, 1.52, 1.54, 2.0]
+_mat = [TRIM]
+
+
+def use(m):
+    """The material for the faces made from now on."""
+    _mat[0] = m
+
+
 def paint(face, layer, col):
+    face.material_index = _mat[0]
     for l in face.loops:
         l[layer] = (*col, 1.0)
 
 
-def tube(bm, layer, a, b, r, col, n=6, caps=True):
+def frames(pts, closed):
+    """A frame (tangent, u, w) at each point of a path, carried along it
+    without twisting (parallel transport)."""
+    n = len(pts)
+    tans = []
+    for i in range(n):
+        a = pts[i - 1] if (i > 0 or closed) else pts[i]
+        b = pts[(i + 1) % n] if (i < n - 1 or closed) else pts[i]
+        t = (b - a)
+        tans.append(t.normalized() if t.length > 1e-9 else V((0, 0, 1)))
+    u = tans[0].orthogonal().normalized()
+    out = []
+    for i, t in enumerate(tans):
+        if i > 0:
+            u = (u - t * u.dot(t))
+            u = u.normalized() if u.length > 1e-9 else t.orthogonal().normalized()
+        out.append((t, u, t.cross(u)))
+    return out
+
+
+def sweep(bm, layer, pts, r, col, sides=6, closed=False, caps=True):
+    """A round section of radius r (a number, or one per point) along a path."""
+    pts = [V(p) for p in pts]
+    fr = frames(pts, closed)
+    rings = []
+    for i, (p, (t, u, w)) in enumerate(zip(pts, fr)):
+        rr = r[i] if isinstance(r, (list, tuple)) else r
+        rings.append([bm.verts.new(p + (u * math.cos(2 * math.pi * k / sides) + w * math.sin(2 * math.pi * k / sides)) * rr) for k in range(sides)])
+    last = len(rings) if closed else len(rings) - 1
+    for i in range(last):
+        a, b = rings[i], rings[(i + 1) % len(rings)]
+        for k in range(sides):
+            f = bm.faces.new((a[k], a[(k + 1) % sides], b[(k + 1) % sides], b[k]))
+            f.smooth = True
+            paint(f, layer, col)
+    if caps and not closed:
+        for ring in (rings[0][::-1], rings[-1]):
+            paint(bm.faces.new(ring), layer, col)
+
+
+def rope(bm, layer, pts, r, col, closed=False):
+    """A three-strand laid rope of radius r along a path: three strands
+    twisted round each other, a turn every 3.5 diameters."""
+    pts = [V(p) for p in pts]
+    # Resample finely enough for the twist.
+    fine = []
+    segs = len(pts) if closed else len(pts) - 1
+    for i in range(segs):
+        a, b = pts[i], pts[(i + 1) % len(pts)]
+        n = max(1, int((b - a).length / (r * 1.2)))
+        for k in range(n):
+            fine.append(a.lerp(b, k / n))
+    if not closed:
+        fine.append(pts[-1])
+    fr = frames(fine, closed)
+    pitch = 7.0 * r
+    s = 0.0
+    strands = [[], [], []]
+    for i, (p, (t, u, w)) in enumerate(zip(fine, fr)):
+        if i > 0:
+            s += (fine[i] - fine[i - 1]).length
+        for k in range(3):
+            a = 2 * math.pi * (s / pitch + k / 3)
+            strands[k].append(p + (u * math.cos(a) + w * math.sin(a)) * r * 0.5)
+    for k in range(3):
+        shade = tuple(x * (0.92 + 0.08 * k) for x in col)
+        sweep(bm, layer, strands[k], r * 0.55, shade, sides=5, closed=closed, caps=not closed)
+
+
+def rounded_rect(hx, hy, rc, per_corner=6, step=0.08):
+    """The outline of a rectangle with rounded corners, counter-clockwise,
+    with points every `step` along the straight sides."""
+    out = []
+    corners = [(hx - rc, hy - rc, 0.0), (-hx + rc, hy - rc, 90.0), (-hx + rc, -hy + rc, 180.0), (hx - rc, -hy + rc, 270.0)]
+    for ci, (cx, cy, a0) in enumerate(corners):
+        for k in range(per_corner + 1):
+            a = math.radians(a0 + 90.0 * k / per_corner)
+            out.append(V((cx + rc * math.cos(a), cy + rc * math.sin(a), 0.0)))
+        # The straight side to the next corner.
+        nx, ny, na = corners[(ci + 1) % 4]
+        a1 = math.radians(na)
+        p0 = out[-1]
+        p1 = V((nx + rc * math.cos(a1), ny + rc * math.sin(a1), 0.0))
+        n = max(1, int((p1 - p0).length / step))
+        for k in range(1, n):
+            out.append(p0.lerp(p1, k / n))
+    return out
+
+
+def wall(bm, layer, outline, z0, z1, col, inward=False, closed=True):
+    """A vertical wall along an outline (faces out, or in)."""
+    lo = [bm.verts.new((p.x, p.y, z0)) for p in outline]
+    hi = [bm.verts.new((p.x, p.y, z1)) for p in outline]
+    n = len(outline)
+    for i in range(n if closed else n - 1):
+        j = (i + 1) % n
+        q = (lo[i], lo[j], hi[j], hi[i])
+        f = bm.faces.new(q if not inward else q[::-1])
+        f.smooth = True
+        paint(f, layer, col)
+
+
+def tube(bm, layer, a, b, r, col, n=6, caps=True):  # noqa: shared helper
     """A round bar from a to b."""
     a, b = V(a), V(b)
     ax = (b - a)
@@ -321,42 +437,39 @@ def person(bm, layer, x, y, z_floor, jacket, h=1.72, facing=0.0, rng=0.0):
             paint(f, layer, jacket)
     top = bm.faces.new(vs[-1])
     paint(top, layer, jacket)
+    # Arms: upper arms down from the shoulders, forearms forward onto the rim.
+    fx, fy = math.cos(facing), math.sin(facing) * 0.62
+    side = V((-math.sin(facing), math.cos(facing), 0.0))
+    fwd = V((math.cos(facing), math.sin(facing), 0.0))
+    for sgn in (-1, 1):
+        sh_ = V((x, y, z_sh - 0.05)) + side * (0.19 * sgn)
+        el = sh_ + V((0, 0, -0.27)) + fwd * 0.06 + side * (0.03 * sgn)
+        wr = el + fwd * 0.26 + V((0, 0, 0.04)) - side * (0.05 * sgn)
+        sweep(bm, layer, [sh_, el], 0.055, jacket, sides=6)
+        sweep(bm, layer, [el, wr], 0.045, jacket, sides=6)
+        lathe(bm, layer, [(0.0, -0.045), (0.04, -0.03), (0.045, 0.0), (0.035, 0.03), (0.0, 0.045)], 6, lambda k, i: SKIN, z0=wr.z, centre=(wr.x + fwd.x * 0.04, wr.y + fwd.y * 0.04))
     # Head and a cap or hair.
     hz = z_sh + 0.17 * h / 1.72
     hair = [c(0.03, 0.02, 0.015), c(0.12, 0.07, 0.03), c(0.30, 0.22, 0.10), c(0.08, 0.08, 0.09)][int(rng * 4) % 4]
-    lathe(bm, layer, [(0.0, -0.12), (0.07, -0.11), (0.095, -0.05), (0.10, 0.02), (0.085, 0.08), (0.05, 0.115), (0.0, 0.125)], 8,
+    # Neck, head, hair or a cap with its peak.
+    lathe(bm, layer, [(0.0, -0.20), (0.05, -0.20), (0.05, -0.11), (0.0, -0.11)], 6, lambda k, i: SKIN, z0=hz, centre=(x, y))
+    lathe(bm, layer, [(0.0, -0.12), (0.07, -0.11), (0.095, -0.05), (0.10, 0.02), (0.085, 0.08), (0.05, 0.115), (0.0, 0.125)], 10,
           lambda k, i: hair if k >= 4 else SKIN, z0=hz, centre=(x, y))
-
-
-def wicker_wall(bm, layer, p0, p1, z0, z1, inside, cell=(0.06, 0.035)):
-    """A flat wicker wall from p0 to p1 (x, y): rows of rattan woven in and
-    out of upright stakes, as a grid of small faces in a few shades (each row
-    shifted half a stake from the last, the strands catching the light a
-    little differently)."""
-    p0, p1 = V((*p0, 0)), V((*p1, 0))
-    L = (p1 - p0).length
-    nu = max(2, int(L / cell[0]))
-    nv = max(2, int((z1 - z0) / cell[1]))
-    grid = [[bm.verts.new(p0 + (p1 - p0) * (i / nu) + V((0, 0, z0 + (z1 - z0) * j / nv))) for j in range(nv + 1)] for i in range(nu + 1)]
-    seed = int(abs(p0.x * 1000 + p0.y * 7919 + p1.x * 31 + z0 * 101)) + 1
-    for i in range(nu):
-        for j in range(nv):
-            q = (grid[i][j], grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1])
-            f = bm.faces.new(q if not inside else q[::-1])
-            seed = (seed * 1103515245 + 12345) % 2147483648
-            jitter = 0.86 + 0.28 * (seed / 2147483648)
-            under = (i + j % 2) % 2 == 1
-            k = jitter * (0.78 if under else 1.0) * (0.92 if j % 6 == 5 else 1.0)
-            col = tuple(x * k for x in WICKER)
-            if inside:
-                col = tuple(x * 0.72 for x in col)
-            paint(f, layer, col)
+    if rng > 0.45:
+        cap = JACKETS[int(rng * 97) % len(JACKETS)]
+        lathe(bm, layer, [(0.0, 0.03), (0.106, 0.03), (0.104, 0.07), (0.085, 0.11), (0.04, 0.13), (0.0, 0.135)], 10, lambda k, i: cap, z0=hz, centre=(x, y))
+        p0 = V((x, y, hz + 0.035)) + fwd * 0.09
+        # (The peak: a thin plate, a face each side.)
+        corners = [p0 + side * 0.075, p0 - side * 0.075, p0 - side * 0.06 + fwd * 0.08 - V((0, 0, 0.012)), p0 + side * 0.06 + fwd * 0.08 - V((0, 0, 0.012))]
+        paint(bm.faces.new([bm.verts.new(q) for q in corners]), layer, cap)
+        paint(bm.faces.new([bm.verts.new(q - V((0, 0, 0.004))) for q in corners[::-1]]), layer, cap)
 
 
 # ---------------------------------------------------------------- the envelope
 def gore_columns(near):
     # Shares across a gore: a load tape on each edge, the bulging panel between.
-    return [0.0, 0.012, 0.25, 0.5, 0.75, 0.988, 1.0] if near else [0.0, 0.5, 1.0]
+    # (A load tape is about 25 mm wide: some 0.5% of a gore at its widest each side.)
+    return [0.0, 0.005, 0.25, 0.5, 0.75, 0.995, 1.0] if near else [0.0, 0.5, 1.0]
 
 
 def envelope(name, scheme, near, coll):
@@ -364,6 +477,20 @@ def envelope(name, scheme, near, coll):
     layer = colour_layer(bm)
     sub = 3 if near else 1
     ts = arc_stations(ROWS, sub)
+    # Near: a narrow band at every seam between rows of panels (the two
+    # panels overlap there, sewn with two rows of stitches): its own faces,
+    # 20 mm wide.
+    seam_rows = set()
+    if near:
+        out = []
+        for j, t in enumerate(ts):
+            if j % sub == 0 and 0 < j < len(ts) - 1 and t < 0.985:
+                d = 0.010 / H
+                out += [t - d, t + d]
+                seam_rows.add(len(out) - 2)
+            else:
+                out.append(t)
+        ts = out
     cols = gore_columns(near)
     rows = []
     for j, t in enumerate(ts):
@@ -387,14 +514,28 @@ def envelope(name, scheme, near, coll):
     tape_cols = {0, n_per - 1} if near else set()
     for j in range(len(rows) - 1):
         a, b = rows[j], rows[j + 1]
-        k = min(j // sub, ROWS - 1)
+        # (The row of panels a face is in, counted along the meridian.)
+        tmid = 0.5 * (ts[j] + ts[j + 1])
+        k = min(sum(1 for jj, tt in enumerate(arc_stations(ROWS, 1)) if 0 < jj and tt <= tmid), ROWS - 1) if near else min(j // sub, ROWS - 1)
+        seam = j in seam_rows
         for g in range(GORES):
             panel = scheme_colour(scheme, g, k)
-            tape = tuple(0.55 * x + 0.02 for x in panel)
+            # (Panels of one colour still differ a little from one dye lot to the next.)
+            lot = 0.96 + 0.08 * (((g * 7 + k * 13) * 2654435761) % 1000) / 1000.0
+            panel = tuple(x * lot for x in panel)
+            tape = tuple(0.8 * x + 0.01 for x in panel)
             for ci in range(n_per):
                 i = g * n_per + ci
                 i2 = (i + 1) % len(a) if len(a) > 1 else 0
-                col = tape if ci in tape_cols else panel
+                if ci in tape_cols:
+                    use(TAPE_M)
+                    col = tape
+                elif seam:
+                    use(SEAM_M)
+                    col = panel
+                else:
+                    use(FABRIC_M)
+                    col = panel
                 if len(b) == 1:
                     f = bm.faces.new((a[i], a[i2], b[0]))
                 else:
@@ -411,6 +552,7 @@ def envelope(name, scheme, near, coll):
             if abs(frac - round(frac)) < 1e-4:
                 e.smooth = False
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    use(TRIM)
     return make_object(name, bm, coll)
 
 
@@ -421,6 +563,7 @@ def skirt(coll):
     r0 = radius(0.0)
     prof = [(r0 * 1.0, 0.0), (r0 * 0.99, -0.45), (r0 * 1.0, -0.9), (r0 * 1.02, -1.3)]
     n = GORES * 2
+    use(NOMEX_M)
     rings = [[bm.verts.new((r * math.cos(2 * math.pi * i / n), r * math.sin(2 * math.pi * i / n), z)) for i in range(n)] for r, z in prof]
     for k in range(len(rings) - 1):
         for i in range(n):
@@ -434,36 +577,122 @@ def skirt(coll):
     return make_object("skirt", bm, coll)
 
 
+def karabiner(bm, layer, at, r=0.045, wire=0.007):
+    """A steel karabiner: an oval loop of round bar, hanging."""
+    at = V(at)
+    pts = [at + V((r * 0.55 * math.cos(2 * math.pi * k / 14), 0.0, r * math.sin(2 * math.pi * k / 14))) for k in range(14)]
+    sweep(bm, layer, pts, wire, STEEL, sides=5, closed=True)
+
+
 def wires(name, frame_half, frame_z, mouth_z, scale, coll):
-    """Flying wires: from the bottom of every second load tape at the mouth
-    down to the nearest corner of the burner frame."""
+    """Flying wires: steel cables from the foot of every second load tape at
+    the mouth down to karabiners at the corners of the burner frame."""
     bm = bmesh.new()
     layer = colour_layer(bm)
+    use(METAL_M)
     r0 = radius(0.0) * scale
     corners = [(sx * frame_half, sy * frame_half) for sx, sy in [(1, 1), (-1, 1), (-1, -1), (1, -1)]]
     for g in range(0, GORES, 2):
         ang = 2 * math.pi * g / GORES
         top = V((r0 * math.cos(ang), r0 * math.sin(ang), mouth_z))
         cx, cy = min(corners, key=lambda cc: (cc[0] - top.x) ** 2 + (cc[1] - top.y) ** 2)
-        tube(bm, layer, (cx, cy, frame_z + 0.05), top, 0.012 * scale ** 0.5, DARK_STEEL, n=4, caps=False)
-    # The skirt's own lines down to the frame, and the crown line's end
-    # (tied off at the basket in flight: left out).
+        tube(bm, layer, (cx, cy, frame_z + 0.10), top, 0.005, c(0.30, 0.30, 0.32), n=5, caps=False)
+    for cx, cy in corners:
+        karabiner(bm, layer, (cx, cy, frame_z + 0.07), 0.05 * scale ** 0.3, 0.008)
+    use(TRIM)
     return make_object(name, bm, coll)
 
 
 # -------------------------------------------------------------------- the rigs
 def burner_unit(bm, layer, cx, cy, z, r=0.16, h=0.30):
-    """One burner: a stainless coil (as a ribbed cylinder), its jets on top,
-    the blast valve handle on the side."""
-    prof = []
-    for i in range(9):
-        zz = h * i / 8
-        prof.append((r * (1.0 if i % 2 == 0 else 0.93), zz))
-    lathe(bm, layer, [(0.0, 0.0)] + prof + [(r * 0.55, h + 0.02), (0.0, h + 0.03)], 12,
-          lambda k, i: STEEL if k % 2 == 0 else tuple(x * 0.7 for x in STEEL), z0=z, centre=(cx, cy))
-    # Blast valve and handle.
-    box(bm, layer, (cx + r, cy - 0.03, z + 0.05), (cx + r + 0.12, cy + 0.03, z + 0.12), DARK_STEEL)
-    tube(bm, layer, (cx + r + 0.10, cy, z + 0.08), (cx + r + 0.10, cy, z - 0.18), 0.012, BLACK, n=5)
+    """One burner: a stainless coil (a stack of turns of tube) in its can,
+    the jet ring on top, the blast valve and its handle on the side, the
+    pilot light."""
+    use(METAL_M)
+    # The coil: turns of tube round a cylinder.
+    turns = 7
+    for k in range(turns):
+        zz = z + 0.03 + (h - 0.06) * k / (turns - 1)
+        ring = [V((cx + r * math.cos(2 * math.pi * i / 16), cy + r * math.sin(2 * math.pi * i / 16), zz)) for i in range(16)]
+        sweep(bm, layer, ring, 0.018, STEEL, sides=6, closed=True)
+    # The can inside the coil, and the jet ring on top.
+    lathe(bm, layer, [(0.0, 0.0), (r * 0.82, 0.0), (r * 0.82, h), (r * 0.6, h + 0.015), (r * 0.25, h + 0.02), (0.0, h + 0.02)], 14,
+          lambda k, i: DARK_STEEL if k < 2 else STEEL, z0=z, centre=(cx, cy))
+    # Blast valve, handle.
+    box(bm, layer, (cx + r + 0.01, cy - 0.035, z + 0.04), (cx + r + 0.11, cy + 0.035, z + 0.13), STEEL)
+    use(TRIM)
+    tube(bm, layer, (cx + r + 0.09, cy, z + 0.08), (cx + r + 0.12, cy, z - 0.20), 0.013, BLACK, n=6)
+    use(METAL_M)
+    tube(bm, layer, (cx - r * 0.3, cy + r * 0.3, z + h), (cx - r * 0.3, cy + r * 0.3, z + h + 0.05), 0.008, STEEL, n=5)
+
+
+def cylinder_tank(bm, layer, cx, cy, jacket):
+    """A propane cylinder in its padded jacket, the valve and gauge on top."""
+    use(LEATHER_M)
+    lathe(bm, layer, [(0.0, 0.04), (0.150, 0.04), (0.165, 0.07), (0.168, 0.40), (0.165, 0.70), (0.140, 0.76), (0.0, 0.76)], 14,
+          lambda k, i: jacket, centre=(cx, cy))
+    use(METAL_M)
+    lathe(bm, layer, [(0.11, 0.76), (0.10, 0.80), (0.06, 0.83), (0.035, 0.84), (0.035, 0.90), (0.05, 0.92), (0.0, 0.93)], 12,
+          lambda k, i: STEEL, centre=(cx, cy))
+    use(TRIM)
+    lathe(bm, layer, [(0.0, 0.86), (0.028, 0.86), (0.028, 0.875), (0.0, 0.875)], 8, lambda k, i: WHITE if k == 2 else BLACK, centre=(cx + 0.05, cy))
+    # The cylinder's carrying strap round its middle.
+    use(LEATHER_M)
+    ring = [V((cx + 0.172 * math.cos(2 * math.pi * i / 16), cy + 0.172 * math.sin(2 * math.pi * i / 16), 0.45)) for i in range(16)]
+    sweep(bm, layer, ring, 0.012, LEATHER, sides=4, closed=True)
+
+
+def basket(bm, layer, w, l, h, rc, wall_t, rim_r, handles_per_side):
+    """A wicker basket: rounded corners, woven walls outside and in (the
+    weave is drawn by the shader, inst.wgsl), a plywood floor on leather-shod
+    runners, a padded suede rim, step holes, rope handles."""
+    hx, hy = w / 2, l / 2
+    out_line = rounded_rect(hx, hy, rc)
+    in_line = rounded_rect(hx - wall_t, hy - wall_t, max(rc - wall_t, 0.02))
+    use(WICKER_M)
+    wall(bm, layer, out_line, 0.0, h - 0.03, WICKER)
+    wall(bm, layer, in_line, 0.05, h - 0.03, tuple(x * 0.85 for x in WICKER), inward=True)
+    # The top of the walls under the rim, and the bottom edge.
+    use(TRIM)
+    floor_v = [bm.verts.new((p.x, p.y, 0.05)) for p in in_line]
+    paint(bm.faces.new(floor_v), layer, FLOOR)
+    under = [bm.verts.new((p.x, p.y, 0.0)) for p in out_line]
+    paint(bm.faces.new(under[::-1]), layer, FLOOR)
+    # Runners under the floor, shod in leather.
+    use(LEATHER_M)
+    for sx in (-1, 1):
+        box(bm, layer, (sx * (hx - 0.16) - 0.035, -hy + 0.08, -0.05), (sx * (hx - 0.16) + 0.035, hy - 0.08, 0.0), LEATHER, smooth=False)
+    # The padded rim: suede over a rawhide-wrapped cane top.
+    rim = [V((p.x, p.y, h - 0.02)) for p in rounded_rect(hx - wall_t * 0.5, hy - wall_t * 0.5, max(rc - wall_t * 0.5, 0.03), step=0.06)]
+    sweep(bm, layer, rim, rim_r, SUEDE, sides=10, closed=True)
+    # Step holes in the long sides (dark openings in the weave).
+    use(TRIM)
+    for sx in (-1, 1):
+        for zc in (0.32, 0.72):
+            for yc in (-hy * 0.45,):
+                pts = [V((sx * (hx + 0.002), yc + 0.07 * math.cos(2 * math.pi * k / 10), zc + 0.045 * math.sin(2 * math.pi * k / 10))) for k in range(10)]
+                vs = [bm.verts.new(p_) for p_ in pts]
+                f = bm.faces.new(vs if sx > 0 else vs[::-1])
+                paint(f, layer, c(0.03, 0.02, 0.012))
+    # Rope handles: loops of rope through the weave below the rim.
+    use(ROPE_M)
+    for side in range(4):
+        along_y = side in (0, 2)
+        sgn = 1 if side in (0, 1) else -1
+        span = l if along_y else w
+        for k in range(handles_per_side):
+            t = (k + 1) / (handles_per_side + 1) - 0.5
+            pts = []
+            for q in range(9):
+                a = math.pi * q / 8
+                d = 0.11 * math.cos(a)
+                drop = 0.13 * math.sin(a)
+                off = 0.035 * math.sin(a)
+                if along_y:
+                    pts.append(V((sgn * (hx + 0.012 + off), t * span + d, h - 0.16 - drop)))
+                else:
+                    pts.append(V((t * span + d, sgn * (hy + 0.012 + off), h - 0.16 - drop)))
+            rope(bm, layer, pts, 0.011, CREAM)
 
 
 def rig_sport(coll):
@@ -471,53 +700,39 @@ def rig_sport(coll):
     layer = colour_layer(bm)
     w, l, h = S_BASKET
     hx, hy = w / 2, l / 2
-    # Floor (plywood on runners) and the hide-covered skids.
-    box(bm, layer, (-hx, -hy, 0.0), (hx, hy, 0.05), FLOOR)
-    for sx in (-1, 1):
-        box(bm, layer, (sx * (hx - 0.12) - 0.04, -hy + 0.02, -0.06), (sx * (hx - 0.12) + 0.04, hy - 0.02, 0.0), LEATHER)
-    # Wicker walls, outside and inside.
-    pts = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
-    for i in range(4):
-        a, b = pts[i], pts[(i + 1) % 4]
-        wicker_wall(bm, layer, a, b, 0.02, h - 0.06, False)
-        t = 0.06
-        ia = (a[0] - math.copysign(t, a[0]), a[1] - math.copysign(t, a[1]))
-        ib = (b[0] - math.copysign(t, b[0]), b[1] - math.copysign(t, b[1]))
-        wicker_wall(bm, layer, ia, ib, 0.05, h - 0.06, True, (0.12, 0.08))
-    # The padded leather rim, and rope handles.
-    for i in range(4):
-        a, b = pts[i], pts[(i + 1) % 4]
-        tube(bm, layer, (a[0], a[1], h - 0.03), (b[0], b[1], h - 0.03), 0.065, LEATHER, n=8)
-    for i in range(4):
-        a, b = V((*pts[i], 0)), V((*pts[(i + 1) % 4], 0))
-        for s in (0.3, 0.7):
-            p = a.lerp(b, s)
-            o = p.normalized() * 0.02
-            tube(bm, layer, (p.x + o.x, p.y + o.y, h - 0.32), (p.x + o.x, p.y + o.y, h - 0.20), 0.018, CREAM, n=5)
-    # Four propane cylinders in the corners (seen from above).
-    for sx in (-1, 1):
-        for sy in (-1, 1):
-            cx, cy = sx * (hx - 0.22), sy * (hy - 0.22)
-            lathe(bm, layer, [(0.0, 0.05), (0.15, 0.05), (0.155, 0.10), (0.155, 0.72), (0.12, 0.80), (0.05, 0.83), (0.05, 0.88), (0.0, 0.88)], 10,
-                  lambda k, i: STEEL if k < 5 else DARK_STEEL, centre=(cx, cy))
-    # The burner poles (nylon rods in padded sleeves) from the corners up to the frame.
+    basket(bm, layer, w, l, h, 0.13, 0.05, 0.055, 2)
+    # Four propane cylinders in the corners, in padded jackets.
+    for (sx, sy), jacket in zip([(-1, -1), (1, -1), (-1, 1), (1, 1)], [c(0.02, 0.05, 0.20), c(0.02, 0.05, 0.20), c(0.30, 0.02, 0.02), c(0.02, 0.05, 0.20)]):
+        cylinder_tank(bm, layer, sx * (hx - 0.23), sy * (hy - 0.23), jacket)
+    # Fuel hoses up to the burners.
+    use(TRIM)
+    for k, cx in enumerate((-0.17, 0.17)):
+        pts = [V((cx * 2.2, (hy - 0.23) * (1 if k else -1), 0.93)), V((cx * 1.8, 0.0, 1.6)), V((cx * 1.2, 0.05, 2.2)), V((cx + 0.05, 0.10, S_NOZZLE_Z - 0.30))]
+        sweep(bm, layer, pts, 0.014, BLACK, sides=6)
+    # The burner poles: nylon rods in padded suede sleeves, from the basket's
+    # corners up to the frame.
+    use(LEATHER_M)
     f = 0.36
     for sx in (-1, 1):
         for sy in (-1, 1):
-            tube(bm, layer, (sx * (hx - 0.05), sy * (hy - 0.05), h), (sx * f, sy * f, S_FRAME_Z), 0.035, SUEDE, n=6)
-    # The burner frame: a square of stainless tube.
-    sq = [(f, f), (-f, f), (-f, -f), (f, -f)]
-    for i in range(4):
-        a, b = sq[i], sq[(i + 1) % 4]
-        tube(bm, layer, (a[0], a[1], S_FRAME_Z), (b[0], b[1], S_FRAME_Z), 0.022, STEEL, n=6)
-    tube(bm, layer, (-f, 0, S_FRAME_Z), (f, 0, S_FRAME_Z), 0.02, STEEL, n=6)
-    # Double burner, nozzle top at S_NOZZLE_Z.
+            tube(bm, layer, (sx * (hx - 0.07), sy * (hy - 0.07), h - 0.05), (sx * f, sy * f, S_FRAME_Z), 0.035, c(0.32, 0.03, 0.03), n=8)
+    # The load frame: stainless square, a cross bar carrying the burners,
+    # and a small instrument pack.
+    use(METAL_M)
+    sq = [V((f, f, S_FRAME_Z)), V((-f, f, S_FRAME_Z)), V((-f, -f, S_FRAME_Z)), V((f, -f, S_FRAME_Z))]
+    sweep(bm, layer, sq, 0.02, STEEL, sides=8, closed=True)
+    tube(bm, layer, (-f, 0, S_FRAME_Z), (f, 0, S_FRAME_Z), 0.018, STEEL, n=8)
     for cx in (-0.17, 0.17):
         burner_unit(bm, layer, cx, 0.0, S_NOZZLE_Z - 0.33)
-    # Fuel hoses from the burner down into the basket.
-    for cx in (-0.17, 0.17):
-        tube(bm, layer, (cx + 0.05, 0.12, S_NOZZLE_Z - 0.33), (cx * 2.4, hy - 0.28, 0.95), 0.016, BLACK, n=5)
+    use(TRIM)
+    box(bm, layer, (f - 0.02, -0.06, S_FRAME_Z - 0.16), (f + 0.03, 0.06, S_FRAME_Z - 0.02), BLACK)
+    # A drop-line bag hung outside one end: a coil of rope in a canvas bag.
+    use(LEATHER_M)
+    lathe(bm, layer, [(0.0, 0.0), (0.10, 0.0), (0.11, 0.06), (0.11, 0.30), (0.10, 0.32), (0.0, 0.32)], 12, lambda k, i: c(0.12, 0.10, 0.06), z0=h - 0.62, centre=(0.25, hy + 0.12))
+    use(ROPE_M)
+    rope(bm, layer, [V((0.25, hy + 0.10, h - 0.30)), V((0.25, hy + 0.04, h - 0.10)), V((0.25, hy - 0.02, h - 0.02))], 0.008, CREAM)
     # The pilot and two passengers.
+    use(TRIM)
     person(bm, layer, 0.28, -0.35, 0.05, JACKETS[0], 1.80, 0.2, 0.1)
     person(bm, layer, -0.30, -0.30, 0.05, JACKETS[1], 1.66, -0.4, 0.6)
     person(bm, layer, 0.05, 0.42, 0.05, JACKETS[3], 1.74, 3.0, 0.3)
@@ -532,48 +747,43 @@ def rig_large(coll):
     layer = colour_layer(bm)
     w, l, h = L_BASKET
     hx, hy = w / 2, l / 2
-    box(bm, layer, (-hx, -hy, 0.0), (hx, hy, 0.06), FLOOR)
-    for sy in (-1, 0, 1):
-        box(bm, layer, (-hx + 0.05, sy * (hy - 0.4) - 0.05, -0.08), (hx - 0.05, sy * (hy - 0.4) + 0.05, 0.0), LEATHER)
-    pts = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
-    for i in range(4):
-        a, b = pts[i], pts[(i + 1) % 4]
-        wicker_wall(bm, layer, a, b, 0.02, h - 0.07, False, (0.09, 0.05))
-        t = 0.07
-        ia = (a[0] - math.copysign(t, a[0]), a[1] - math.copysign(t, a[1]))
-        ib = (b[0] - math.copysign(t, b[0]), b[1] - math.copysign(t, b[1]))
-        wicker_wall(bm, layer, ia, ib, 0.06, h - 0.07, True, (0.15, 0.10))
-        tube(bm, layer, (a[0], a[1], h - 0.035), (b[0], b[1], h - 0.035), 0.075, LEATHER, n=8)
-    # Compartments: the pilot's across the middle (with the cylinders), two
-    # passenger compartments each end, split along the length.
+    basket(bm, layer, w, l, h, 0.18, 0.06, 0.065, 4)
+    # Partitions: the pilot's compartment across the middle (with the
+    # cylinders), the ends split along their length.
     pc = 0.55
     for sy in (-1, 1):
-        for side in (False, True):
-            wicker_wall(bm, layer, (-hx, sy * pc), (hx, sy * pc), 0.06, h - 0.07, side, (0.15, 0.10))
-        tube(bm, layer, (-hx, sy * pc, h - 0.035), (hx, sy * pc, h - 0.035), 0.06, LEATHER, n=8)
-        for side in (False, True):
-            a, b = (0.0, sy * pc), (0.0, sy * hy)
-            wicker_wall(bm, layer, a, b, 0.06, h - 0.07, side, (0.15, 0.10))
-        tube(bm, layer, (0.0, sy * pc, h - 0.035), (0.0, sy * hy, h - 0.035), 0.06, LEATHER, n=8)
+        use(WICKER_M)
+        for z_side in (-1, 1):
+            pts = [V((-hx + 0.05, sy * pc + z_side * 0.025, 0.0)), V((hx - 0.05, sy * pc + z_side * 0.025, 0.0))]
+            pts = [pts[0].lerp(pts[1], k / 20) for k in range(21)]
+            wall(bm, layer, pts, 0.05, h - 0.04, WICKER, inward=(z_side < 0), closed=False)
+            pts2 = [V((z_side * 0.025, sy * pc, 0.0)), V((z_side * 0.025, sy * (hy - 0.05), 0.0))]
+            pts2 = [pts2[0].lerp(pts2[1], k / 16) for k in range(17)]
+            wall(bm, layer, pts2, 0.05, h - 0.04, WICKER, inward=(z_side > 0) == (sy > 0), closed=False)
+        use(LEATHER_M)
+        sweep(bm, layer, [V((-hx + 0.05, sy * pc, h - 0.02)), V((hx - 0.05, sy * pc, h - 0.02))], 0.05, SUEDE, sides=8)
+        sweep(bm, layer, [V((0.0, sy * pc, h - 0.02)), V((0.0, sy * (hy - 0.05), h - 0.02))], 0.05, SUEDE, sides=8)
     for sx in (-1, 1):
-        for cy in (-0.28, 0.28):
-            lathe(bm, layer, [(0.0, 0.06), (0.16, 0.06), (0.165, 0.12), (0.165, 0.80), (0.12, 0.88), (0.05, 0.91), (0.0, 0.95)], 10,
-                  lambda k, i: STEEL if k < 5 else DARK_STEEL, centre=(sx * (hx - 0.25), cy))
-    # Poles: six, to a larger frame.
+        for cy in (-0.27, 0.27):
+            cylinder_tank(bm, layer, sx * (hx - 0.26), cy, c(0.02, 0.05, 0.20))
+    # Poles to a larger frame, quad burner.
+    use(LEATHER_M)
     f = 0.62
     for sx in (-1, 1):
         for sy in (-1, 1):
-            tube(bm, layer, (sx * (hx - 0.06), sy * (pc + 0.05), h), (sx * f, sy * f, L_FRAME_Z), 0.045, SUEDE, n=6)
-    sq = [(f, f), (-f, f), (-f, -f), (f, -f)]
-    for i in range(4):
-        a, b = sq[i], sq[(i + 1) % 4]
-        tube(bm, layer, (a[0], a[1], L_FRAME_Z), (b[0], b[1], L_FRAME_Z), 0.028, STEEL, n=6)
+            tube(bm, layer, (sx * (hx - 0.08), sy * (pc + 0.06), h - 0.05), (sx * f, sy * f, L_FRAME_Z), 0.045, c(0.05, 0.05, 0.06), n=8)
+    use(METAL_M)
+    sq = [V((f, f, L_FRAME_Z)), V((-f, f, L_FRAME_Z)), V((-f, -f, L_FRAME_Z)), V((f, -f, L_FRAME_Z))]
+    sweep(bm, layer, sq, 0.026, STEEL, sides=8, closed=True)
     for sx in (-1, 1):
-        tube(bm, layer, (sx * f, -f, L_FRAME_Z), (sx * f * 0.5, 0, L_FRAME_Z), 0.022, STEEL, n=6)
-    # Quad burner.
+        tube(bm, layer, (sx * f, -f, L_FRAME_Z), (sx * f, f, L_FRAME_Z), 0.02, STEEL, n=8)
+        tube(bm, layer, (sx * f, 0, L_FRAME_Z), (0, 0, L_FRAME_Z), 0.02, STEEL, n=8)
     for cx in (-0.2, 0.2):
         for cy in (-0.2, 0.2):
             burner_unit(bm, layer, cx, cy, L_NOZZLE_Z - 0.36, r=0.18, h=0.33)
+    use(TRIM)
+    for k, (cx, cy) in enumerate([(-0.2, -0.2), (0.2, 0.2)]):
+        sweep(bm, layer, [V(((hx - 0.26) * (1 if k else -1), 0.27 * (1 if k else -1), 0.93)), V((cx * 1.5, cy, 1.9)), V((cx, cy, L_NOZZLE_Z - 0.34))], 0.016, BLACK, sides=6)
     # The pilot in the middle, passengers in the four compartments.
     person(bm, layer, 0.3, 0.0, 0.06, JACKETS[2], 1.82, 0.0, 0.2)
     seed = 0.13
@@ -594,12 +804,16 @@ def rig_far(coll):
     bm = bmesh.new()
     layer = colour_layer(bm)
     w, l, h = S_BASKET
+    use(WICKER_M)
     box(bm, layer, (-w / 2, -l / 2, 0.0), (w / 2, l / 2, h), WICKER)
+    use(LEATHER_M)
     f = 0.36
     for sx in (-1, 1):
         for sy in (-1, 1):
             tube(bm, layer, (sx * w / 2, sy * l / 2, h), (sx * f, sy * f, S_FRAME_Z), 0.05, SUEDE, n=3, caps=False)
+    use(METAL_M)
     box(bm, layer, (-0.35, -0.2, S_FRAME_Z), (0.35, 0.2, S_NOZZLE_Z), STEEL)
+    use(TRIM)
     return make_object("rig far", bm, coll)
 
 
@@ -609,8 +823,10 @@ def flame(coll):
     bm = bmesh.new()
     layer = colour_layer(bm)
     prof = [(0.0, 0.0), (0.05, 0.0), (0.09, 0.08), (0.14, 0.22), (0.17, 0.40), (0.16, 0.58), (0.12, 0.74), (0.075, 0.87), (0.03, 0.96), (0.0, 1.0)]
+    use(FLAME_M)
     cols = [c(0.25, 0.45, 1.0), c(1.0, 0.95, 0.75), c(1.0, 0.85, 0.45), c(1.0, 0.62, 0.16), c(1.0, 0.45, 0.06), c(1.0, 0.33, 0.03), c(0.95, 0.22, 0.02), c(0.80, 0.12, 0.01), c(0.60, 0.06, 0.0)]
     lathe(bm, layer, [(r, z) for r, z in prof], 10, lambda k, i: cols[min(k, len(cols) - 1)])
+    use(TRIM)
     return make_object("flame", bm, coll)
 
 
@@ -680,10 +896,11 @@ def export(path):
                 vi, li = tri.vertices[k], tri.loops[k]
                 n = V(tri.split_normals[k]).normalized()
                 cc = tuple(round(x, 4) for x in col.data[li].color[:3]) if col else (0.5, 0.5, 0.5)
-                key = (vi, round(n.x, 3), round(n.y, 3), round(n.z, 3), cc)
+                mcode = MAT_CODE[min(me.polygons[tri.polygon_index].material_index, len(MAT_CODE) - 1)]
+                key = (vi, round(n.x, 3), round(n.y, 3), round(n.z, 3), cc, mcode)
                 if key not in idx:
                     idx[key] = len(verts)
-                    verts.append((*game(me.vertices[vi].co), *game(n), *cc, 0.0, 0.0, 0.0, 0.0))
+                    verts.append((*game(me.vertices[vi].co), *game(n), *cc, mcode, 0.0, 0.0, 0.0))
                 index.append(idx[key])
         pivot = V(ob.get("pivot", (0.0, 0.0, 0.0)))
         axis = V(ob.get("axis", (0.0, 0.0, 1.0)))
@@ -836,9 +1053,12 @@ def main():
     blend = os.path.join(ASSETS, "blender", "balloons.blend")
     if not EXPORT_ONLY:
         build()
+    # (Exported before the preview materials go on: the material index is
+    # the game's material.)
+    export(os.path.join(ASSETS, "balloons.bin.gz"))
+    if not EXPORT_ONLY:
         setup_look()
         bpy.ops.wm.save_as_mainfile(filepath=blend)
-    export(os.path.join(ASSETS, "balloons.bin.gz"))
     if RENDER:
         render(RENDER)
 
