@@ -18,7 +18,7 @@ Or run the published image directly:
 ```sh
 docker run -d --name fableflight-relay --restart unless-stopped \
   -p 7480:7480/udp \
-  ghcr.io/danux-be/fableflight-relay
+  ghcr.io/rolandjg/fableflight-relay
 ```
 
 Allow inbound **UDP 7480** in your server firewall and hosting provider's firewall. Players can select your relay in **Settings → Multiplayer**, or enter its hostname manually. The game can also use `--mp host[,name]` for testing.
@@ -46,7 +46,7 @@ docker run -d --name fableflight-relay --restart unless-stopped \
   -p 7480:7480/udp \
   -e FFMP_NAME="My Relay" \
   -e FFMP_PUBLIC="relay.example.com" \
-  ghcr.io/danux-be/fableflight-relay
+  ghcr.io/rolandjg/fableflight-relay
 ```
 
 Replace `relay.example.com` with a hostname that resolves to your server. If you change the listening UDP port, update the Docker port mapping, firewall rule and advertised address accordingly.
@@ -56,6 +56,25 @@ Replace `relay.example.com` with a hostname that resolves to your server. If you
 The relay exposes `/` and `/status.json` on its HTTP status port (`7481` by default). The page reports connected pilots and start-screen watchers, without publishing aircraft positions. To access it outside the server, expose that port only as needed; for a public status page, put it behind an HTTPS reverse proxy.
 
 The directory endpoint `/servers.json` is also used for relay discovery.
+
+## Automatic updates
+
+A new relay image is published whenever the relay or its protocol changes on `main` (tagged `latest`, the commit and the relay's version, for example `0.5.0`). So that every relay of the network picks it up without its operator being around, run `relay/autoupdate.sh` from cron next to your `docker-compose.yml`:
+
+```sh
+cp relay/autoupdate.sh /path/to/your/relay/
+crontab -e
+# then add:
+7-59/15 * * * * /path/to/your/relay/autoupdate.sh
+```
+
+Every 15 minutes it pulls the image your `docker-compose.yml` names. When a newer one has been published, it recreates the container and checks that the relay is still running 20 seconds later and that its status page answers. If it isn't, it goes back to the previous image (kept as `<image>:rollback`) and skips the failed one until another is published. When there is nothing new, nothing changes. Players see a gap of a few seconds at most, only when an update is applied. What it did goes to `autoupdate.log` beside the script.
+
+It needs `docker` with the compose plugin, `curl` and `flock`, run by root or by a user in the `docker` group. Optional environment variables: `FFMP_DIR` (the folder with `docker-compose.yml`, by default the script's), `FFMP_SERVICE` (default `relay`), `FFMP_STATUS_URL` (default `http://127.0.0.1:7481/status.json`, or `none` when the status page is off) and `FFMP_UPDATE_LOG`.
+
+To stay on one version instead, name it in `docker-compose.yml` (`ghcr.io/rolandjg/fableflight-relay:0.5.0`) and don't run the script.
+
+**Protocol changes.** Relays and games only talk to the same protocol version (`VERSION` in `src/mp_proto.rs`). With every relay updating itself, a change reaches the whole network within about 15 minutes of its image being published. A change that bumps `VERSION` should still decode the previous version for one release, so that relays (and players) a little behind are not cut off in the meantime.
 
 ## Public and private networks
 

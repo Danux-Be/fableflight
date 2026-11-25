@@ -3,9 +3,11 @@
 # Players set "Server" to this machine's name in the game (Settings, Multiplayer).
 # Open 7480/udp in the firewall. The status page listens on 127.0.0.1:7481 only:
 # publish it through your reverse proxy (see README).
+# To pick up new relay versions by itself, run autoupdate.sh from cron (see
+# docs/relay.md, Automatic updates).
 services:
   relay:
-    image: ghcr.io/danux-be/fableflight-relay:latest
+    image: ghcr.io/rolandjg/fableflight-relay:latest
     build:
       context: ..
       dockerfile: relay/Dockerfile
