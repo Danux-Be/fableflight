@@ -1907,7 +1907,7 @@ mod tests {
         shared.radio.lock().push_back(radio::Transmission::new(tone, 24_000, radio::Station::TOWER, 1.0, 1));
         let mut s = Synth::new(shared.clone());
         s.p = p;
-        let mut level = |s: &mut Synth, secs: f32| (0..(secs * RATE as f32) as usize).map(|_| { let l = s.next().unwrap(); s.next(); l * l }).sum::<f32>() / (secs * RATE as f32);
+        let level = |s: &mut Synth, secs: f32| (0..(secs * RATE as f32) as usize).map(|_| { let l = s.next().unwrap(); s.next(); l * l }).sum::<f32>() / (secs * RATE as f32);
         // paused (not live): nothing comes out and the message waits
         assert!(level(&mut s, 0.5) < 1e-6);
         p.live = 1.0;

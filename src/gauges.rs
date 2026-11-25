@@ -92,7 +92,8 @@ fn truth(p: &Plane) -> Truth {
     let mp = amb - amb * (0.62 - 0.6 * thr).max(0.0) * running;
     Truth {
         ias_kt: p.ias() * 1.94384,
-        alt_ft: h * 3.28084,
+        // the altimeter on the qnh: pressure altitude, so it reads high on a cold day.
+        alt_ft: crate::plane::indicated_alt(h, crate::plane::air_now().0 / 100.0) * 3.28084,
         vs_fpm: p.vel.dot(u) * 196.85,
         hdg: f.dot(e).atan2(f.dot(n)).to_degrees().rem_euclid(360.0),
         rpm,

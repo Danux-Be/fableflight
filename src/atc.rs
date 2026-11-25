@@ -350,17 +350,14 @@ impl Default for Atc {
     }
 }
 
-/// the last controller call gave a squawk (a clearance that wants a full readback).
-fn last_has_squawk(log: &[Line]) -> bool {
-    log.iter().rev().find(|l| l.who == Who::Atc).is_some_and(|l| l.text.contains("squawk"))
-}
-
 /// push to talk's state in the game: the mic, the words on their way back.
 #[derive(Default)]
 pub struct Ptt {
     mic: Option<listen::Mic>,
     ears: Option<crossbeam_channel::Receiver<Result<String, String>>>,
     warned: bool,
+    /// the station called, for the subtitle while on the air.
+    station: String,
 }
 
 impl Ptt {
@@ -382,8 +379,8 @@ fn dist_nm(a: &Apt, lat: f64, lon: f64) -> f64 {
 impl Atc {
     /// starts over for a new flight, keeping the radio as tuned.
     pub fn reset(&mut self) {
-        let (on, com, standby, speak) = (self.on, self.com, self.standby, self.speak);
-        *self = Self { on, com, standby, speak, ..Default::default() };
+        let (on, com, standby) = (self.on, self.com, self.standby);
+        *self = Self { on, com, standby, ..Default::default() };
     }
 
     fn set(&mut self, p: Phase, now: f64) {
@@ -662,7 +659,8 @@ impl Atc {
             return;
         }
         let Some(f) = self.tuned(c) else {
-            self.say(c.now, Who::Pilot, "", words.to_string());
+            self.heard = Some(words.to_string());
+            self.say(c.now, Who::Pilot, "", String::new());
             return;
         };
         let st = f.name();
@@ -675,9 +673,9 @@ impl Atc {
         self.heard = Some(words.to_string());
         self.say(c.now, Who::Pilot, &st, String::new());
         let you = say(cs);
-        if last.is_some_and(|l| listen::readback(words, &l)) {
+        if let Some(l) = last.filter(|l| listen::readback(words, l)) {
             // a clearance read back is confirmed, the rest is just taken.
-            if last_has_squawk(&self.log) {
+            if l.contains("squawk") {
                 self.reply(c.now + 1.5, &st, format!("{you}, readback correct."));
             }
         } else if !matches!(f.kind, Kind::Ctaf | Kind::Unic | Kind::Atis) {
@@ -877,7 +875,7 @@ impl Game {
     /// push to talk: the mic records while the key is held, whisper writes the
     /// call down, and the controller on the frequency answers it.
     fn atc_ptt(&mut self, cs: &str, c: &Ctx) {
-        let talk = self.keys.contains(&winit::keyboard::KeyCode::CapsLock) && self.atc.on && !self.pause_open;
+        let talk = crate::bind::ACTIONS.iter().find(|a| a.id == "atc_talk").is_some_and(|a| self.keys.contains(&a.key)) && self.atc.on && !self.pause_open;
         if talk && !tts::Tts::available() {
             if !self.ptt.warned {
                 self.ptt.warned = true;
@@ -885,13 +883,18 @@ impl Game {
             }
             return;
         }
+        if talk && !self.ptt.mic.as_ref().is_some_and(|m| m.on) {
+            // on the air: whisper loads while the pilot talks, the station is kept for the subtitle.
+            listen::Ears::get().warm();
+            self.ptt.station = self.atc.tuned(c).map(|f| f.name()).unwrap_or_default();
+        }
         if talk || self.ptt.mic.is_some() {
             self.ptt.mic.get_or_insert_with(listen::Mic::new).set(talk);
         }
         if let Some((rec, rate)) = self.ptt.mic.as_ref().and_then(|m| m.take()) {
             // a click of the key, not a call.
             if rec.len() as f32 > 0.35 * rate as f32 {
-                self.ptt.ears = Some(listen::Ears::get().hear(listen::resample(&rec, rate)));
+                self.ptt.ears = Some(listen::Ears::get().hear(rec, rate));
             }
         }
         if let Some(rx) = &self.ptt.ears {
@@ -1054,7 +1057,7 @@ impl Game {
         let (tx, rx) = self.ptt.busy();
         if tx || rx {
             // on the air: the station called, the pilot's words to come.
-            let station = self.atc.tuned(&self.atc_ctx()).map(|f| f.name()).unwrap_or_default();
+            let station = self.ptt.station.clone();
             let lift = flightui::bottom_stack(ctx, "atc_sub");
             egui::Area::new(egui::Id::unique("atc_sub")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_BOTTOM, [0.0, -lift]).interactable(false).show(ctx, |ui| {
                 flightui::panel(ui, flightui::glass().inner_margin(12.0), |ui| {

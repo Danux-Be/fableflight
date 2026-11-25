@@ -54,7 +54,7 @@ pub fn read_token(port: u16) -> Option<String> {
 
 fn generate_token() -> String {
     let mut bytes = [0u8; 16];
-    let mut filled = false;
+    let filled = false;
     #[cfg(unix)]
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
         filled = f.read_exact(&mut bytes).is_ok();

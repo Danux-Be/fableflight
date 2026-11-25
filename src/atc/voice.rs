@@ -2,6 +2,7 @@
 //! thread, then on the radio in the order it was said. a controller keeps one
 //! voice and one radio character per station, the pilot has their own.
 
+use super::lexicon::DIGITS as DIGIT;
 use super::tts::{Speech, Tts, VOICES};
 use crate::audio::radio::{Station, Transmission};
 use crossbeam_channel::{Receiver, TryRecvError};
@@ -86,7 +87,8 @@ fn filter(station: &str) -> Station {
     }
 }
 
-const DIGIT: [&str; 10] = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "niner"];
+/// plain numbers say nine, not niner.
+const ONES: [&str; 10] = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
 const TEENS: [&str; 10] = ["ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen"];
 const TENS: [&str; 10] = ["", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"];
 
@@ -97,7 +99,7 @@ fn digits(s: &str) -> String {
 /// 0..99 as words.
 fn small(n: u32) -> String {
     match n {
-        0..=9 => ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"][n as usize].into(),
+        0..=9 => ONES[n as usize].into(),
         10..=19 => TEENS[(n - 10) as usize].into(),
         _ if n % 10 == 0 => TENS[(n / 10) as usize].into(),
         _ => format!("{} {}", TENS[(n / 10) as usize], small(n % 10)),

@@ -907,6 +907,7 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "ash",
+ "base64",
  "bytemuck",
  "cpal",
  "crossbeam-channel",

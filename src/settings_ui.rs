@@ -569,7 +569,7 @@ impl Game {
                 match install::state() {
                     State::Unsupported => caption(ui, t!("settings.atc_voices_unsupported")),
                     State::NotInstalled | State::Failed(_) => {
-                        if ui.button(t!("settings.atc_voices_download", crate::bytes(install::download_size()))).clicked() {
+                        if menu::button(ui, &t!("settings.atc_voices_download", crate::bytes(install::download_size()))).clicked() {
                             install::install();
                         }
                         if let State::Failed(e) = install::state() {
@@ -580,7 +580,7 @@ impl Game {
                         ui.add(egui::ProgressBar::new(a as f32 / b.max(1) as f32).desired_width(200.0).text(format!("{} / {}", crate::bytes(a), crate::bytes(b))));
                     }
                     State::Installed => {
-                        if ui.button(t!("settings.atc_voices_remove")).clicked() {
+                        if menu::button(ui, t!("settings.atc_voices_remove")).clicked() {
                             install::remove();
                         }
                     }

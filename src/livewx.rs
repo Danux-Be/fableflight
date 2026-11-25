@@ -595,7 +595,7 @@ struct Precip {
 
 /// a surface temperature (c) at `elev` (m) as the sea-level temperature off standard (k).
 fn isa_dev(temp_c: Option<f64>, elev: f64) -> Option<f64> {
-    temp_c.filter(|t| (-80.0..60.0).contains(t)).map(|t| t + 0.0065 * elev - 15.0)
+    temp_c.filter(|t| (-80.0..60.0).contains(t)).map(|t| t + crate::snow::LAPSE * elev - 15.0)
 }
 
 /// Surface relative humidity (0..1) from temperature and dew point (°C) via Magnus-Tetens.

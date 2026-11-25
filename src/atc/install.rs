@@ -103,12 +103,18 @@ pub const RUNTIME: Option<Runtime> = None;
 /// The licences kept beside the files they cover.
 const RUNTIME_NOTICES: [&str; 2] = ["onnxruntime/LICENSE", "onnxruntime/ThirdPartyNotices.txt"];
 
+/// the pack's own files (the runtime comes out of its wheel).
+const FILES: [&File; 5] = [&MODEL, &VOICES, &EARS_ENC, &EARS_DEC, &EARS_TOKENS];
+
+/// the pack before whisper joined it: its files are taken over, not fetched again.
+const OLD_PACK: &str = "atc-voices-1";
+
 /// Bytes to download in all.
 pub fn download_size() -> u64 {
-    [&MODEL, &VOICES, &EARS_ENC, &EARS_DEC, &EARS_TOKENS].iter().map(|f| f.size).sum::<u64>() + RUNTIME.as_ref().map_or(0, |r| r.wheel.size)
+    FILES.iter().map(|f| f.size).sum::<u64>() + RUNTIME.as_ref().map_or(0, |r| r.wheel.size)
 }
 
-/// `<data>/fablegame/atc-voices-1/`.
+/// `<data>/fablegame/atc-voices-2/`.
 pub fn dir() -> Option<PathBuf> {
     dirs::data_dir().map(|d| d.join("fablegame").join(PACK))
 }
@@ -145,7 +151,7 @@ fn set(st: State) {
 
 fn on_disk() -> bool {
     let (Some(d), Some(rt)) = (dir(), RUNTIME.as_ref()) else { return false };
-    [&MODEL, &VOICES, &EARS_ENC, &EARS_DEC, &EARS_TOKENS].iter().all(|f| std::fs::metadata(d.join(f.name)).is_ok_and(|m| m.len() == f.size)) && d.join(rt.lib_name).is_file()
+    FILES.iter().all(|f| std::fs::metadata(d.join(f.name)).is_ok_and(|m| m.len() == f.size)) && d.join(rt.lib_name).is_file()
 }
 
 /// Where everything is once installed: the model, the voices, the library.
@@ -202,7 +208,13 @@ pub fn download(progress: &dyn Fn(u64, u64)) -> Result<(), String> {
         .into();
     let total = download_size();
     let mut done = 0u64;
-    for f in [&MODEL, &VOICES, &EARS_ENC, &EARS_DEC, &EARS_TOKENS, &rt.wheel] {
+    let old = d.with_file_name(OLD_PACK);
+    for f in FILES.into_iter().chain([&rt.wheel]) {
+        if reuse(&old.join(f.name), &tmp.join(f.name), f) {
+            done += f.size;
+            progress(done, total);
+            continue;
+        }
         let mut r = agent.get(f.url).call().map_err(|e| fail(format!("{}: {e}", f.name)))?;
         let mut rd = r.body_mut().with_config().limit(f.size + 1).reader();
         let mut out = std::fs::File::create(tmp.join(f.name)).map_err(|e| fail(e.to_string()))?;
@@ -241,7 +253,38 @@ pub fn download(progress: &dyn Fn(u64, u64)) -> Result<(), String> {
     std::fs::write(tmp.join("NOTICE.txt"), notice()).map_err(|e| fail(e.to_string()))?;
     let _ = std::fs::remove_dir_all(&d);
     std::fs::rename(&tmp, &d).map_err(|e| fail(e.to_string()))?;
+    let _ = std::fs::remove_dir_all(&old);
     Ok(())
+}
+
+/// moves a file of the old pack into the new one when it is the very file wanted.
+fn reuse(from: &std::path::Path, to: &std::path::Path, f: &File) -> bool {
+    use std::io::Read;
+    if !std::fs::metadata(from).is_ok_and(|m| m.len() == f.size) {
+        return false;
+    }
+    let Ok(mut rd) = std::fs::File::open(from) else { return false };
+    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+    let mut buf = vec![0u8; 1 << 20];
+    while let Ok(n) = rd.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        ctx.update(&buf[..n]);
+    }
+    drop(rd);
+    hex(ctx.finish().as_ref()) == f.sha256 && std::fs::rename(from, to).is_ok()
+}
+
+/// an onnx session on the pack's runtime.
+pub fn session(model: &std::path::Path, threads: usize) -> Result<ort::session::Session, String> {
+    let p = paths().ok_or("the ATC voice pack isn't installed")?;
+    runtime(&p)?;
+    ort::session::Session::builder()
+        .and_then(|b| b.with_intra_threads(threads).map_err(Into::into))
+        .and_then(|b| b.with_inter_threads(1).map_err(Into::into))
+        .and_then(|mut b| b.commit_from_file(model))
+        .map_err(|e| format!("{}: {e}", model.display()))
 }
 
 /// loads onnx runtime from the pack, once a run (the voices and the ears share it).
@@ -256,10 +299,8 @@ pub fn runtime(p: &Paths) -> Result<(), String> {
 
 /// Deletes the pack, and the one before it if left behind.
 pub fn remove() {
-    if let Some(d) = dirs::data_dir() {
-        let _ = std::fs::remove_dir_all(d.join("fablegame").join("atc-voices-1"));
-    }
     if let Some(d) = dir() {
+        let _ = std::fs::remove_dir_all(d.with_file_name(OLD_PACK));
         let _ = std::fs::remove_dir_all(d);
     }
     set(if RUNTIME.is_none() { State::Unsupported } else { State::NotInstalled });

@@ -2349,7 +2349,7 @@ impl Game {
             // The glass cockpit's engine and air data (b747/deck747.wgsl).
             let (_, _, h) = geo::pos_to_lla(p.pos);
             let mach = p.mach();
-            let oat = 15.0 - 6.5 * h.clamp(0.0, 11000.0) / 1000.0;
+            let oat = plane::atmosphere(h).0 - 273.15;
             let tat = oat + (oat + 273.15) * 0.2 * mach * mach;
             let x = ((p.n1 - 0.2) / 0.82).clamp(0.0, 1.2);
             let running = if p.running { (p.n1 / 0.15).clamp(0.0, 1.0) } else { 0.0 };
@@ -10047,9 +10047,11 @@ fn fly_check(key: Option<&String>) -> i32 {
     // the day's air: `--oat C` (at sea level) and `--qnh HPA`, standard without them.
     let argv: Vec<String> = std::env::args().collect();
     let num = |flag: &str| argv.iter().position(|a| a == flag).and_then(|i| argv.get(i + 1)).and_then(|v| v.parse::<f64>().ok());
-    if num("--oat").is_some() || num("--qnh").is_some() {
-        plane::set_air(num("--qnh").unwrap_or(1013.25), num("--oat").map_or(0.0, |t| t - 15.0));
-        println!("  air: qnh {:.0} hpa, {:+.0} c from standard", plane::air_now().0 / 100.0, plane::air_now().1);
+    let (oat, qnh) = (num("--oat"), num("--qnh"));
+    if oat.is_some() || qnh.is_some() {
+        let (qnh, dev) = (qnh.unwrap_or(1013.25), oat.map_or(0.0, |t| t - 15.0));
+        plane::set_air(qnh, dev);
+        println!("  air: qnh {qnh:.0} hpa, {dev:+.0} c from standard");
     }
     let (lat, lon) = (37.6f64, -122.37f64);
     // wings held level; pitch to an attitude (degrees), gently

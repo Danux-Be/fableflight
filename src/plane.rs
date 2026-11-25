@@ -2767,8 +2767,8 @@ const ISA_LAYERS: [(f64, f64); 7] = [
 
 /// the day's air: sea-level pressure (pa) and how much warmer than standard
 /// it is (k), set from the weather each frame (`set_air`). standard until then.
-static AIR_P0: AtomicU64 = AtomicU64::new(0x40f8_bcd0_0000_0000);
-static AIR_DT: AtomicU64 = AtomicU64::new(0);
+static AIR_P0: AtomicU64 = AtomicU64::new(101_325f64.to_bits());
+static AIR_DT: AtomicU64 = AtomicU64::new(0f64.to_bits());
 
 /// the day's qnh (hpa) and its sea-level temperature off standard (k). the
 /// lapse rates stay standard, so the whole column is that much warmer or colder.
@@ -2796,11 +2796,21 @@ pub fn pressure_alt(h: f64) -> f64 {
     pressure_alt_in(h, p0, dt)
 }
 
+/// what an altimeter set to `setting` (hpa) reads at `h` (m): the pressure
+/// altitude less the standard height of the setting. a cold day reads high.
+pub fn indicated_alt(h: f64, setting_hpa: f64) -> f64 {
+    pressure_alt(h) - std_height(setting_hpa * 100.0)
+}
+
 /// `pressure_alt` in the air given by `p0` (pa) and `dt` (k).
 pub(crate) fn pressure_alt_in(h: f64, p0: f64, dt: f64) -> f64 {
-    let p = atmosphere_in(h, p0, dt).1;
+    std_height(atmosphere_in(h, p0, dt).1)
+}
+
+/// the height (m) of pressure `p` (pa) in the standard atmosphere, to a millimetre.
+fn std_height(p: f64) -> f64 {
     let (mut lo, mut hi) = (-2_000.0f64, 90_000.0f64);
-    for _ in 0..48 {
+    for _ in 0..27 {
         let mid = 0.5 * (lo + hi);
         if atmosphere_in(mid, 101_325.0, 0.0).1 > p {
             lo = mid;
@@ -2852,18 +2862,18 @@ pub(crate) fn atmosphere_in(h: f64, p0: f64, dt: f64) -> (f64, f64) {
     (base_t, p)
 }
 
-/// Air density (kg/m³) at geometric altitude `h` (m) in the USSA 1976.
+/// Air density (kg/m³) at geometric altitude `h` (m) in the day's air.
 pub fn density(h: f64) -> f64 {
     let (t, p) = atmosphere(h);
     p / (287.05287 * t)
 }
 
-/// Static pressure as a fraction of sea level's, in the USSA 1976.
+/// Static pressure as a fraction of standard sea level's, in the day's air.
 pub fn pressure_ratio(h: f64) -> f64 {
     atmosphere(h).1 / 101_325.0
 }
 
-/// Speed of sound (m/s) at geometric altitude `h` in the USSA 1976.
+/// Speed of sound (m/s) at geometric altitude `h` in the day's air.
 pub fn sound_speed(h: f64) -> f64 {
     let (t, _) = atmosphere(h);
     (1.4 * 287.05287 * t).sqrt()

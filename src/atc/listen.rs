@@ -11,11 +11,15 @@ use std::sync::{Arc, OnceLock};
 /// whisper hears at 16 khz, in 30 s windows of 3000 frames.
 pub const RATE: u32 = 16_000;
 const N_FFT: usize = 400;
+/// the spectrum's bins, dc to nyquist.
+const BINS: usize = N_FFT / 2 + 1;
 const HOP: usize = 160;
 const N_MELS: usize = 80;
 const FRAMES: usize = 3000;
 /// the longest call kept, s.
 const LONGEST: f32 = 25.0;
+/// whisper is unloaded after this long without a call.
+const IDLE: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// the microphone, on its own thread (a stream may not leave the thread it was made on).
 pub struct Mic {
@@ -56,17 +60,15 @@ fn mic_thread(rx: Receiver<bool>, tx: Sender<(Vec<f32>, u32)>) {
             let open = || -> Result<(cpal::Stream, u32), String> {
                 let dev = cpal::default_host().default_input_device().ok_or("no microphone")?;
                 let cfg = dev.default_input_config().map_err(|e| e.to_string())?;
-                let (rate, ch) = (cfg.sample_rate(), cfg.channels().max(1) as usize);
-                let max = (rate as f32 * LONGEST) as usize;
-                let b = buf.clone();
-                let err = |e| log::warn!("microphone: {e}");
+                let rate = cfg.sample_rate();
                 let s = match cfg.sample_format() {
-                    cpal::SampleFormat::F32 => dev.build_input_stream(cfg.config(), move |d: &[f32], _: &_| push(&b, d.chunks(ch).map(|f| f.iter().sum::<f32>() / ch as f32), max), err, None),
-                    cpal::SampleFormat::I16 => dev.build_input_stream(cfg.config(), move |d: &[i16], _: &_| push(&b, d.chunks(ch).map(|f| f.iter().map(|&x| x as f32 / 32768.0).sum::<f32>() / ch as f32), max), err, None),
-                    cpal::SampleFormat::I32 => dev.build_input_stream(cfg.config(), move |d: &[i32], _: &_| push(&b, d.chunks(ch).map(|f| f.iter().map(|&x| x as f32 / 2147483648.0).sum::<f32>() / ch as f32), max), err, None),
+                    cpal::SampleFormat::F32 => input::<f32>(&dev, &cfg, &buf),
+                    cpal::SampleFormat::I16 => input::<i16>(&dev, &cfg, &buf),
+                    cpal::SampleFormat::I32 => input::<i32>(&dev, &cfg, &buf),
+                    cpal::SampleFormat::U16 => input::<u16>(&dev, &cfg, &buf),
+                    cpal::SampleFormat::U8 => input::<u8>(&dev, &cfg, &buf),
                     f => return Err(format!("microphone sample format {f:?}")),
-                }
-                .map_err(|e| e.to_string())?;
+                }?;
                 s.play().map_err(|e| e.to_string())?;
                 Ok((s, rate))
             };
@@ -86,13 +88,27 @@ fn mic_thread(rx: Receiver<bool>, tx: Sender<(Vec<f32>, u32)>) {
     }
 }
 
-fn push(b: &parking_lot::Mutex<Vec<f32>>, x: impl Iterator<Item = f32>, max: usize) {
-    let mut b = b.lock();
-    for v in x {
-        if b.len() < max {
-            b.push(v);
-        }
-    }
+/// a stream that keeps the mic as mono f32, whatever the device sends, up to `LONGEST`.
+fn input<T: cpal::SizedSample>(dev: &cpal::Device, cfg: &cpal::SupportedStreamConfig, buf: &Arc<parking_lot::Mutex<Vec<f32>>>) -> Result<cpal::Stream, String>
+where
+    f32: cpal::FromSample<T>,
+{
+    use cpal::traits::DeviceTrait;
+    use cpal::Sample;
+    let ch = cfg.channels().max(1) as usize;
+    let max = (cfg.sample_rate() as f32 * LONGEST) as usize;
+    let b = buf.clone();
+    dev.build_input_stream(
+        cfg.config(),
+        move |d: &[T], _: &_| {
+            let mut b = b.lock();
+            let room = max.saturating_sub(b.len());
+            b.extend(d.chunks(ch).take(room).map(|f| f.iter().map(|&x| f32::from_sample(x)).sum::<f32>() / ch as f32));
+        },
+        |e| log::warn!("microphone: {e}"),
+        None,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// mono at any rate to 16 khz, linear (whisper's own front end low passes at 8 khz).
@@ -122,10 +138,9 @@ pub fn mel(audio: &[f32]) -> Vec<f32> {
     static TABLES: OnceLock<(Vec<f32>, Vec<f32>, Vec<f32>, Vec<f32>)> = OnceLock::new();
     let (win, cos, sin, filt) = TABLES.get_or_init(|| {
         let win: Vec<f32> = (0..N_FFT).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / N_FFT as f32).cos()).collect();
-        let bins = N_FFT / 2 + 1;
-        let mut cos = vec![0.0; bins * N_FFT];
-        let mut sin = vec![0.0; bins * N_FFT];
-        for k in 0..bins {
+        let mut cos = vec![0.0; BINS * N_FFT];
+        let mut sin = vec![0.0; BINS * N_FFT];
+        for k in 0..BINS {
             for n in 0..N_FFT {
                 let a = std::f64::consts::TAU * (k * n % N_FFT) as f64 / N_FFT as f64;
                 cos[k * N_FFT + n] = a.cos() as f32;
@@ -134,7 +149,6 @@ pub fn mel(audio: &[f32]) -> Vec<f32> {
         }
         (win, cos, sin, mel_filters())
     });
-    let bins = N_FFT / 2 + 1;
     let audio = &audio[..audio.len().min(RATE as usize * 30)];
     // centred frames, the edges mirrored as torch.stft does.
     let pad = N_FFT / 2;
@@ -154,7 +168,7 @@ pub fn mel(audio: &[f32]) -> Vec<f32> {
     };
     let frames = (audio.len() / HOP).min(FRAMES);
     let mut out = vec![0.0f32; N_MELS * FRAMES];
-    let mut spec = vec![0.0f32; bins];
+    let mut spec = vec![0.0f32; BINS];
     let mut fr = vec![0.0f32; N_FFT];
     let mut top = f32::MIN;
     for t in 0..frames {
@@ -171,7 +185,7 @@ pub fn mel(audio: &[f32]) -> Vec<f32> {
             *s = re * re + im * im;
         }
         for m in 0..N_MELS {
-            let f = &filt[m * bins..][..bins];
+            let f = &filt[m * BINS..][..BINS];
             let e: f32 = f.iter().zip(&spec).map(|(a, b)| a * b).sum();
             let l = e.max(1e-10).log10();
             out[m * FRAMES + t] = l;
@@ -192,17 +206,16 @@ pub fn mel(audio: &[f32]) -> Vec<f32> {
 fn mel_filters() -> Vec<f32> {
     let to_mel = |f: f64| if f < 1000.0 { 3.0 * f / 200.0 } else { 15.0 + 27.0 * (f / 1000.0).ln() / 6.4f64.ln() };
     let to_hz = |m: f64| if m < 15.0 { 200.0 * m / 3.0 } else { 1000.0 * (6.4f64.ln() * (m - 15.0) / 27.0).exp() };
-    let bins = N_FFT / 2 + 1;
     let top = to_mel(RATE as f64 / 2.0);
     let hz: Vec<f64> = (0..N_MELS + 2).map(|i| to_hz(top * i as f64 / (N_MELS + 1) as f64)).collect();
-    let mut w = vec![0.0f32; N_MELS * bins];
+    let mut w = vec![0.0f32; N_MELS * BINS];
     for m in 0..N_MELS {
         let norm = 2.0 / (hz[m + 2] - hz[m]);
-        for k in 0..bins {
+        for k in 0..BINS {
             let f = k as f64 * RATE as f64 / N_FFT as f64;
             let lo = (f - hz[m]) / (hz[m + 1] - hz[m]);
             let hi = (hz[m + 2] - f) / (hz[m + 2] - hz[m + 1]);
-            w[m * bins + k] = (lo.min(hi).max(0.0) * norm) as f32;
+            w[m * BINS + k] = (lo.min(hi).max(0.0) * norm) as f32;
         }
     }
     w
@@ -220,26 +233,21 @@ struct Whisper {
     eot: i64,
 }
 
-fn meta(s: &ort::session::Session, k: &str) -> Option<String> {
-    s.metadata().ok()?.custom(k)
+/// a number from the export's metadata, or `d` when it is not there.
+fn meta<T: std::str::FromStr>(s: &ort::session::Session, k: &str, d: T) -> T {
+    s.metadata().ok().and_then(|m| m.custom(k)).and_then(|v| v.parse().ok()).unwrap_or(d)
 }
 
 impl Whisper {
     fn load() -> Result<Whisper, String> {
+        use base64::Engine;
         let p = install::paths().ok_or("the ATC voice pack isn't installed")?;
-        install::runtime(&p)?;
-        let open = |f: &std::path::Path| {
-            ort::session::Session::builder()
-                .and_then(|b| b.with_intra_threads(2).map_err(Into::into))
-                .and_then(|mut b| b.commit_from_file(f))
-                .map_err(|e| format!("whisper {}: {e}", f.display()))
-        };
+        let open = |f: &std::path::Path| install::session(f, 2).map_err(|e| format!("whisper {e}"));
         let (enc, dec) = (open(&p.ears_enc)?, open(&p.ears_dec)?);
-        let num = |k: &str, d: usize| meta(&enc, k).and_then(|v| v.parse().ok()).unwrap_or(d);
-        let (layers, ctx, state) = (num("n_text_layer", 4), num("n_text_ctx", 448), num("n_text_state", 384));
-        let sot: Vec<i64> = meta(&enc, "sot_sequence").map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_else(|| vec![50257]);
-        let no_ts = meta(&enc, "no_timestamps").and_then(|v| v.parse().ok()).unwrap_or(50362);
-        let eot = meta(&enc, "eot").and_then(|v| v.parse().ok()).unwrap_or(50256);
+        let (layers, ctx, state) = (meta(&enc, "n_text_layer", 4), meta(&enc, "n_text_ctx", 448), meta(&enc, "n_text_state", 384));
+        let mut sot: Vec<i64> = enc.metadata().ok().and_then(|m| m.custom("sot_sequence")).map(|s| s.split(',').filter_map(|x| x.trim().parse().ok()).collect()).unwrap_or_else(|| vec![50257]);
+        sot.push(meta(&enc, "no_timestamps", 50362));
+        let eot = meta(&enc, "eot", 50256);
         let mut tokens = Vec::new();
         for line in std::fs::read_to_string(&p.ears_tokens).map_err(|e| e.to_string())?.lines() {
             let mut it = line.split_whitespace();
@@ -247,39 +255,37 @@ impl Whisper {
             if tokens.len() <= id {
                 tokens.resize(id + 1, Vec::new());
             }
-            tokens[id] = base64(b64);
+            tokens[id] = base64::engine::general_purpose::STANDARD.decode(b64).unwrap_or_default();
         }
-        let mut sot = sot;
-        sot.push(no_ts);
         Ok(Whisper { enc, dec, tokens, layers, ctx, state, sot, eot })
     }
 
     /// 16 khz mono in, the words out.
     fn hear(&mut self, audio: &[f32]) -> Result<String, String> {
-        use ort::value::Tensor;
+        use ort::value::{DynValue, Tensor};
         let err = |e: ort::Error| format!("whisper: {e}");
         let mel = mel(audio);
-        let out = self.enc.run(ort::inputs!["mel" => Tensor::from_array(([1usize, N_MELS, FRAMES], mel)).map_err(err)?]).map_err(err)?;
-        let (ks, k) = out["n_layer_cross_k"].try_extract_tensor::<f32>().map_err(err)?;
-        let (vs, v) = out["n_layer_cross_v"].try_extract_tensor::<f32>().map_err(err)?;
-        let (kshape, vshape): (Vec<usize>, Vec<usize>) = (ks.iter().map(|&x| x as usize).collect(), vs.iter().map(|&x| x as usize).collect());
-        let (k, v) = (k.to_vec(), v.to_vec());
+        let mut out = self.enc.run(ort::inputs!["mel" => Tensor::from_array(([1usize, N_MELS, FRAMES], mel)).map_err(err)?]).map_err(err)?;
+        // the encoder's keys and values go in by reference every step, the self
+        // attention cache comes back out and goes straight in again.
+        let (Some(k), Some(v)) = (out.remove("n_layer_cross_k"), out.remove("n_layer_cross_v")) else { return Err("whisper: no encoder output".into()) };
         drop(out);
-        let cache = vec![0.0f32; self.layers * self.ctx * self.state];
         let shape = [self.layers, 1, self.ctx, self.state];
-        let (mut sk, mut sv) = (cache.clone(), cache);
+        let n = self.layers * self.ctx * self.state;
+        let zeros = || Tensor::from_array((shape, vec![0.0f32; n])).map(DynValue::from).map_err(err);
+        let (mut sk, mut sv) = (zeros()?, zeros()?);
         let mut toks = self.sot.clone();
         let mut offset = 0i64;
         let mut said: Vec<i64> = Vec::new();
         for _ in 0..96 {
-            let out = self
+            let mut out = self
                 .dec
                 .run(ort::inputs![
                     "tokens" => Tensor::from_array(([1usize, toks.len()], toks.clone())).map_err(err)?,
-                    "in_n_layer_self_k_cache" => Tensor::from_array((shape, sk.clone())).map_err(err)?,
-                    "in_n_layer_self_v_cache" => Tensor::from_array((shape, sv.clone())).map_err(err)?,
-                    "n_layer_cross_k" => Tensor::from_array((kshape.clone(), k.clone())).map_err(err)?,
-                    "n_layer_cross_v" => Tensor::from_array((vshape.clone(), v.clone())).map_err(err)?,
+                    "in_n_layer_self_k_cache" => sk,
+                    "in_n_layer_self_v_cache" => sv,
+                    "n_layer_cross_k" => &k,
+                    "n_layer_cross_v" => &v,
                     "offset" => Tensor::from_array(([1usize], vec![offset])).map_err(err)?,
                 ])
                 .map_err(err)?;
@@ -288,8 +294,10 @@ impl Whisper {
             let last = &logits[logits.len() - vocab..];
             // text tokens only: timestamps and the specials past the end of text never win.
             let best = last[..=(self.eot as usize)].iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).map(|x| x.0 as i64).unwrap_or(self.eot);
-            sk = out["out_n_layer_self_k_cache"].try_extract_tensor::<f32>().map_err(err)?.1.to_vec();
-            sv = out["out_n_layer_self_v_cache"].try_extract_tensor::<f32>().map_err(err)?.1.to_vec();
+            (sk, sv) = match (out.remove("out_n_layer_self_k_cache"), out.remove("out_n_layer_self_v_cache")) {
+                (Some(a), Some(b)) => (a, b),
+                _ => return Err("whisper: no cache output".into()),
+            };
             offset += toks.len() as i64;
             if best == self.eot || offset as usize >= self.ctx - 1 {
                 break;
@@ -302,52 +310,43 @@ impl Whisper {
     }
 }
 
-fn base64(s: &str) -> Vec<u8> {
-    let val = |c: u8| match c {
-        b'A'..=b'Z' => Some(c - b'A'),
-        b'a'..=b'z' => Some(c - b'a' + 26),
-        b'0'..=b'9' => Some(c - b'0' + 52),
-        b'+' | b'-' => Some(62),
-        b'/' | b'_' => Some(63),
-        _ => None,
-    };
-    let mut out = Vec::new();
-    let (mut acc, mut bits) = (0u32, 0);
-    for v in s.bytes().filter_map(val) {
-        acc = (acc << 6) | v as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    out
-}
+/// a recording at its own rate, or none to load whisper ahead of a call.
+type Job = (Option<(Vec<f32>, u32)>, Sender<Result<String, String>>);
 
 /// the listener: recordings in, words out, on its own thread so the game never waits.
 pub struct Ears {
-    jobs: Sender<(Vec<f32>, Sender<Result<String, String>>)>,
+    jobs: Sender<Job>,
 }
 
 impl Ears {
     pub fn get() -> &'static Ears {
         static E: OnceLock<Ears> = OnceLock::new();
         E.get_or_init(|| {
-            let (tx, rx) = crossbeam_channel::unbounded::<(Vec<f32>, Sender<Result<String, String>>)>();
+            let (tx, rx) = crossbeam_channel::unbounded::<Job>();
             let _ = std::thread::Builder::new().name("atc-ears".into()).spawn(move || {
                 let mut w: Option<Whisper> = None;
-                while let Ok((audio, reply)) = rx.recv() {
-                    if w.is_none() {
-                        match Whisper::load() {
-                            Ok(x) => w = Some(x),
+                loop {
+                    let (rec, reply) = match rx.recv_timeout(IDLE) {
+                        Ok(j) => j,
+                        Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                            w = None;
+                            continue;
+                        }
+                        Err(crossbeam_channel::RecvTimeoutError::Disconnected) => return,
+                    };
+                    let whisper = match &mut w {
+                        Some(x) => x,
+                        None => match Whisper::load() {
+                            Ok(x) => w.insert(x),
                             Err(e) => {
                                 let _ = reply.send(Err(e));
                                 continue;
                             }
-                        }
-                    }
+                        },
+                    };
+                    let Some((rec, rate)) = rec else { continue };
                     let t = std::time::Instant::now();
-                    let r = w.as_mut().map_or(Err("no model".into()), |w| w.hear(&audio));
+                    let r = whisper.hear(&resample(&rec, rate));
                     log::info!("push to talk: heard {:?} in {:.2}s", r, t.elapsed().as_secs_f32());
                     let _ = reply.send(r);
                 }
@@ -356,10 +355,15 @@ impl Ears {
         })
     }
 
-    /// 16 khz mono in; the words come back on the receiver.
-    pub fn hear(&self, audio: Vec<f32>) -> Receiver<Result<String, String>> {
+    /// loads whisper while the pilot is still talking.
+    pub fn warm(&self) {
+        let _ = self.jobs.send((None, crossbeam_channel::bounded(1).0));
+    }
+
+    /// mono at any rate in; the words come back on the receiver.
+    pub fn hear(&self, rec: Vec<f32>, rate: u32) -> Receiver<Result<String, String>> {
         let (tx, rx) = crossbeam_channel::bounded(1);
-        let _ = self.jobs.send((audio, tx));
+        let _ = self.jobs.send((Some((rec, rate)), tx));
         rx
     }
 }
@@ -426,7 +430,7 @@ mod tests {
         let peak = c.iter().enumerate().max_by(|a, b| a.1.total_cmp(b.1)).unwrap().0;
         let filt = mel_filters();
         let bin1k = (1000.0 * N_FFT as f32 / RATE as f32).round() as usize;
-        let best = (0..N_MELS).max_by(|&a, &b| filt[a * 201 + bin1k].total_cmp(&filt[b * 201 + bin1k])).unwrap();
+        let best = (0..N_MELS).max_by(|&a, &b| filt[a * BINS + bin1k].total_cmp(&filt[b * BINS + bin1k])).unwrap();
         assert!((peak as i32 - best as i32).abs() <= 1, "peak {peak}, the 1 khz bin {best}");
         assert!(m.iter().all(|v| v.is_finite() && *v <= 1.6 && *v >= -1.6));
         // past the end of the audio, zero
@@ -438,12 +442,6 @@ mod tests {
         let x: Vec<f32> = (0..48_000).map(|i| (i as f32 * 0.001).sin()).collect();
         assert_eq!(resample(&x, 48_000).len(), 16_000 - 1);
         assert_eq!(resample(&x[..100], RATE).len(), 100);
-    }
-
-    #[test]
-    fn reads_base64() {
-        assert_eq!(base64("IQ=="), b"!");
-        assert_eq!(base64("SGVsbG8="), b"Hello");
     }
 
     #[test]
@@ -474,9 +472,8 @@ mod tests {
     fn atc_hear() {
         let text = std::env::var("ATC_SAY").unwrap_or_else(|_| "San Francisco Ground, Fable one two three, at the ramp, request taxi with information Alfa.".into());
         let s = super::super::tts::Tts::get().say(&text, "am_michael", 1.05).recv().unwrap().expect("speech");
-        let audio = resample(&s.samples, s.rate);
         let t = std::time::Instant::now();
-        let heard = Ears::get().hear(audio).recv().unwrap().expect("words");
+        let heard = Ears::get().hear(s.samples.to_vec(), s.rate).recv().unwrap().expect("words");
         println!("said:  {text}\nheard: {heard}\nin {:.2}s (model load included)", t.elapsed().as_secs_f32());
         if std::env::var("ATC_SAY").is_err() {
             assert_eq!(intent(&heard, &[Req::Clearance, Req::Taxi]), Some(Req::Taxi));

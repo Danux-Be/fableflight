@@ -996,7 +996,7 @@ impl Weather {
         let top = self.mixed_top();
         let convt = 1.1 * conv * (1.0 - smoothstep(0.85 * top, 1.15 * top, agl)) * smoothstep(0.0, 60.0, agl).max(0.3);
         // In the cloud layer itself (strongest where it is cumulus-like rather than a flat deck).
-        let (_, _, alt) = geo::pos_to_lla(pos);
+        let (lat, _, alt) = geo::pos_to_lla(pos);
         let (base, ctop) = (self.base() as f64, (self.base() + self.depth()) as f64);
         let inside = smoothstep(base - 150.0, base + 100.0, alt) * (1.0 - smoothstep(ctop - 100.0, ctop + 200.0, alt));
         let cloud = inside * self.clouds as f64 * (0.7 + 0.8 * self.convection() + 0.6 * self.storms as f64);
@@ -1012,7 +1012,7 @@ impl Weather {
         let st = crate::storm::local(self, pos, agl, t);
         let storm = st.sigma;
         let draft = st.draft;
-        let cat = self.clear_air(pos, alt);
+        let cat = self.clear_air(pos, lat, alt);
         let rest = convt * convt + cloud * cloud + deck * deck + storm * storm + background * background + cat * cat;
         let sigma_w = (mech * mech + rest).sqrt().min(13.0);
         // Near the ground the eddies are as small as the height and the horizontal
@@ -1031,11 +1031,10 @@ impl Weather {
     /// kilometres long and a few hundred metres deep. light from about 4 kt per
     /// 1000 ft of shear, moderate to severe past 8 (the vertical wind shear
     /// rule of thumb forecasters use, Ellrod and Knapp 1992).
-    pub fn clear_air(&self, pos: DVec3, alt: f64) -> f64 {
+    pub fn clear_air(&self, pos: DVec3, lat: f64, alt: f64) -> f64 {
         if !(4_500.0..16_000.0).contains(&alt) {
             return 0.0;
         }
-        let (lat, _, _) = geo::pos_to_lla(pos);
         let wind = |a: f64| {
             let (v, from) = self.profile(lat, a, a);
             let r = from.to_radians();
@@ -1047,8 +1046,7 @@ impl Weather {
             return 0.0;
         }
         // patches: a slow lattice noise, flattened (wide and shallow).
-        let p = pos / DVec3::new(45_000.0, 45_000.0, 45_000.0);
-        let patch = smoothstep(0.45, 0.75, lattice(p.x, p.y + alt / 700.0, p.z));
+        let patch = smoothstep(0.45, 0.75, value_noise(pos / 45_000.0 + DVec3::Y * (alt / 700.0)));
         4.5 * strength * patch
     }
 
@@ -1363,17 +1361,18 @@ mod tests {
     fn clear_air_turbulence_rides_the_jet_streams_shear() {
         let mut wx = Weather::new(0.1);
         let at = |lat: f64, lon: f64, alt: f64| geo::lla_to_pos(lat.to_radians(), lon.to_radians(), alt);
+        let lat45 = 45f64.to_radians();
         // no reported jet: the gentle default profile has no shear to speak of.
-        let calm = (0..200).map(|i| wx.clear_air(at(45.0, i as f64 * 0.3, 9_800.0), 9_800.0)).fold(0.0, f64::max);
+        let calm = (0..200).map(|i| wx.clear_air(at(45.0, i as f64 * 0.3, 9_800.0), lat45, 9_800.0)).fold(0.0, f64::max);
         assert_eq!(calm, 0.0);
         // a jet of 70 m/s at 250 hpa over 35 m/s at 300 hpa: patches of it, not everywhere.
         wx.aloft = vec![Aloft { alt: 1500.0, speed: 10.0, from: 260.0 }, Aloft { alt: 5600.0, speed: 25.0, from: 270.0 }, Aloft { alt: 9200.0, speed: 35.0, from: 270.0 }, Aloft { alt: 10400.0, speed: 70.0, from: 270.0 }];
-        let s: Vec<f64> = (0..400).map(|i| wx.clear_air(at(45.0, i as f64 * 0.05, 9_800.0), 9_800.0)).collect();
+        let s: Vec<f64> = (0..400).map(|i| wx.clear_air(at(45.0, i as f64 * 0.05, 9_800.0), lat45, 9_800.0)).collect();
         let rough = s.iter().filter(|x| **x > 0.5).count();
         assert!(rough > 20 && rough < 380, "rough in {rough} of 400");
         assert!(s.iter().all(|x| *x <= 4.5));
         // down low and far above, none.
-        assert_eq!(wx.clear_air(at(45.0, 0.0, 3_000.0), 3_000.0), 0.0);
+        assert_eq!(wx.clear_air(at(45.0, 0.0, 3_000.0), lat45, 3_000.0), 0.0);
         // and it reaches the airframe.
         let i = s.iter().position(|x| *x > 1.5).expect("a rough patch");
         let p = at(45.0, i as f64 * 0.05, 9_800.0);
@@ -1678,26 +1677,4 @@ mod tests {
         let (lo, hi) = ws.iter().fold((0.0f64, 0.0f64), |(a, b), &x| (a.min(x), b.max(x)));
         assert!(hi > 1.0 && lo < -0.2, "{lo} {hi}");
     }
-}
-
-
-
-/// smooth value noise on a unit lattice, 0..1.
-fn lattice(x: f64, y: f64, z: f64) -> f64 {
-    let h = |i: i64, j: i64, k: i64| {
-        let mut n = (i.wrapping_mul(73_856_093) ^ j.wrapping_mul(19_349_663) ^ k.wrapping_mul(83_492_791)) as u64;
-        n = (n ^ (n >> 33)).wrapping_mul(0xff51_afd7_ed55_8ccd);
-        n = (n ^ (n >> 33)).wrapping_mul(0xc4ce_b9fe_1a85_ec53);
-        ((n ^ (n >> 33)) >> 11) as f64 / (1u64 << 53) as f64
-    };
-    let (fx, fy, fz) = (x.floor(), y.floor(), z.floor());
-    let (i, j, k) = (fx as i64, fy as i64, fz as i64);
-    let s = |t: f64| t * t * (3.0 - 2.0 * t);
-    let (u, v, w) = (s(x - fx), s(y - fy), s(z - fz));
-    let l = |a: f64, b: f64, t: f64| a + (b - a) * t;
-    l(
-        l(l(h(i, j, k), h(i + 1, j, k), u), l(h(i, j + 1, k), h(i + 1, j + 1, k), u), v),
-        l(l(h(i, j, k + 1), h(i + 1, j, k + 1), u), l(h(i, j + 1, k + 1), h(i + 1, j + 1, k + 1), u), v),
-        w,
-    )
 }

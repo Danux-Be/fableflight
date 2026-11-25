@@ -135,13 +135,8 @@ fn speak(engine: &mut Option<Engine>, job: &Job) -> Result<Speech, String> {
 /// Loads ONNX Runtime (once per run) and the model.
 fn load() -> Result<Engine, String> {
     let p = install::paths().ok_or("the ATC voice pack isn't installed")?;
-    install::runtime(&p)?;
     let t = std::time::Instant::now();
-    let session = ort::session::Session::builder()
-        .and_then(|b| b.with_intra_threads(THREADS).map_err(Into::into))
-        .and_then(|b| b.with_inter_threads(1).map_err(Into::into))
-        .and_then(|mut b| b.commit_from_file(&p.model))
-        .map_err(|e| format!("Kokoro: {e}"))?;
+    let session = install::session(&p.model, THREADS).map_err(|e| format!("Kokoro: {e}"))?;
     log::info!("ATC voices: Kokoro loaded in {:.1}s", t.elapsed().as_secs_f32());
     Ok(Engine { session, voices_file: p.voices, styles: FxHashMap::default() })
 }
