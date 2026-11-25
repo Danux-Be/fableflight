@@ -63,6 +63,7 @@ cargo build --release --locked
 - **World:** real METAR weather, seasonal & live snow cover, satellite/road minimap, live ADS-B traffic, and multiplayer.
 - **Controls:** remappable keyboard, joystick, throttle, pedals, and gamepad. Configure them in **Settings → Controls**.
 - **Arcade mode:** optional boosts, missiles, and in-flight respawns. Enable in **Settings → General** or pass `--arcade`.
+- **Air traffic control:** ground, tower, departure, centre and approach controllers talk you through the flight, from the taxi clearance to "taxi to parking", with subtitles and a log on the Radio page. Their voices (Kokoro-82M, 360 MB) are downloaded on request in **Settings → Sound**; without them the calls are shown as text. Frequencies are made up.
 - **AI copilot:** optional MCP integration; see [docs/mcp.md](docs/mcp.md).
 - **Upscaling:** bilinear, AMD FSR 1 and FSR 3.1 built in, and AMD FSR 4.1 downloaded from AMD on request (Windows, Radeon RX 6000 or newer), with a suggestion for your GPU. In **Settings → Graphics → Upscaling**; see [docs/upscaling.md](docs/upscaling.md).
 

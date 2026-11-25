@@ -51,6 +51,7 @@ impl Lexicon {
         Lexicon { vocab, words }
     }
 
+    #[cfg(test)]
     pub fn knows(&self, word: &str) -> bool {
         self.words.contains_key(&word.to_lowercase())
     }

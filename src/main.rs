@@ -199,6 +199,11 @@ fn attribution_rest() -> &'static str {
 }
 
 /// Data sizes ("12.3 MB"), with the units of the language ("12.3 Mo" in French).
+/// A radio frequency in kHz as it is written: "118.700".
+fn atc_freq(khz: u32) -> String {
+    format!("{}.{:03}", khz / 1000, khz % 1000)
+}
+
 fn bytes(n: u64) -> String {
     let s = gmaps::bytes(n);
     let u = |k: &str| format!(" {}", i18n::tr(k));
@@ -1377,6 +1382,10 @@ struct Game {
     /// sound on (U), and its volume (0..1)
     sound_on: bool,
     volume: f32,
+    /// air traffic control (atc/): the controllers, on or off, and the callsign they use
+    atc: atc::Atc,
+    atc_on: bool,
+    callsign: String,
     /// snow lying on the ground (snow.rs, the Graphics settings)
     snow: snow::Mode,
     /// the flight panel (Tab), beside the running game, and the page it shows
@@ -1881,7 +1890,7 @@ impl Game {
             frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, plan_text: String::new(), plan_msg: String::new(), plan_pick: false, arcade: args.arcade || prefs.arcade, topple_buildings: prefs.topple_buildings, goto_open: false, goto_text: String::new(), goto_rx: None,
             status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_move: None, pad_skip: None, pad_rep: None, pad_home: false, pad_y: false, pad_y_combo: false, pad_held: Vec::new(), pad_note: (String::new(), 0.0), pad_aim: false, pad_live: None, ap: autopilot::Autopilot::default(), ap_off_t: -100.0, ap_script: args.ap_script.clone(), cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
-            record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, snow: args.snow.unwrap_or(prefs.snow), info_open: args.weather_panel, radial: Default::default(), info_page: if args.weather_panel { menu::Page::Weather } else { menu::Page::Flight }, pause_open: false, pause_page: menu::Page::Game, flight: None, logbook: flightlog::Logbook::load(), logbook_saves: !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench"), pause_at: args.pause_menu, radial_at: args.flight_menu, settings_sec: args.settings.unwrap_or(settings_ui::Section::General), look_sens: prefs.look_sens, invert_look_cockpit: prefs.invert_look_cockpit, invert_look_outside_x: prefs.invert_look_outside_x, invert_look_outside_y: prefs.invert_look_outside_y, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
+            record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, atc: atc::Atc::new(&prefs.callsign), atc_on: prefs.atc, callsign: prefs.callsign.clone(), snow: args.snow.unwrap_or(prefs.snow), info_open: args.weather_panel, radial: Default::default(), info_page: if args.weather_panel { menu::Page::Weather } else { menu::Page::Flight }, pause_open: false, pause_page: menu::Page::Game, flight: None, logbook: flightlog::Logbook::load(), logbook_saves: !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench"), pause_at: args.pause_menu, radial_at: args.flight_menu, settings_sec: args.settings.unwrap_or(settings_ui::Section::General), look_sens: prefs.look_sens, invert_look_cockpit: prefs.invert_look_cockpit, invert_look_outside_x: prefs.invert_look_outside_x, invert_look_outside_y: prefs.invert_look_outside_y, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
             g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
@@ -2342,6 +2351,7 @@ impl Game {
 
     fn respawn_at(&mut self, lat: f64, lon: f64, alt: f64, heading: f64, speed: f64) {
         self.end_flight(false);
+        self.atc.reset();
         self.cancel_cockpit_input();
         self.ap.disengage();
         self.hold_spot = None;
@@ -4749,6 +4759,21 @@ impl Game {
             });
         });
         self.radios.baro = baro;
+        // the controllers (atc/): what they said last, newest first.
+        if self.atc_on {
+            wide_tile(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let phase = self.atc.controller.phase();
+                tag(ui, &if phase.is_empty() { "ATC".to_string() } else { format!("ATC  ·  {phase}") });
+                if self.atc.log.is_empty() {
+                    note(ui, t!("game.atc_quiet"));
+                }
+                for h in self.atc.log.iter().rev().take(5) {
+                    note(ui, &format!("{}  ·  {}", h.station, atc_freq(h.freq_khz)));
+                    ui.label(RichText::new(&h.text).font(menu::body()).color(Color32::WHITE));
+                }
+            });
+        }
     }
 
     fn cockpit_globals(&self, agl: f64) -> [[f32; 4]; 12] {
@@ -6052,6 +6077,85 @@ impl Game {
     }
 
     /// Tell the sound what the aircraft and the camera are doing.
+    /// Air traffic control (atc/): the controllers follow the flight, and
+    /// what they say goes out on the radio, or as words only without the
+    /// voice pack or with the sound off.
+    fn update_atc(&mut self, in_menu: bool, dt: f64) {
+        if !self.atc_on || in_menu || self.crashed || dt <= 0.0 || self.mode != Mode::Fly {
+            return;
+        }
+        if self.atc.controller.callsign != self.callsign {
+            self.atc.set_callsign(&self.callsign);
+        }
+        let s = self.atc_situation();
+        let voices = self.sound_on && atc::tts::Tts::available();
+        let audio = self.audio.as_ref();
+        let seed = self.frame as u32;
+        self.atc.update(&s, dt, voices, |call, speech| {
+            if let (Some(a), Some(sp)) = (audio, speech) {
+                a.radio(audio::radio::Transmission::new(sp.samples.to_vec(), sp.rate, atc::radio_station(call.facility), call.signal, seed));
+            }
+        });
+    }
+
+    /// What the controllers go by: where the aircraft is and what it is
+    /// doing, the airfield it is at, the weather and the flight plan.
+    fn atc_situation(&self) -> atc::controller::Situation {
+        let p = &self.plane;
+        let (la, lo, alt) = geo::pos_to_lla(p.pos);
+        let up = p.pos.normalize();
+        let vs = p.vel.dot(up);
+        let gs = (p.vel - up * vs).length();
+        let agl = (alt - self.world.ground(la, lo).map_or(0.0, |g| g.h) - p.wheel_height()).max(0.0);
+        let wind_kt = self.wx.wind * 1.94384;
+        let field = self.world.airfield_near(p.pos, 18_000.0).map(|f| {
+            let g = &f.geo;
+            let runway = f.traffic.active.or_else(|| g.active(self.wx.wind_from as f32, wind_kt as f32)).map(|(ri, e)| g.runways[ri].ident[e].clone());
+            let lp = g.local(p.pos);
+            let (mut on_runway, mut at_hold) = (None, false);
+            if p.on_ground {
+                let fw = p.forward();
+                let hd = glam::Vec2::new(fw.dot(g.e) as f32, fw.dot(g.n) as f32).normalize_or_zero();
+                on_runway = g.on_runway(lp, 0.0).map(|ri| {
+                    let r = &g.runways[ri];
+                    r.ident[if hd.dot(r.dir) >= 0.0 { 0 } else { 1 }].clone()
+                });
+                at_hold = g.holds.iter().any(|h| (h.p - lp).length() < 40.0);
+            }
+            atc::controller::Field { idx: g.idx, runway, on_runway, at_hold }
+        });
+        let dest = self.plan.destination().and_then(|w| airports::Db::get().find(&w.ident));
+        atc::controller::Situation {
+            lat: la.to_degrees(),
+            lon: lo.to_degrees(),
+            alt_ft: alt / 0.3048,
+            agl_ft: agl / 0.3048,
+            gs_kt: gs * 1.94384,
+            vs_fpm: vs * 196.85,
+            on_ground: p.on_ground,
+            engine: p.running,
+            field,
+            wind_from: self.wx.wind_from,
+            wind_kt,
+            qnh: self.wx.qnh,
+            dest,
+            cruise_ft: if self.plan.is_empty() { 0.0 } else { self.plan.cruise_ft },
+        }
+    }
+
+    /// The ATC call on the air, as a subtitle low on the screen.
+    fn atc_caption(&self, ctx: &egui::Context) {
+        use egui::{Align2, Color32, RichText};
+        let Some((h, _)) = self.atc.on_air() else { return };
+        egui::Area::new(egui::Id::unique("atc_caption")).anchor(Align2::CENTER_BOTTOM, [0.0, -110.0]).interactable(false).show(ctx, |ui| {
+            egui::Frame::new().fill(Color32::from_black_alpha(175)).corner_radius(8.0).inner_margin(egui::Margin::symmetric(14, 8)).show(ui, |ui| {
+                ui.set_max_width(620.0);
+                ui.label(RichText::new(format!("{}  ·  {}", h.station, atc_freq(h.freq_khz))).font(menu::caption()).color(menu::ACCENT));
+                ui.label(RichText::new(&h.text).font(menu::body()).color(menu::TEXT));
+            });
+        });
+    }
+
     fn update_audio(&mut self, cam: DVec3, fire: f32, in_menu: bool, c: &Controls, dt: f64, scrape: f32) {
         self.warn = if dt > 0.0 { self.warnings() } else { audio::Warn::default() };
         let live = !self.crashed && !in_menu && dt > 0.0;
@@ -6142,7 +6246,7 @@ impl Game {
 
     /// The settings worth keeping, as they are now.
     fn live_settings(&self) -> settings::Settings {
-        settings::Settings { lang: self.prefs_lang, sound_on: self.sound_on, volume: self.volume, cam_mode: self.cam_mode, cockpit_fov: self.cockpit_fov, look_sens: self.look_sens, invert_look_cockpit: self.invert_look_cockpit, invert_look_outside_x: self.invert_look_outside_x, invert_look_outside_y: self.invert_look_outside_y, show_hud: self.show_hud, hud_cockpit: self.hud_cockpit, path_marker: self.path_marker, minimap: self.minimap.visible, landing_guidance: self.minimap.landing_guidance, arcade: self.arcade, topple_buildings: self.topple_buildings, minimap_plan: self.minimap.plan, minimap_heading_up: self.minimap.heading_up, minimap_zoom: self.minimap.zoom, minimap_size: self.minimap.size.x, minimap_height: self.minimap.size.y, map_airports: self.minimap.layers.airports, map_navaids: self.minimap.layers.navaids, taa: self.gfx.taa, fullscreen: self.fullscreen, live_traffic: self.live.enabled(), live_weather: self.wx.live, real_time: self.wx.real_time, snow: self.snow, last: self.last_start.clone(), multiplayer: self.mp_on || self.mp_held, mp_server: self.mp_server.clone(), mp_name: self.mp_name.clone() }
+        settings::Settings { lang: self.prefs_lang, sound_on: self.sound_on, volume: self.volume, cam_mode: self.cam_mode, cockpit_fov: self.cockpit_fov, look_sens: self.look_sens, invert_look_cockpit: self.invert_look_cockpit, invert_look_outside_x: self.invert_look_outside_x, invert_look_outside_y: self.invert_look_outside_y, show_hud: self.show_hud, hud_cockpit: self.hud_cockpit, path_marker: self.path_marker, minimap: self.minimap.visible, landing_guidance: self.minimap.landing_guidance, arcade: self.arcade, topple_buildings: self.topple_buildings, minimap_plan: self.minimap.plan, minimap_heading_up: self.minimap.heading_up, minimap_zoom: self.minimap.zoom, minimap_size: self.minimap.size.x, minimap_height: self.minimap.size.y, map_airports: self.minimap.layers.airports, map_navaids: self.minimap.layers.navaids, taa: self.gfx.taa, fullscreen: self.fullscreen, live_traffic: self.live.enabled(), live_weather: self.wx.live, real_time: self.wx.real_time, snow: self.snow, last: self.last_start.clone(), multiplayer: self.mp_on || self.mp_held, mp_server: self.mp_server.clone(), mp_name: self.mp_name.clone(), atc: self.atc_on, callsign: self.callsign.clone() }
     }
 
     /// Saves the settings when they have changed (looked at once a second,
@@ -7070,6 +7174,7 @@ impl Game {
         }
         let scrape = if steps > 0 { (scrape_n as f32 / steps as f32 * 0.5).min(1.0) } else { 0.0 };
         self.update_audio(cam, fire, in_menu, &c, dt, scrape);
+        self.update_atc(in_menu, dt);
 
         let near = if in_menu { (calt * 0.02).clamp(0.4, 20_000.0) as f32 } else if self.cam_mode == 1 && !self.crashed { 0.03f32 } else { 0.25f32 };
         let proj = perspective_rev(fov, w / h, near);
@@ -8891,6 +8996,9 @@ impl Game {
                 }
             }
             self.hotspot_overlay(ctx);
+            if self.atc_on && self.mode == Mode::Fly {
+                self.atc_caption(ctx);
+            }
             // a ring on each aircraft in range, tags on the nearest that do not overlap.
             if let (true, Some((vp, cam))) = (self.hud_on() && self.live.enabled(), self.live_view) {
                 let screen = ctx.content_rect();

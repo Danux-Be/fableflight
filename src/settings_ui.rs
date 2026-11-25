@@ -439,6 +439,46 @@ impl Game {
                 ui.add_enabled(self.sound_on, egui::Slider::new(&mut self.volume, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
             });
         });
+        // Air traffic control (atc/): on or off, the callsign, and the voices (downloaded on request).
+        card(ui, t!("settings.atc"), |ui| {
+            row(ui, t!("settings.atc"), t!("settings.atc_hint"), |ui| {
+                menu::switch(ui, &mut self.atc_on);
+            });
+            row(ui, t!("settings.callsign"), t!("settings.callsign_hint"), |ui| {
+                let mut c = self.callsign.clone();
+                if ui.add_enabled(self.atc_on, egui::TextEdit::singleline(&mut c).desired_width(160.0)).changed() {
+                    self.callsign = c.chars().filter(|c| c.is_ascii_alphanumeric() || *c == ' ' || *c == '-').take(16).collect();
+                }
+            });
+            row(ui, t!("settings.atc_voices"), t!("settings.atc_voices_hint"), |ui| {
+                use crate::atc::install::{self, State};
+                let caption = |ui: &mut Ui, s: &str| {
+                    ui.add(egui::Label::new(RichText::new(s).font(menu::caption()).color(DIM)).wrap());
+                };
+                ui.vertical(|ui| match install::state() {
+                    State::Unsupported => caption(ui, t!("settings.atc_voices_unsupported")),
+                    State::NotInstalled | State::Failed(_) => {
+                        if let State::Failed(e) = install::state() {
+                            caption(ui, &t!("settings.atc_voices_failed", e));
+                        }
+                        if ui.button(t!("settings.atc_voices_download", crate::bytes(install::download_size()))).clicked() {
+                            install::install();
+                        }
+                        caption(ui, t!("settings.atc_voices_about"));
+                    }
+                    State::Downloading(a, b) => {
+                        ui.add(egui::ProgressBar::new(a as f32 / b.max(1) as f32).text(t!("settings.atc_voices_downloading", crate::bytes(a), crate::bytes(b))));
+                    }
+                    State::Installed => {
+                        let folder = install::dir().map(|d| d.display().to_string()).unwrap_or_default();
+                        caption(ui, &t!("settings.atc_voices_installed", folder));
+                        if ui.button(t!("settings.atc_voices_remove")).clicked() {
+                            install::remove();
+                        }
+                    }
+                });
+            });
+        });
     }
 
     fn set_camera(&mut self, ui: &mut Ui, in_flight: bool) {
