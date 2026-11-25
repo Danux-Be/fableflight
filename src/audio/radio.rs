@@ -25,6 +25,9 @@
 
 use super::{Bq, DT, RATE, Rng, Slow, kf};
 
+/// The rate `Transmission` plays at: the mixer's.
+pub const OUT_RATE: u32 = RATE;
+
 /// A controller's mic and transmitter: the character of one voice on the air.
 #[derive(Clone, Copy, Debug)]
 pub struct Station {
@@ -227,6 +230,26 @@ pub fn wav_mono(b: &[u8]) -> Option<(Vec<f32>, u32)> {
     Some(((0..frames).map(|f| (0..ch).map(|c| s(f * ch + c)).sum::<f32>() / ch as f32).collect(), rate as u32))
 }
 
+/// Mono samples as a 16-bit PCM WAV file.
+pub fn wav_bytes(x: &[f32], rate: u32) -> Vec<u8> {
+    let n = (x.len() * 2) as u32;
+    let mut b = Vec::with_capacity(44 + x.len() * 2);
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + n).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&rate.to_le_bytes());
+    b.extend_from_slice(&(rate * 2).to_le_bytes());
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&16u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&n.to_le_bytes());
+    x.iter().for_each(|s| b.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes()));
+    b
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,21 +393,6 @@ mod tests {
         };
         let signal = std::env::var("RADIO_SIGNAL").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
         let x = Transmission::new(voice, rate, st, signal, 0x5eed).render();
-        let mut b = Vec::with_capacity(44 + x.len() * 2);
-        let n = (x.len() * 2) as u32;
-        b.extend_from_slice(b"RIFF");
-        b.extend_from_slice(&(36 + n).to_le_bytes());
-        b.extend_from_slice(b"WAVEfmt ");
-        b.extend_from_slice(&16u32.to_le_bytes());
-        b.extend_from_slice(&1u16.to_le_bytes());
-        b.extend_from_slice(&1u16.to_le_bytes());
-        b.extend_from_slice(&RATE.to_le_bytes());
-        b.extend_from_slice(&(RATE * 2).to_le_bytes());
-        b.extend_from_slice(&2u16.to_le_bytes());
-        b.extend_from_slice(&16u16.to_le_bytes());
-        b.extend_from_slice(b"data");
-        b.extend_from_slice(&n.to_le_bytes());
-        x.iter().for_each(|s| b.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes()));
-        std::fs::write(&dst, b).unwrap();
+        std::fs::write(&dst, wav_bytes(&x, RATE)).unwrap();
     }
 }
