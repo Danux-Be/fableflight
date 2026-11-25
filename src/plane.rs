@@ -11,6 +11,7 @@
 //! `damage.rs` describes what has been knocked off. Trees, rooftops, the
 //! ground, over-speed and over-G all take parts off the airframe here, and
 //! the aircraft flies on (as best it can) with what is left.
+use std::sync::atomic::{AtomicU64, Ordering};
 use crate::aircraft::{Engine, Part, Spec, MAX_GEAR};
 use crate::airframe::{Anim, Drive, Input, Piece, Role, G_ENGINE, G_FUSE, G_LWING, G_RWING, G_TAIL};
 use crate::crash::Rng;
@@ -2764,24 +2765,69 @@ const ISA_LAYERS: [(f64, f64); 7] = [
     (84_852.0, -0.0020),
 ];
 
+/// the day's air: sea-level pressure (pa) and how much warmer than standard
+/// it is (k), set from the weather each frame (`set_air`). standard until then.
+static AIR_P0: AtomicU64 = AtomicU64::new(0x40f8_bcd0_0000_0000);
+static AIR_DT: AtomicU64 = AtomicU64::new(0);
+
+/// the day's qnh (hpa) and its sea-level temperature off standard (k). the
+/// lapse rates stay standard, so the whole column is that much warmer or colder.
+pub fn set_air(qnh_hpa: f64, isa_dev: f64) {
+    AIR_P0.store((qnh_hpa.clamp(850.0, 1100.0) * 100.0).to_bits(), Ordering::Relaxed);
+    AIR_DT.store(isa_dev.clamp(-60.0, 45.0).to_bits(), Ordering::Relaxed);
+}
+
+/// the day's air as set: sea-level pressure (pa), temperature off standard (k).
+pub fn air_now() -> (f64, f64) {
+    (f64::from_bits(AIR_P0.load(Ordering::Relaxed)), f64::from_bits(AIR_DT.load(Ordering::Relaxed)))
+}
+
+/// Temperature (K) and pressure (Pa) at geometric altitude `h` (m) in the
+/// day's air (`set_air`; the USSA 1976 until set).
+pub(crate) fn atmosphere(h: f64) -> (f64, f64) {
+    let (p0, dt) = air_now();
+    atmosphere_in(h, p0, dt)
+}
+
+/// pressure altitude (m): where the standard atmosphere has the pressure
+/// found at `h` in the day's air. what an altimeter set to 1013 reads.
+pub fn pressure_alt(h: f64) -> f64 {
+    let (p0, dt) = air_now();
+    pressure_alt_in(h, p0, dt)
+}
+
+/// `pressure_alt` in the air given by `p0` (pa) and `dt` (k).
+pub(crate) fn pressure_alt_in(h: f64, p0: f64, dt: f64) -> f64 {
+    let p = atmosphere_in(h, p0, dt).1;
+    let (mut lo, mut hi) = (-2_000.0f64, 90_000.0f64);
+    for _ in 0..48 {
+        let mid = 0.5 * (lo + hi);
+        if atmosphere_in(mid, 101_325.0, 0.0).1 > p {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
 /// Temperature (K) and pressure (Pa) at geometric altitude `h` (m), using
-/// the USSA 1976 geopotential layers. Above 84.852 km, continue isothermally
+/// the USSA 1976 geopotential layers from sea-level pressure `p0` and a
+/// sea-level temperature `dt` off standard. Above 84.852 km, continue isothermally
 /// from the last tabulated layer; aircraft performance checks stay well below
 /// this extension, while it avoids freezing density for high rocket flights.
-pub(crate) fn atmosphere(h: f64) -> (f64, f64) {
+pub(crate) fn atmosphere_in(h: f64, p0: f64, dt: f64) -> (f64, f64) {
     const G0: f64 = 9.80665;
     const R_AIR: f64 = 287.05287;
     const EARTH_RADIUS: f64 = 6_356_766.0;
-    const P0: f64 = 101_325.0;
-    const T0: f64 = 288.15;
 
     // The standard tables use geopotential altitude; convert the simulator's
     // geometric altitude before selecting a layer.
     let h = h.max(-500.0);
     let z = EARTH_RADIUS * h / (EARTH_RADIUS + h);
     let mut base_z = 0.0;
-    let mut base_t = T0;
-    let mut base_p = P0;
+    let mut base_t = 288.15 + dt;
+    let mut base_p = p0;
 
     for &(top_z, lapse) in &ISA_LAYERS {
         let layer_z = z.min(top_z);
@@ -2972,6 +3018,39 @@ mod tests {
     use super::*;
     use crate::aircraft::{b747, c172};
     use std::sync::Arc;
+
+    #[test]
+    fn the_days_air_shifts_the_atmosphere() {
+        // standard when nothing is set, so every check flown at isa still is.
+        for h in [0.0, 1_500.0, 11_000.0, 20_000.0] {
+            assert_eq!(atmosphere(h), atmosphere_in(h, 101_325.0, 0.0));
+            assert!((pressure_alt_in(h, 101_325.0, 0.0) - h).abs() < 0.5, "{h}");
+        }
+        // a hot day high up: at 5000 ft and isa+20 the wing and engine feel
+        // nearly 7000 ft.
+        let rho = |h: f64, dt: f64| {
+            let (t, p) = atmosphere_in(h, 101_325.0, dt);
+            p / (287.05287 * t)
+        };
+        let hot = rho(1_524.0, 20.0);
+        let (mut lo, mut hi) = (0.0, 6_000.0);
+        for _ in 0..40 {
+            let m = 0.5 * (lo + hi);
+            if rho(m, 0.0) > hot { lo = m } else { hi = m }
+        }
+        // the rule of thumb works from the pressure altitude: 120 ft per degree above standard there.
+        let pa = pressure_alt_in(1_524.0, 101_325.0, 20.0);
+        let warm = atmosphere_in(1_524.0, 101_325.0, 20.0).0 - atmosphere_in(pa, 101_325.0, 0.0).0;
+        let rule_ft = pa * 3.28084 + 118.8 * warm;
+        let da_ft = lo * 3.28084;
+        assert!((da_ft - rule_ft).abs() < 250.0 && da_ft > 6_500.0, "density altitude {da_ft:.0} ft, rule {rule_ft:.0} ft");
+        // a low qnh: the altimeter on 1013 reads about 27 ft per hpa high at the field.
+        let pa_ft = pressure_alt_in(0.0, 100_300.0, 0.0) * 3.28084;
+        assert!((270.0..290.0).contains(&pa_ft), "{pa_ft:.0} ft");
+        // and a cold day reads high aloft: the true altitude is below the indicated one.
+        let cold = pressure_alt_in(3_000.0, 101_325.0, -20.0);
+        assert!(cold > 3_150.0, "{cold:.0} m");
+    }
 
     const C172: &Spec = &c172::SPEC;
     const B747: &Spec = &b747::SPEC;

@@ -4619,7 +4619,7 @@ impl Game {
         let hdg = p.forward().dot(east).atan2(p.forward().dot(north));
         let mut data = [[0.0; 4]; 12];
         data[0] = [(self.radios.setting(self.wx.qnh) * 0.029529983 * 100.0) as f32,
-            ((h * 3.28084 + (1013.25 - self.wx.qnh) * 27.3) / 100.0) as f32,
+            (plane::pressure_alt(h) * 3.28084 / 100.0) as f32,
             gs as f32, (p.spec.fuel_kg / 0.72 / 3.785 / 2.0) as f32];
         let adf = self.radios.adf.as_ref().and_then(|s| nav::adf_bearing(s, p.pos, hdg.to_degrees())).filter(|_| p.sys.powered());
         data[1] = [self.radios.nav.as_ref().map(|s| s.freq_khz as f32 / 1000.0).unwrap_or(0.0),
@@ -6477,6 +6477,7 @@ impl Game {
             self.wx.step_deck(dt, self.plane.pos, gh);
             self.wx.rain = self.wx.rain_at(self.plane.pos, agl, self.time) as f32;
             self.wx.advance(dt, self.plane.pos);
+            plane::set_air(self.wx.qnh, self.wx.isa_dev);
             // The wakes of the other aircraft about: airport traffic, live traffic and other players.
             if dt > 0.0 {
                 let mut targets = self.live.targets();
@@ -10043,6 +10044,13 @@ fn fly_check(key: Option<&String>) -> i32 {
     let dt = 1.0 / 120.0;
     let kt = |v: f64| v * 1.943_84;
     println!("{}: mass {:.0} kg, cruise {:.0} kt, approach {:.0} kt, vne {:.0} kt", spec.name, spec.mass, kt(spec.cruise), kt(spec.approach.0), kt(spec.vne));
+    // the day's air: `--oat C` (at sea level) and `--qnh HPA`, standard without them.
+    let argv: Vec<String> = std::env::args().collect();
+    let num = |flag: &str| argv.iter().position(|a| a == flag).and_then(|i| argv.get(i + 1)).and_then(|v| v.parse::<f64>().ok());
+    if num("--oat").is_some() || num("--qnh").is_some() {
+        plane::set_air(num("--qnh").unwrap_or(1013.25), num("--oat").map_or(0.0, |t| t - 15.0));
+        println!("  air: qnh {:.0} hpa, {:+.0} c from standard", plane::air_now().0 / 100.0, plane::air_now().1);
+    }
     let (lat, lon) = (37.6f64, -122.37f64);
     // wings held level; pitch to an attitude (degrees), gently
     let level = |p: &Plane| (p.right().dot(p.pos.normalize()) * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0);
