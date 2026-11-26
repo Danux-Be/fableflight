@@ -7,14 +7,22 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 
 /// the game's application on discord's developer portal (empty: off).
-pub const APP_ID: &str = "";
+pub const APP_ID: &str = "1575464405456388266";
 
-/// what the profile says: the top line, the one under it, and since when (unix s).
+/// what the profile says under the game's name (empty: nothing), and since when (unix s).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Status {
     pub details: String,
-    pub state: String,
     pub since: i64,
+}
+
+/// "flying a cessna 172rg", "flying an sr-71a blackbird": an before a vowel
+/// sound, which a leading letter read out by name (f/a-18, sr-71) has too.
+pub fn flying(plane: &str) -> String {
+    let mut c = plane.chars();
+    let (a, b) = (c.next().unwrap_or(' '), c.next().unwrap_or(' '));
+    let vowel = "AEIOUaeiou".contains(a) || ("FHLMNRSX".contains(a) && !b.is_ascii_lowercase());
+    format!("Flying {} {plane}", if vowel { "an" } else { "a" })
 }
 
 /// the link to discord, on its own thread so a slow or missing discord never stalls a frame.
@@ -80,13 +88,13 @@ fn run(id: String, rx: Receiver<Option<Status>>) {
         }
         let Some(c) = client.as_mut() else { continue };
         let r = match &want {
-            Some(s) => c.set_activity(
-                activity::Activity::new()
-                    .details(s.details.as_str())
-                    .state(s.state.as_str())
-                    .timestamps(activity::Timestamps::new().start(s.since * 1000))
-                    .assets(activity::Assets::new().large_image("logo").large_text("FableFlight")),
-            ),
+            Some(s) => {
+                let mut a = activity::Activity::new().timestamps(activity::Timestamps::new().start(s.since * 1000)).assets(activity::Assets::new().large_image("logo").large_text("FableFlight"));
+                if !s.details.is_empty() {
+                    a = a.details(s.details.as_str());
+                }
+                c.set_activity(a)
+            }
             None => c.clear_activity(),
         };
         match r {
@@ -102,4 +110,32 @@ fn run(id: String, rx: Receiver<Option<Status>>) {
 /// now, in unix seconds.
 pub fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_or_an() {
+        assert_eq!(flying("Cessna 172RG"), "Flying a Cessna 172RG");
+        assert_eq!(flying("F/A-18C Hornet"), "Flying an F/A-18C Hornet");
+        assert_eq!(flying("SR-71A Blackbird"), "Flying an SR-71A Blackbird");
+        assert_eq!(flying("SpaceX Starship"), "Flying a SpaceX Starship");
+        assert_eq!(flying("Airbus A320"), "Flying an Airbus A320");
+    }
+
+    /// shows a status on the discord running here for a few seconds, then clears it (run by hand).
+    #[test]
+    #[ignore]
+    fn discord_shows_a_status() {
+        use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
+        let mut c = DiscordIpcClient::new(APP_ID);
+        c.connect().expect("discord running here");
+        let a = activity::Activity::new().details(flying("Cessna 172RG")).timestamps(activity::Timestamps::new().start(now() * 1000)).assets(activity::Assets::new().large_image("logo").large_text("FableFlight"));
+        c.set_activity(a).expect("the status taken");
+        std::thread::sleep(Duration::from_secs(8));
+        c.clear_activity().expect("the status cleared");
+        let _ = c.close();
+    }
 }
