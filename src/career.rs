@@ -34,12 +34,10 @@ pub const LICS: [Lic; 10] = [Lic::Ppl, Lic::Night, Lic::Ir, Lic::Multi, Lic::Cpl
 /// what a licence needs.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Req {
-    /// a tutorial flown (missions.rs).
+    /// one of the career's own lessons flown (missions.rs, `Cat::Lesson`).
     Lesson(&'static str),
-    /// a checkride passed (missions.rs).
+    /// a checkride passed (missions.rs, `Cat::Exam`).
     Exam(&'static str),
-    /// a landing challenge passed at a score (challenge.rs).
-    Challenge(&'static str, u32),
     Holds(Lic),
     /// hours in the logbook.
     Hours(f64),
@@ -100,16 +98,16 @@ impl Lic {
     pub fn reqs(self) -> &'static [Req] {
         use Req::*;
         match self {
-            Lic::Ppl => &[Lesson("t1"), Lesson("t2"), Lesson("t3"), Exam("e_ppl")],
-            Lic::Ir => &[Holds(Lic::Ppl), Lesson("t4"), Lesson("t6"), Hours(5.0), Exam("e_ir")],
+            Lic::Ppl => &[Lesson("c_ppl1"), Lesson("c_ppl2"), Lesson("c_ppl3"), Exam("e_ppl")],
+            Lic::Ir => &[Holds(Lic::Ppl), Lesson("c_ir1"), Lesson("c_ir2"), Hours(5.0), Exam("e_ir")],
             Lic::Cpl => &[Holds(Lic::Ppl), Holds(Lic::Night), Hours(15.0), Jobs(6), Level(5), Exam("e_cpl")],
-            Lic::Atpl => &[Holds(Lic::Cpl), Holds(Lic::Ir), Holds(Lic::Multi), Hours(60.0), Level(15), Rep(1500.0), Challenge("rain", 60)],
-            Lic::BizJet => &[Holds(Lic::Cpl), Holds(Lic::Ir), Holds(Lic::Multi), Lesson("t6"), Fee(150_000.0)],
-            Lic::Airliner => &[Holds(Lic::Atpl), Challenge("jumbo", 60), Fee(500_000.0)],
+            Lic::Atpl => &[Holds(Lic::Cpl), Holds(Lic::Ir), Holds(Lic::Multi), Hours(60.0), Level(15), Rep(1500.0), Lesson("c_atpl")],
+            Lic::BizJet => &[Holds(Lic::Cpl), Holds(Lic::Ir), Holds(Lic::Multi), Lesson("c_bizjet"), Fee(150_000.0)],
+            Lic::Airliner => &[Holds(Lic::Atpl), Lesson("c_747"), Fee(500_000.0)],
             Lic::Display => &[Holds(Lic::Aero), Level(12), Rep(800.0), Fee(250_000.0)],
-            Lic::Night => &[Holds(Lic::Ppl), Hours(3.0), Challenge("night", 60), Fee(1_500.0)],
+            Lic::Night => &[Holds(Lic::Ppl), Hours(3.0), Lesson("c_night"), Fee(1_500.0)],
             Lic::Multi => &[Holds(Lic::Ppl), Hours(10.0), Level(4), Fee(12_000.0)],
-            Lic::Aero => &[Holds(Lic::Cpl), Level(8), Challenge("short", 60), Fee(6_000.0)],
+            Lic::Aero => &[Holds(Lic::Cpl), Level(8), Lesson("c_aero"), Fee(6_000.0)],
         }
     }
 
@@ -1205,11 +1203,6 @@ impl Game {
         match r {
             // (the button beside it says lesson, checkride or mission)
             Req::Lesson(id) | Req::Exam(id) => (self.career.trained.contains(id), title(id)),
-            Req::Challenge(id, min) => {
-                let c = crate::challenge::by_id(id).map(|i| &crate::challenge::ALL[i]);
-                let top = self.career.challenges.get(id).copied().unwrap_or(0);
-                (top >= min, format!("{} {} ({} {min})", tr_en("Landing challenge:"), c.map_or(id, |c| c.name()), tr_en("score")))
-            }
             Req::Holds(l) => (self.career.has(l), tr_en(l.name()).to_string()),
             Req::Hours(h) => (hours >= h, format!("{:.1} / {h:.0} {}", hours.min(h), tr_en("hours flown"))),
             Req::Jobs(n) => (self.career.jobs_done >= n, format!("{} / {n} {}", self.career.jobs_done.min(n), tr_en("jobs done"))),
@@ -1317,9 +1310,11 @@ mod tests {
     fn every_licence_asks_for_real_things() {
         for l in LICS {
             for r in l.reqs() {
+                // the career's own lessons and checkrides, never the activities' tutorials.
+                use crate::missions::Cat;
                 match r {
-                    Req::Lesson(id) | Req::Exam(id) => assert!(crate::missions::by_id(id).is_some(), "{l:?}: {id}"),
-                    Req::Challenge(id, _) => assert!(crate::challenge::by_id(id).is_some(), "{l:?}: {id}"),
+                    Req::Lesson(id) => assert!(crate::missions::by_id(id).is_some_and(|m| m.cat == Cat::Lesson), "{l:?}: {id}"),
+                    Req::Exam(id) => assert!(crate::missions::by_id(id).is_some_and(|m| m.cat == Cat::Exam), "{l:?}: {id}"),
                     _ => {}
                 }
             }

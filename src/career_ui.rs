@@ -21,8 +21,6 @@ enum Act {
     Refresh,
     Filter(Option<Kind>),
     Mission(&'static str),
-    /// a landing challenge a licence asks for, flown for the career.
-    Challenge(&'static str),
     Licence(Lic),
     Buy(&'static str, f64),
     Sell(String, f64),
@@ -270,14 +268,6 @@ impl Game {
                     self.start_mission(m);
                     if let Some(r) = self.mission.as_mut() {
                         r.career = true;
-                    }
-                }
-            }
-            Act::Challenge(id) => {
-                if let Some(i) = crate::challenge::by_id(id) {
-                    self.start_challenge(i);
-                    if let Some(a) = self.challenge.as_mut() {
-                        a.career = true;
                     }
                 }
             }
@@ -781,7 +771,6 @@ impl Game {
                         if !ok {
                             let fly = match req {
                                 Req::Lesson(id) | Req::Exam(id) => Some((*id, Act::Mission(id))),
-                                Req::Challenge(id, _) => Some((*id, Act::Challenge(id))),
                                 _ => None,
                             };
                             if let Some((id, go)) = fly {

@@ -494,7 +494,7 @@ struct Args {
     mcp_port: u16,
 }
 
-const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures|logbook|challenges[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--simbrief USER_OR_ID] [--challenge first|crosswind|night|mountain|rain|short|jumbo|paro] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--framegen-install] [--full-map] [--no-scenery] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
+const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures|logbook[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--simbrief USER_OR_ID] [--challenge first|crosswind|night|mountain|rain|short|jumbo|paro] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--framegen-install] [--full-map] [--no-scenery] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
 
 fn parse_args() -> Args {
     let v: Vec<String> = std::env::args().skip(1).collect();
@@ -2124,8 +2124,7 @@ impl Game {
             };
             g.activity_tab = match t {
                 "challenges" => 1,
-                "checkrides" | "exams" => 2,
-                "missions" => 3,
+                "missions" => 2,
                 _ => 0,
             };
         }
@@ -5563,10 +5562,12 @@ impl Game {
             self.leave_challenge();
         }
         if list {
+            // the challenges are among the activities, on the menu, not in the flight.
             self.leave_challenge();
-            self.set_pause_menu(true);
-            self.pause_page = menu::Page::Missions;
+            self.to_globe();
+            self.menu.screen = menu::Screen::Activities;
             self.activity_tab = 1;
+            self.pad_home = true;
         }
     }
 
@@ -8884,11 +8885,7 @@ impl Game {
                 self.pad_home_focus(&resume);
             }
             ui.add_space(8.0);
-            if self.pause_page == Page::Challenges {
-                self.pause_page = Page::Missions;
-                self.activity_tab = 1;
-            }
-            for (p, text) in [(Page::Settings, t!("game.settings")), (Page::Missions, tr_en("Activities")), (Page::Logbook, t!("log.logbook")), (Page::Flights, tr_en("Flights and replay")), (Page::Controls, t!("game.controls_reference")), (Page::Failures, t!("game.failures_2"))] {
+            for (p, text) in [(Page::Settings, t!("game.settings")), (Page::Logbook, t!("log.logbook")), (Page::Flights, tr_en("Flights and replay")), (Page::Controls, t!("game.controls_reference")), (Page::Failures, t!("game.failures_2"))] {
                 let b = menu::big_button(ui, text, Hint::None, false, page == p);
                 if b.clicked() {
                     self.pause_page = if page == p && p != Page::Settings { Page::Game } else { p };
@@ -8928,7 +8925,7 @@ impl Game {
         });
 
         // The key list or the failures, beside the buttons.
-        if matches!(self.pause_page, Page::Controls | Page::Failures | Page::Flights | Page::Missions | Page::Logbook | Page::Challenges) {
+        if matches!(self.pause_page, Page::Controls | Page::Failures | Page::Flights | Page::Logbook) {
             let x = margin + col_w + 48.0;
             let w = (screen.width() - x - margin).clamp(300.0, 820.0);
             let h = screen.height() - 2.0 * margin.max(64.0);
@@ -8936,17 +8933,12 @@ impl Game {
                 menu::panel().inner_margin(24.0).show(ui, |ui| {
                     ui.set_width(w - 48.0);
                     ui.set_max_height(h - 48.0);
-                    let title = match self.pause_page { Page::Controls => t!("game.controls_reference"), Page::Flights => tr_en("Flights and replay"), Page::Missions => tr_en("Activities"), Page::Logbook => t!("log.logbook"), _ => t!("game.failures_2") };
+                    let title = match self.pause_page { Page::Controls => t!("game.controls_reference"), Page::Flights => tr_en("Flights and replay"), Page::Logbook => t!("log.logbook"), _ => t!("game.failures_2") };
                     ui.label(RichText::new(title).font(menu::page_title()).color(Color32::WHITE));
                     ui.add_space(10.0);
                     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
                         if self.pause_page == Page::Flights {
                             if self.flights_page(ui) {
-                                *act = Some(PauseAct::Resume);
-                            }
-                        } else if self.pause_page == Page::Missions {
-                            if let Some(p) = self.activities_page(ui) {
-                                self.fly_pick(p);
                                 *act = Some(PauseAct::Resume);
                             }
                         } else if self.pause_page == Page::Controls {

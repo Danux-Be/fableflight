@@ -10,8 +10,11 @@ use egui::{Color32, RichText};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cat {
+    /// free practice, among the activities.
     Tutorial,
-    /// a checkride for a licence (career.rs): passed at `pass_mark`.
+    /// a lesson for a licence (career.rs), flown from the career only.
+    Lesson,
+    /// a checkride for a licence (career.rs): passed at `pass_mark`, flown from the career only.
     Exam,
     Mission,
 }
@@ -150,6 +153,75 @@ pub static ALL: &[Mission] = &[
         sk("At 200 feet disconnect the autopilot and land by hand.", &["ap"], Goal::Autopilot(false)),
         st("Touch down.", Goal::Landed),
         st("Stop on the runway.", Goal::Stopped),
+    ] },
+    // the career's own lessons (career.rs): flown from its training page only, never among the activities.
+    Mission { id: "c_ppl1", cat: Cat::Lesson, title: "PPL 1. Straight, level and turns", brief: "Over the bay with your instructor: hold the aircraft level, turn onto headings and climb.", aircraft: "c172", airport: "KPAO", runway: None, start: Start::Air { nm: 8.0, bearing: 110.0, ft: 3000.0, kt: 100.0 }, hour: 10.0, weather: Some("fair"), cold: false, steps: &[
+        st("You have the controls. Hold the nose on the horizon: straight and level.", Goal::Level(200.0, 10.0)),
+        sk("A medium turn left onto a heading of 270, then roll out.", &["roll_left"], Goal::Heading(270.0, 10.0)),
+        sk("Now a turn right, all the way round to a heading of 090.", &["roll_right"], Goal::Heading(90.0, 10.0)),
+        sk("Climb with power to 3,500 feet.", &["throttle_up", "pitch_up"], Goal::AltAbove(3500.0)),
+        st("Level off and hold it there.", Goal::Level(200.0, 8.0)),
+        st("Good. Everything else is built on this.", Goal::Read(5.0)),
+    ] },
+    Mission { id: "c_ppl2", cat: Cat::Lesson, title: "PPL 2. Circuits", brief: "Livermore: take off, fly the circuit and land back on the same runway.", aircraft: "c172", airport: "KLVK", runway: Some("25R"), start: Start::Runway, hour: 11.0, weather: Some("fair"), cold: false, steps: &[
+        sk("Release the brake and take off.", &["parking_brake", "throttle_up"], Goal::Airborne),
+        st("Climb straight ahead to 1,000 feet above the field.", Goal::AglAbove(1000.0)),
+        sk("Turn left onto the downwind leg, heading 070, and level off.", &["roll_left"], Goal::Heading(70.0, 15.0)),
+        st("Fly base and final, and land back on runway 25R.", Goal::LandAt("KLVK")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_ppl3", cat: Cat::Lesson, title: "PPL 3. Navigation", brief: "Hayward to Livermore over the hills, finding the way by the ground below.", aircraft: "c172", airport: "KHWD", runway: Some("28L"), start: Start::Runway, hour: 13.0, weather: Some("fair"), cold: false, steps: &[
+        sk("Release the brake and take off from Hayward.", &["parking_brake", "throttle_up"], Goal::Airborne),
+        st("Climb to 3,500 feet and head east, over the hills toward Livermore.", Goal::AltAbove(3500.0)),
+        st("Find Livermore and land there.", Goal::LandAt("KLVK")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_ir1", cat: Cat::Lesson, title: "IR 1. Tracking a radial", brief: "In cloud east of Oakland: tune a VOR and track to it on the instruments alone.", aircraft: "c172", airport: "KOAK", runway: None, start: Start::Air { nm: 15.0, bearing: 90.0, ft: 4000.0, kt: 100.0 }, hour: 14.0, weather: Some("overcast"), cold: false, steps: &[
+        sk("In cloud. Open the radio page and tune NAV 1 to the nearest VOR.", &["flight_panel"], Goal::NavTuned),
+        sk("Set the course until the needle centres with a TO flag.", &["obs_left", "obs_right"], Goal::CdiCentred),
+        st("Keep the needle centred on the instruments alone until the flag turns to FROM.", Goal::NavFrom),
+        st("Station passed, without seeing the ground once.", Goal::Read(5.0)),
+    ] },
+    Mission { id: "c_ir2", cat: Cat::Lesson, title: "IR 2. ILS by hand", brief: "The ILS to Oakland 30 in cloud, flown by hand on the needles.", aircraft: "c172", airport: "KOAK", runway: Some("30"), start: Start::Air { nm: 9.0, bearing: 114.0, ft: 2500.0, kt: 95.0 }, hour: 16.0, weather: Some("overcast"), cold: false, steps: &[
+        st("NAV 1 is on the ILS. Intercept the localizer, then follow both needles by hand.", Goal::Read(8.0)),
+        st("Hold the localizer and the glide slope down to 1,000 feet.", Goal::AglBelow(1000.0)),
+        st("Keep it on the needles to 300 feet.", Goal::AglBelow(300.0)),
+        st("Runway in sight: land on 30.", Goal::LandAt("KOAK")),
+    ] },
+    Mission { id: "c_night", cat: Cat::Lesson, title: "Night circuit", brief: "Half Moon Bay after dark: a circuit over the black sea by the runway lights.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 21.5, weather: Some("clear"), cold: false, steps: &[
+        sk("Release the brake and take off into the dark.", &["parking_brake", "throttle_up"], Goal::Airborne),
+        st("Climb to 1,000 feet over the sea, holding the attitude on the instruments.", Goal::AglAbove(1000.0)),
+        st("Fly the circuit by the runway lights and land back on 30.", Goal::LandAt("KHAF")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_atpl", cat: Cat::Lesson, title: "ATPL. Heavy rain approach", brief: "A long final into San Francisco 28L through heavy rain, by hand.", aircraft: "g650", airport: "KSFO", runway: Some("28L"), start: Start::Final, hour: 15.0, weather: Some("storm"), cold: false, steps: &[
+        st("Heavy rain on a long final for 28L. Fly it by hand and keep it stable.", Goal::Read(6.0)),
+        st("Stable at 500 feet: on speed, on the glide path.", Goal::AglBelow(500.0)),
+        st("Land on 28L.", Goal::LandAt("KSFO")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_bizjet", cat: Cat::Lesson, title: "Gulfstream type rating", brief: "The G650's autopilot flies the ILS into Oakland 30; you land it.", aircraft: "g650", airport: "KOAK", runway: Some("30"), start: Start::Air { nm: 14.0, bearing: 114.0, ft: 3000.0, kt: 170.0 }, hour: 10.0, weather: Some("fair"), cold: false, steps: &[
+        sk("Engage the autopilot.", &["ap"], Goal::Autopilot(true)),
+        sk("Arm the approach mode (APR) for the ILS.", &["ap_apr"], Goal::ApproachArmed),
+        sk("Slow down and lower the gear.", &["throttle_down", "gear"], Goal::GearDown),
+        sk("Flaps down two notches as it slows.", &["flaps_down"], Goal::FlapsAtLeast(2)),
+        st("Wait for the glide slope: the autopilot captures it and starts down.", Goal::GlideslopeCaptured),
+        sk("At 200 feet disconnect the autopilot and land by hand.", &["ap"], Goal::Autopilot(false)),
+        st("Touch down.", Goal::Landed),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_747", cat: Cat::Lesson, title: "747 type rating", brief: "A 747 on a long final into San Francisco 28R: your first landing in the jumbo.", aircraft: "747", airport: "KSFO", runway: Some("28R"), start: Start::Final, hour: 12.0, weather: Some("fair"), cold: false, steps: &[
+        st("Gear down and flaps set. Fly the approach by hand.", Goal::Read(6.0)),
+        st("Stable at 500 feet: on speed, on the glide path.", Goal::AglBelow(500.0)),
+        st("Land on 28R.", Goal::LandAt("KSFO")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_aero", cat: Cat::Lesson, title: "Precision landing", brief: "In the Robin at Half Moon Bay: power off over the threshold, down in the touchdown zone.", aircraft: "dr400", airport: "KHAF", runway: Some("30"), start: Start::Final, hour: 9.0, weather: Some("fair"), cold: false, steps: &[
+        st("On final in the Robin. Aim for the touchdown zone.", Goal::Read(6.0)),
+        st("Down to 200 feet on the glide path.", Goal::AglBelow(200.0)),
+        sk("Over the threshold close the throttle.", &["throttle_down"], Goal::ThrottleBelow(0.1)),
+        st("Land in the touchdown zone.", Goal::LandAt("KHAF")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
     ] },
     Mission { id: "e_ppl", cat: Cat::Exam, title: "Private pilot checkride", brief: "The examiner is aboard: a circuit at Half Moon Bay, flown by hand, and a landing in the touchdown zone.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 14.0, weather: Some("fair"), cold: false, steps: &[
         st("The examiner is watching. Release the brake and take off from runway 30.", Goal::Airborne),
@@ -571,6 +643,7 @@ impl Game {
                 ui.spacing_mut().item_spacing.y = 6.0;
                 let kind = match m.cat {
                     Cat::Tutorial => tr_en("Tutorial"),
+                    Cat::Lesson => tr_en("Lesson"),
                     Cat::Exam => tr_en("Checkride"),
                     Cat::Mission => tr_en("Mission"),
                 };
