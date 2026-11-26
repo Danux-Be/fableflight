@@ -321,7 +321,14 @@ fn balloon_surface(in: VOut, N0: vec3f, V: vec3f, m: f32, l: Light, sh: f32, px_
   let wale = smoothstep(0.0, 0.03, wf) * (1.0 - smoothstep(0.17, 0.2, wf)) * detail(fw, 0.05);
   let twist = 0.75 + 0.25 * sin((u * 160.0 + Lr.y * 220.0));
   strand = mix(strand, in.col.rgb * 0.62 * twist, wale);
-  albedo = mix(in.col.rgb * 0.8, strand, dt);
+  // From further off, where the rows blur: the stakes still show as faint
+  // upright ribs, and the cane's colour wanders from rod to rod and in
+  // patches, so the wall never looks like one smooth golden sheet.
+  let mott = textureSampleLevel(t_noise, s_repeat, vec3f(u * 2.3, Lr.y * 3.1, 0.71), 0.0).r;
+  let rib = lines(u, stake, 0.35, fw) * detail(fw, stake);
+  let rows = lines(Lr.y, rowh * 4.0, 0.25, fw) * detail(fw, rowh * 4.0);
+  let far = in.col.rgb * 0.8 * (0.78 + 0.44 * mott) * (1.0 - 0.16 * rib) * (1.0 - 0.14 * rows);
+  albedo = mix(far, strand, dt);
   albedo *= 1.0 - 0.2 * wale * (1.0 - dt);
   // Rounded strands: the normal tips up on their top half, down below.
   N = normalize(N + up * cos(3.14159 * fv) * 0.55 * dt * (1.0 - stake_m));

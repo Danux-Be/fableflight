@@ -1790,6 +1790,7 @@ impl Game {
         solids.extend(balloons::models().meshes.iter().cloned());
         r.set_inst_meshes(&solids);
         r.set_scenery(scenery::packs());
+        r.set_people(scenery::people());
         let mut menu = menu::Menu::new(lat, lon, args.hour);
         menu.fuel = args.fuel.unwrap_or(menu.fuel);
         menu.cold = args.cold;
@@ -7611,6 +7612,7 @@ impl Game {
         crate::gputime::cpu("frame_constants+aircraft_objects");
         let mut insts = Vec::new();
         let mut scenery = Vec::new();
+        let mut people = Vec::new();
         let mut fall = Vec::new();
         let mut air_lights = own_lights;
         if !in_menu {
@@ -7626,7 +7628,7 @@ impl Game {
             let before = insts.len();
             self.birds.instances(cam, 2.0 * (fov as f64 * 0.5).tan() / h as f64, &|rel, r| world.in_view(rel, r), &mut insts);
             self.bird_insts = insts.len() - before;
-            self.balloons.instances(cam, self.time, &|rel, r| world.in_view(rel, r), &mut insts);
+            self.balloons.instances(cam, self.time, &|rel, r| world.in_view(rel, r), &mut insts, &mut people);
             self.n_scenery = scenery.len();
             // The apron floodlights are on from dusk to dawn.
             let on = 1.0 - ((sun_up as f32 + 0.08) / 0.18).clamp(0.0, 1.0);
@@ -7777,7 +7779,7 @@ impl Game {
         crate::gputime::cpu("sim.contrails");
         let rain_drops = if in_menu || (self.cam_rain < 0.002 && self.cam_blow < 0.01) { 0 } else { render::RAIN_DROPS };
         crate::gputime::cpu("shore+fields+misc");
-        self.r.render(Frame { rain_drops, bolts, contrails: &self.contrail_draw, g, tiles, tess, details, photo, skins, skin_slots, fields, lights: air_lights, objs, insts, scenery, fall, near, casc_vp, casc_skip, shore: sf.step, shore_c, shore_tiles, psim, sim_steps: dt > 0.0, fluid, ocean: self.world.water_in_view().then(|| self.world.ocean.uniform()), egui: Some(ui), shot, cover, glow: glow_px, snow: snow_px, snow_tracks: snow_tr_uploads });
+        self.r.render(Frame { rain_drops, bolts, contrails: &self.contrail_draw, g, tiles, tess, details, photo, skins, skin_slots, fields, lights: air_lights, objs, insts, scenery, people, fall, near, casc_vp, casc_skip, shore: sf.step, shore_c, shore_tiles, psim, sim_steps: dt > 0.0, fluid, ocean: self.world.water_in_view().then(|| self.world.ocean.uniform()), egui: Some(ui), shot, cover, glow: glow_px, snow: snow_px, snow_tracks: snow_tr_uploads });
         self.finish_mcp_shots();
         if (had_shots && std::env::args().any(|a| a == "--shot") && self.record.is_none()) || rec_done {
             self.quit = true;

@@ -644,7 +644,8 @@ impl Balloons {
     }
 
     /// The instanced solids for the balloons in view of the camera at `cam`.
-    pub fn instances(&self, cam: DVec3, time: f64, visible: &dyn Fn(DVec3, f64) -> bool, out: &mut Vec<(u32, Inst)>) {
+    /// `people`: the pilot and passengers (scenery.rs `people`), up close.
+    pub fn instances(&self, cam: DVec3, time: f64, visible: &dyn Fn(DVec3, f64) -> bool, out: &mut Vec<(u32, Inst)>, people: &mut Vec<(u32, Inst)>) {
         for (k, b) in self.list.iter().enumerate() {
             let rel = b.p - cam;
             let d = rel.length();
@@ -686,6 +687,9 @@ impl Balloons {
                     out.push((if b.plan.large { WIRES_LARGE } else { WIRES_SPORT }, inst(base(DVec3::ONE, 0.0))));
                 }
                 out.push((if b.plan.large { RIG_LARGE } else { RIG_SPORT }, inst(base(DVec3::ONE, 0.0))));
+                if d < PEOPLE_DRAW {
+                    crew(b, rel, right, up, fwd, d > PEOPLE_NEAR, people);
+                }
             }
             if let Some(f) = b.flag() {
                 if d < 3_000.0 {
@@ -709,6 +713,57 @@ impl Balloons {
                 }
             }
         }
+    }
+}
+
+/// How far away the people in a basket are still drawn (m), and up to where
+/// in full (beyond: people.py's far versions, a tenth of the triangles).
+const PEOPLE_DRAW: f64 = 400.0;
+const PEOPLE_NEAR: f64 = 50.0;
+
+/// Where the people stand in the baskets (balloons.py `crew_places`): per
+/// rig, sport then large, (x, y, z in the rig's frame, facing from +x
+/// towards -z), the pilot first.
+fn places() -> &'static [Vec<[f32; 4]>; 2] {
+    static P: std::sync::OnceLock<[Vec<[f32; 4]>; 2]> = std::sync::OnceLock::new();
+    P.get_or_init(|| {
+        let v: serde_json::Value = serde_json::from_str(include_str!("../assets/balloon_crew.json")).expect("balloon_crew.json");
+        let rig = |k: &str| -> Vec<[f32; 4]> {
+            v[k].as_array().map(|a| a.iter().map(|p| std::array::from_fn(|i| p[i].as_f64().unwrap_or(0.0) as f32)).collect()).unwrap_or_default()
+        };
+        [rig("sport"), rig("large")]
+    })
+}
+
+/// Hair colours (linear), to multiply people.py's grey hair by: the darker
+/// ones the more common, grey for the older people.
+const HAIR: [[f32; 3]; 7] = [[0.012, 0.009, 0.007], [0.035, 0.020, 0.010], [0.035, 0.020, 0.010], [0.09, 0.05, 0.022], [0.30, 0.20, 0.09], [0.16, 0.05, 0.02], [0.33, 0.32, 0.31]];
+/// people.py's people who are older (index): grey or white more often.
+const OLD: [bool; 12] = [false, false, false, false, false, false, false, false, false, true, true, false];
+
+/// The pilot and passengers of balloon `b` (camera-relative at `rel`): each
+/// balloon its own people, in its own order, with their own hair colours.
+fn crew(b: &Balloon, rel: DVec3, right: DVec3, up: DVec3, fwd: DVec3, far: bool, out: &mut Vec<(u32, Inst)>) {
+    // (people.py: the people, then their far versions.)
+    let n = crate::scenery::people().meshes.len() as u64 / 2;
+    if n < 2 || b.collapse > 0.5 {
+        return;
+    }
+    let mut rng = Rng(b.plan.seed ^ 0x9E37_79B9_7F4A_7C15);
+    let off = (rng.next() * n as f64) as u64;
+    for (k, p) in places()[b.plan.large as usize].iter().enumerate() {
+        // (The pilot is people.py's first; the passengers the rest, in turn.)
+        let who = if k == 0 { 0 } else { 1 + (off + k as u64 * 5) % (n - 1) };
+        let f = p[3] as f64 + (rng.next() - 0.5) * 0.2;
+        let ahead = right * f.cos() + fwd * f.sin();
+        let left = up.cross(ahead);
+        let pos = rel + right * p[0] as f64 + up * p[1] as f64 - fwd * p[2] as f64;
+        let (cx, cy, cz, t) = (ahead.as_vec3(), left.as_vec3(), up.as_vec3(), pos.as_vec3());
+        let hair = if OLD[who as usize % OLD.len()] && rng.next() < 0.7 { HAIR[6] } else { HAIR[(rng.next() * 6.0) as usize % 6] };
+        // (scenery.wgsl: the grey hair, 0.21 linear, times the tint.)
+        let tint = [hair[0] / 0.21, hair[1] / 0.21, hair[2] / 0.21, 0.0];
+        let m = [[cx.x, cy.x, cz.x, t.x], [cx.y, cy.y, cz.y, t.y], [cx.z, cy.z, cz.z, t.z]];
+        out.push(((who + if far { n } else { 0 }) as u32, Inst { m, tint, ext: [0.0, rng.next() as f32, 0.0, 0.0] }));
     }
 }
 
@@ -736,6 +791,31 @@ fn scaled(m: Mat4, k: f64) -> Inst {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_baskets_have_their_people() {
+        let pack = crate::scenery::people();
+        let n = pack.meshes.len();
+        assert!(n >= 4 && n % 2 == 0, "people.py: the people, then their far versions ({n} meshes)");
+        assert!(pack.mats.len() <= 128, "the scenery shader holds 128 materials");
+        for k in 0..n / 2 {
+            let (near, far) = (&pack.meshes[k], &pack.meshes[k + n / 2]);
+            assert!(far.idx.len() * 4 < near.idx.len(), "{}: the far version is lighter", near.name);
+            // (Standing on the floor, cut off below the rim, no taller than 2 m.)
+            let top = near.verts.iter().map(|v| v.pos[2]).fold(0.0f32, f32::max);
+            let low = near.verts.iter().map(|v| v.pos[2]).fold(9.0f32, f32::min);
+            assert!((1.3..2.0).contains(&top) && low > 0.6, "{}: {low}..{top} m", near.name);
+        }
+        let [sport, large] = places();
+        assert_eq!((sport.len(), large.len()), (3, 21));
+        // Everybody inside the wicker, hands and all.
+        for (p, (w, l)) in [(sport, (1.25, 1.55)), (large, (2.2, 4.6))] {
+            for q in p {
+                let (x, z) = (q[0] + 0.42 * q[3].cos(), -q[2] + 0.42 * q[3].sin());
+                assert!(x.abs() < w / 2.0 - 0.05 && z.abs() < l / 2.0 - 0.05, "{q:?}");
+            }
+        }
+    }
 
     #[test]
     fn the_models_load_and_match_the_constants() {

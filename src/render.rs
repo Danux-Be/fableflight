@@ -26,6 +26,7 @@ pub(crate) fn msaa() -> u32 {
 const MAX_INST: usize = 16384;
 /// scenery instances drawn in a frame, and materials in all the packs together
 const MAX_SCENERY: usize = 8192;
+const MAX_PEOPLE: usize = 1024;
 const SC_MATS: usize = 128;
 const MAX_FALL: usize = 4096;
 /// trees and undergrowth close enough to the camera for their leaf cards
@@ -1093,6 +1094,8 @@ pub struct Frame<'a> {
     pub insts: Vec<(u32, Inst)>,
     /// (mesh, instance) of the hand-made airport scenery (scenery.rs)
     pub scenery: Vec<(u32, Inst)>,
+    /// (mesh, instance) of the people in the balloon baskets (`set_people`)
+    pub people: Vec<(u32, Inst)>,
     /// (tree mesh, instance) for trees that have been knocked loose, camera-relative
     pub fall: Vec<(u32, TreeInst)>,
     /// trees (for their leaf cards) and undergrowth near the camera, relative to their tiles
@@ -1279,6 +1282,10 @@ pub struct Renderer {
     scenery_buf: wgpu::Buffer,
     scenery_lib: Option<MeshLib>,
     bg_scenery: Option<wgpu::BindGroup>,
+    /// the balloon people: the same pipelines, their own meshes, materials and pictures
+    people_buf: wgpu::Buffer,
+    people_lib: Option<MeshLib>,
+    bg_people: Option<wgpu::BindGroup>,
     l_tile: wgpu::BindGroupLayout,
     l_build: wgpu::BindGroupLayout,
     l_comp_cls: wgpu::BindGroupLayout,
@@ -2997,6 +3004,7 @@ impl Renderer {
         let (inst_buf, fall_buf) = (dynbuf("instances", MAX_INST as u64 * 80), dynbuf("loose trees", MAX_FALL as u64 * 36));
         let near_buf = dynbuf("near trees", MAX_NEAR as u64 * 36);
         let scenery_buf = dynbuf("scenery instances", MAX_SCENERY as u64 * 80);
+        let people_buf = dynbuf("people instances", MAX_PEOPLE as u64 * 80);
         let dyn_lights = dynbuf("aircraft lights", MAX_DYN_LIGHTS as u64 * 40);
         let bolt_buf = dynbuf("lightning", crate::storm::MAX_SEGS as u64 * 32);
         let contrail_nodes = d.create_buffer(&wgpu::BufferDescriptor {
@@ -3081,7 +3089,7 @@ impl Renderer {
         Ok(Self {
             ground_mats,
             casc_ub, bg_casc, bg_tileu, l_dres, l_ao, p_gtao, p_ao_blur, p_dres, p_road, p_field, p_lights, dyn_lights, p_rain, p_veil, p_bolt, bolt_buf, p_contrails, bg_contrails, contrail_nodes, contrail_segs, p_tree, p_tree_near, imp, p_tree_shadow, p_tree_shadow_fixed, p_card, near_buf, p_inst, p_inst_shadow, inst_buf, fall_buf, tree_lib: None, inst_lib: None,
-            p_scenery, p_scenery_shadow, l_scenery, scenery_buf, scenery_lib: None, bg_scenery: None,
+            p_scenery, p_scenery_shadow, l_scenery, scenery_buf, scenery_lib: None, bg_scenery: None, people_buf, people_lib: None, bg_people: None,
             gpu_timer: crate::gputime::GpuTimer::new(&device, &queue),
             frame_clock: crate::gputime::FrameClock::new(&device, &queue),
             globals_ub, bg0, bg0_pre, bg0_shadow, lut_sky, shadow, shadow_res: SHADOW_RES, bg0_src, scale: 1.0, ao: true, cloud_step: 1.0, l_tile, l_build, l_comp_cls, l_comp_main, l_comp_edge, l_comp_globe, l_hiz, ap_l, ap_t, cloud_refl, bg_atmlut, bg_comp_sky, p_hiz_build, p_ap_build, p_sky_build, p_cloud_refl, p_cloud_refl_plain, l_cloud, l_cloud_storm, l_cloud_rain, l_cloud_apply, l_cloud_temporal, l_post, l_pdraw, l_glass,
@@ -3455,6 +3463,20 @@ impl Renderer {
     /// library (in pack order, as `Pack::mesh_base` counts them), their
     /// materials and texture layers.
     pub fn set_scenery(&mut self, packs: &[crate::scenery::Pack]) {
+        if let Some((lib, bg)) = self.scenery_set(&packs.iter().collect::<Vec<_>>()) {
+            (self.scenery_lib, self.bg_scenery) = (Some(lib), Some(bg));
+        }
+    }
+
+    /// The people in the balloon baskets (balloons.rs): a pack of their own,
+    /// drawn as the scenery is, with its own (larger) pictures.
+    pub fn set_people(&mut self, pack: &crate::scenery::Pack) {
+        if let Some((lib, bg)) = self.scenery_set(&[pack]) {
+            (self.people_lib, self.bg_people) = (Some(lib), Some(bg));
+        }
+    }
+
+    fn scenery_set(&self, packs: &[&crate::scenery::Pack]) -> Option<(MeshLib, wgpu::BindGroup)> {
         let mut meshes = Vec::new();
         let mut mats: Vec<crate::scenery::SceneryMat> = Vec::new();
         let size = packs.iter().map(|p| p.tex_size).max().unwrap_or(1).max(1);
@@ -3479,7 +3501,7 @@ impl Renderer {
             }
         }
         if meshes.is_empty() {
-            return;
+            return None;
         }
         assert!(mats.len() <= SC_MATS, "scenery: {} materials, the shader holds {SC_MATS}", mats.len());
         if base.is_empty() {
@@ -3491,8 +3513,8 @@ impl Renderer {
         let ub = d.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("scenery materials"), contents: bytemuck::cast_slice(&mats), usage: wgpu::BufferUsages::UNIFORM });
         let tb = layer_texture(d, &self.queue, "scenery base", size, &base, wgpu::TextureFormat::Rgba8UnormSrgb);
         let tn = layer_texture(d, &self.queue, "scenery normal", size, &nrm, wgpu::TextureFormat::Rgba8Unorm);
-        self.bg_scenery = Some(d.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("scenery"), layout: &self.l_scenery, entries: &[buf_res(0, &ub, SC_MATS as u64 * 64), tex_res(1, &tb), tex_res(2, &tn)] }));
-        self.scenery_lib = Some(self.mesh_lib(&meshes));
+        let bg = d.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("scenery"), layout: &self.l_scenery, entries: &[buf_res(0, &ub, SC_MATS as u64 * 64), tex_res(1, &tb), tex_res(2, &tn)] });
+        Some((self.mesh_lib(&meshes), bg))
     }
 
     /// The paint of the aircraft being flown (none: `None`): only its pictures are on the GPU.
@@ -3941,6 +3963,17 @@ impl Renderer {
             q.write_buffer(&self.scenery_buf, 0, bytemuck::cast_slice(&data));
             scenery_ranges = ranges;
         }
+        let mut people_ranges = Vec::new();
+        if let Some(lib) = &self.people_lib {
+            let n = f.people.len().min(MAX_PEOPLE);
+            let (order, ranges) = group(lib.ranges.len(), &mut f.people.iter().take(n).map(|i| i.0));
+            let mut data = vec![Inst::zeroed(); n];
+            for (k, (_, inst)) in f.people.iter().take(n).enumerate() {
+                data[order[k] as usize] = *inst;
+            }
+            q.write_buffer(&self.people_buf, 0, bytemuck::cast_slice(&data));
+            people_ranges = ranges;
+        }
         let mut fall_ranges = Vec::new();
         if let Some(lib) = &self.tree_lib {
             let n = f.fall.len().min(MAX_FALL);
@@ -4331,6 +4364,19 @@ impl Renderer {
                 rp.set_vertex_buffer(1, self.scenery_buf.slice(..));
                 rp.set_index_buffer(lib.ibuf.slice(..), wgpu::IndexFormat::Uint32);
                 for (k, r) in scenery_ranges.iter().enumerate() {
+                    if r.1 > r.0 {
+                        let (first, count, base) = lib.ranges[k];
+                        rp.draw_indexed(first..first + count, base, r.0..r.1);
+                    }
+                }
+            }
+            if let (Some(lib), Some(bg)) = (self.people_lib.as_ref().filter(|_| part & 2 != 0 && !people_ranges.is_empty()), self.bg_people.as_ref()) {
+                rp.set_pipeline(if shadow { &self.p_scenery_shadow } else { &self.p_scenery });
+                rp.set_bind_group(1, bg, &[]);
+                rp.set_vertex_buffer(0, lib.vbuf.slice(..));
+                rp.set_vertex_buffer(1, self.people_buf.slice(..));
+                rp.set_index_buffer(lib.ibuf.slice(..), wgpu::IndexFormat::Uint32);
+                for (k, r) in people_ranges.iter().enumerate() {
                     if r.1 > r.0 {
                         let (first, count, base) = lib.ranges[k];
                         rp.draw_indexed(first..first + count, base, r.0..r.1);

@@ -58,7 +58,7 @@
 #
 # Blender frame: +X right, +Y forward, +Z up, metres. The game's frame is +X
 # right, +Y up, -Z forward, so a point (x, y, z) here is (x, z, -y) there.
-import bpy, bmesh, math, struct, gzip, sys, os
+import bpy, bmesh, math, struct, gzip, sys, os, json
 from mathutils import Vector as V
 
 argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
@@ -117,8 +117,6 @@ STEEL = c(0.50, 0.50, 0.52)
 DARK_STEEL = c(0.10, 0.10, 0.11)
 NOMEX = c(0.045, 0.045, 0.05)
 FLOOR = c(0.06, 0.05, 0.04)
-SKIN = c(0.55, 0.35, 0.24)
-JACKETS = [c(0.02, 0.08, 0.30), RED, c(0.05, 0.05, 0.06), c(0.30, 0.30, 0.28), GREEN, c(0.55, 0.30, 0.02), PURPLE, SKY]
 
 RAINBOW = [RED, ORANGE, YELLOW, GREEN, BLUE, PURPLE]
 
@@ -396,15 +394,16 @@ def box(bm, layer, lo, hi, col, smooth=False):
         paint(f, layer, col)
 
 
-def lathe(bm, layer, prof, n, col_of, z0=0.0, centre=(0.0, 0.0), smooth=True):
-    """A body of revolution: prof = [(r, z)], colour per ring band."""
+def lathe(bm, layer, prof, n, col_of, z0=0.0, centre=(0.0, 0.0), smooth=True, phase=0.0):
+    """A body of revolution: prof = [(r, z)], colour per ring band (the
+    first vertex of each ring at angle `phase`)."""
     cx, cy = centre
     rings = []
     for (r, z) in prof:
         if r < 1e-6:
             rings.append([bm.verts.new((cx, cy, z0 + z))])
         else:
-            rings.append([bm.verts.new((cx + r * math.cos(2 * math.pi * i / n), cy + r * math.sin(2 * math.pi * i / n), z0 + z)) for i in range(n)])
+            rings.append([bm.verts.new((cx + r * math.cos(phase + 2 * math.pi * i / n), cy + r * math.sin(phase + 2 * math.pi * i / n), z0 + z)) for i in range(n)])
     for k in range(len(rings) - 1):
         a, b = rings[k], rings[k + 1]
         for i in range(n):
@@ -417,52 +416,6 @@ def lathe(bm, layer, prof, n, col_of, z0=0.0, centre=(0.0, 0.0), smooth=True):
                 f = bm.faces.new((a[i], a[j], b[j], b[i]))
             f.smooth = smooth
             paint(f, layer, col_of(k, i))
-
-
-def person(bm, layer, x, y, z_floor, jacket, h=1.72, facing=0.0, rng=0.0):
-    """Someone standing in a basket: legs hidden, torso, shoulders, head, cap."""
-    torso_r = 0.19
-    # Torso (slightly flattened front to back), from the hips up to the shoulders.
-    z_hip, z_sh = z_floor + 0.95 * h / 1.72, z_floor + 1.42 * h / 1.72
-    prof = [(0.0, 0.0), (0.16, 0.0), (0.19, 0.12), (0.21, 0.32), (0.20, z_sh - z_hip - 0.04), (0.12, z_sh - z_hip + 0.02), (0.06, z_sh - z_hip + 0.06)]
-    rings = []
-    for (r, z) in prof:
-        rings.append([V((x + r * math.cos(a) * 1.0, y + r * math.sin(a) * 0.62, z_hip + z)) for a in [2 * math.pi * i / 8 + facing for i in range(8)]])
-    vs = [[bm.verts.new(p) for p in ring] for ring in rings]
-    for k in range(len(vs) - 1):
-        for i in range(8):
-            j = (i + 1) % 8
-            f = bm.faces.new((vs[k][i], vs[k][j], vs[k + 1][j], vs[k + 1][i]))
-            f.smooth = True
-            paint(f, layer, jacket)
-    top = bm.faces.new(vs[-1])
-    paint(top, layer, jacket)
-    # Arms: upper arms down from the shoulders, forearms forward onto the rim.
-    fx, fy = math.cos(facing), math.sin(facing) * 0.62
-    side = V((-math.sin(facing), math.cos(facing), 0.0))
-    fwd = V((math.cos(facing), math.sin(facing), 0.0))
-    for sgn in (-1, 1):
-        sh_ = V((x, y, z_sh - 0.05)) + side * (0.19 * sgn)
-        el = sh_ + V((0, 0, -0.27)) + fwd * 0.06 + side * (0.03 * sgn)
-        wr = el + fwd * 0.26 + V((0, 0, 0.04)) - side * (0.05 * sgn)
-        sweep(bm, layer, [sh_, el], 0.055, jacket, sides=6)
-        sweep(bm, layer, [el, wr], 0.045, jacket, sides=6)
-        lathe(bm, layer, [(0.0, -0.045), (0.04, -0.03), (0.045, 0.0), (0.035, 0.03), (0.0, 0.045)], 6, lambda k, i: SKIN, z0=wr.z, centre=(wr.x + fwd.x * 0.04, wr.y + fwd.y * 0.04))
-    # Head and a cap or hair.
-    hz = z_sh + 0.17 * h / 1.72
-    hair = [c(0.03, 0.02, 0.015), c(0.12, 0.07, 0.03), c(0.30, 0.22, 0.10), c(0.08, 0.08, 0.09)][int(rng * 4) % 4]
-    # Neck, head, hair or a cap with its peak.
-    lathe(bm, layer, [(0.0, -0.20), (0.05, -0.20), (0.05, -0.11), (0.0, -0.11)], 6, lambda k, i: SKIN, z0=hz, centre=(x, y))
-    lathe(bm, layer, [(0.0, -0.12), (0.07, -0.11), (0.095, -0.05), (0.10, 0.02), (0.085, 0.08), (0.05, 0.115), (0.0, 0.125)], 10,
-          lambda k, i: hair if k >= 4 else SKIN, z0=hz, centre=(x, y))
-    if rng > 0.45:
-        cap = JACKETS[int(rng * 97) % len(JACKETS)]
-        lathe(bm, layer, [(0.0, 0.03), (0.106, 0.03), (0.104, 0.07), (0.085, 0.11), (0.04, 0.13), (0.0, 0.135)], 10, lambda k, i: cap, z0=hz, centre=(x, y))
-        p0 = V((x, y, hz + 0.035)) + fwd * 0.09
-        # (The peak: a thin plate, a face each side.)
-        corners = [p0 + side * 0.075, p0 - side * 0.075, p0 - side * 0.06 + fwd * 0.08 - V((0, 0, 0.012)), p0 + side * 0.06 + fwd * 0.08 - V((0, 0, 0.012))]
-        paint(bm.faces.new([bm.verts.new(q) for q in corners]), layer, cap)
-        paint(bm.faces.new([bm.verts.new(q - V((0, 0, 0.004))) for q in corners[::-1]]), layer, cap)
 
 
 # ---------------------------------------------------------------- the envelope
@@ -731,11 +684,8 @@ def rig_sport(coll):
     lathe(bm, layer, [(0.0, 0.0), (0.10, 0.0), (0.11, 0.06), (0.11, 0.30), (0.10, 0.32), (0.0, 0.32)], 12, lambda k, i: c(0.12, 0.10, 0.06), z0=h - 0.62, centre=(0.25, hy + 0.12))
     use(ROPE_M)
     rope(bm, layer, [V((0.25, hy + 0.10, h - 0.30)), V((0.25, hy + 0.04, h - 0.10)), V((0.25, hy - 0.02, h - 0.02))], 0.008, CREAM)
-    # The pilot and two passengers.
-    use(TRIM)
-    person(bm, layer, 0.28, -0.35, 0.05, JACKETS[0], 1.80, 0.2, 0.1)
-    person(bm, layer, -0.30, -0.30, 0.05, JACKETS[1], 1.66, -0.4, 0.6)
-    person(bm, layer, 0.05, 0.42, 0.05, JACKETS[3], 1.74, 3.0, 0.3)
+    # (The pilot and passengers: MakeHuman people, people.py, placed by the
+    # game where crew_places() says.)
     ob = make_object("rig sport", bm, coll)
     ob["pivot"] = (0.0, 0.0, S_NOZZLE_Z)
     ob["axis"] = (0.0, 0.0, S_MOUTH_Z)
@@ -784,20 +734,44 @@ def rig_large(coll):
     use(TRIM)
     for k, (cx, cy) in enumerate([(-0.2, -0.2), (0.2, 0.2)]):
         sweep(bm, layer, [V(((hx - 0.26) * (1 if k else -1), 0.27 * (1 if k else -1), 0.93)), V((cx * 1.5, cy, 1.9)), V((cx, cy, L_NOZZLE_Z - 0.34))], 0.016, BLACK, sides=6)
-    # The pilot in the middle, passengers in the four compartments.
-    person(bm, layer, 0.3, 0.0, 0.06, JACKETS[2], 1.82, 0.0, 0.2)
-    seed = 0.13
-    k = 0
-    for sy in (-1, 1):
-        for sx in (-1, 1):
-            for (px, py) in [(0.33, 0.95), (0.70, 0.95), (0.33, 1.55), (0.72, 1.60), (0.50, 2.0)]:
-                seed = (seed * 9301 + 49297) % 233280 / 233280
-                person(bm, layer, sx * px * (hx - 0.1) / 0.9, sy * min(py, hy - 0.25), 0.06, JACKETS[k % len(JACKETS)], 1.6 + 0.25 * seed, seed * 6.28, seed)
-                k += 1
     ob = make_object("rig large", bm, coll)
     ob["pivot"] = (0.0, 0.0, L_NOZZLE_Z)
     ob["axis"] = (0.0, 0.0, L_MOUTH_Z)
     return ob
+
+
+def crew_places():
+    """Where the people stand in each basket: (x, y, floor z, facing), the
+    facing in radians from +X (people.py's people face +X). The pilot first."""
+    sport = [(0.28, -0.35, 0.05, 0.2), (-0.30, -0.30, 0.05, -0.4), (0.05, 0.42, 0.05, 3.0)]
+    w, l, h = L_BASKET
+    hx, hy = w / 2, l / 2
+    large = [(0.3, 0.0, 0.06, 0.0)]
+    seed = 0.13
+    # Passengers in the four compartments, mostly looking out.
+    for sy in (-1, 1):
+        for sx in (-1, 1):
+            for (px, py) in [(0.33, 0.95), (0.70, 0.95), (0.33, 1.55), (0.72, 1.60), (0.50, 2.0)]:
+                seed = (seed * 9301 + 49297) % 233280 / 233280
+                x, y = sx * px * (hx - 0.1) / 0.9, sy * min(py, hy - 0.25)
+                large.append((x, y, 0.06, math.atan2(y, sx * px) + (seed - 0.5) * 1.6))
+    # (Hands reach some 0.4 m ahead: nobody's through the wicker.)
+    def inside(places, hx, hy, walls=False):
+        out = []
+        for k, (x, y, z, f) in enumerate(places):
+            for _ in range(30):
+                hx_, hy_ = x + 0.42 * math.cos(f), y + 0.42 * math.sin(f)
+                ok = abs(hx_) < hx - 0.10 and abs(hy_) < hy - 0.10
+                if walls and k > 0:
+                    # (The passenger rig's partitions: x = 0 in the ends, y = +-0.55.)
+                    ok = ok and hx_ * x > 0.0 and abs(hx_) > 0.08 and hy_ * y > 0.0 and abs(hy_) > 0.65
+                if ok:
+                    break
+                x, y = x - 0.02 * math.cos(f), y - 0.02 * math.sin(f)
+            out.append((round(x, 3), round(y, 3), z, f))
+        return out
+    sw, sl, _ = S_BASKET
+    return {"sport": inside(sport, sw / 2, sl / 2), "large": inside(large, hx, hy, walls=True)}
 
 
 def rig_far(coll):
@@ -933,6 +907,14 @@ def build():
 
 def game(v):
     return (v[0], v[2], -v[1])
+
+
+def export_crew(path):
+    """The places, in the game's frame (x right, y up, z back: game())."""
+    out = {k: [[*game((x, y, z)), f] for (x, y, z, f) in v] for k, v in crew_places().items()}
+    with open(path, "w") as f:
+        json.dump({k: [[round(a, 3) for a in p] for p in v] for k, v in out.items()}, f)
+        f.write("\n")
 
 
 def export(path):
@@ -1118,6 +1100,7 @@ def main():
     # (Exported before the preview materials go on: the material index is
     # the game's material.)
     export(os.path.join(ASSETS, "balloons.bin.gz"))
+    export_crew(os.path.join(ASSETS, "balloon_crew.json"))
     if not EXPORT_ONLY:
         setup_look()
         bpy.ops.wm.save_as_mainfile(filepath=blend)

@@ -142,6 +142,7 @@ The source code is licensed under the MIT License (see [LICENSE](LICENSE)). Bund
 - **Fonts (`assets/fonts/`):** Barlow and IBM Plex Mono, licensed under the SIL Open Font License 1.1 (see `assets/fonts/OFL-Barlow.txt` and `assets/fonts/OFL-IBMPlexMono.txt`).
 - **AMD FidelityFX Super Resolution:** `src/shaders/fsr3.wgsl` and the FSR 1/RCAS functions in `src/shaders/post.wgsl` are ported from AMD's FSR SDK v2.4.0 (MIT; notice in [docs/upscaling.md](docs/upscaling.md)). AMD's FSR 4 runtime is not bundled: it is downloaded from AMD at the player's request, under AMD's licence.
 - **Google Maps badge (`assets/google_maps_logo.png`):** Displayed when optional Google Maps Platform imagery or Photorealistic 3D Tiles are enabled, per Google Maps attribution requirements.
+- **Balloon passengers (`assets/balloon_people.bin.gz`):** Built by `assets/blender/people.py` with [MPFB](https://static.makehumancommunity.org/mpfb.html) from the MakeHuman system assets (bodies, skins, clothes, hair, eyes), released as CC0 by the [MakeHuman](http://www.makehumancommunity.org) project (Data Collection AB, Joel Palmius, Jonas Hauquier).
 - **Aircraft models, textures, and audio (`assets/*.bin.gz`, `assets/*_paint.jpg`, `assets/audio/`, `assets/ui/`):** Project-authored or procedural assets bundled with Fable Flight. Optional downloadable aircraft from [FGAddon](https://wiki.flightgear.org/FGAddon) carry their own per-aircraft licenses recorded in each installed aircraft's `source.json`.
 
 ## Contributing
