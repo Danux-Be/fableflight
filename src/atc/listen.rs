@@ -58,7 +58,12 @@ fn mic_thread(rx: Receiver<bool>, tx: Sender<(Vec<f32>, u32)>) {
         if on && stream.is_none() {
             buf.lock().clear();
             let open = || -> Result<(cpal::Stream, u32), String> {
-                let dev = cpal::default_host().default_input_device().ok_or("no microphone")?;
+                let host = cpal::default_host();
+                let default = host.default_input_device().ok_or("no microphone")?;
+                // the same mic as listed, not windows' "default device" handle: that one
+                // opens through an async call that fails on this thread's com apartment.
+                let id = default.id().ok();
+                let dev = host.input_devices().ok().and_then(|mut l| l.find(|d| d.id().ok() == id && id.is_some())).unwrap_or(default);
                 let cfg = dev.default_input_config().map_err(|e| e.to_string())?;
                 let rate = cfg.sample_rate();
                 let s = match cfg.sample_format() {
@@ -419,6 +424,26 @@ pub fn readback(heard: &str, said: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// the real microphone opens and records (needs one; run by hand).
+    #[test]
+    #[ignore]
+    fn atc_mic_opens() {
+        let mut m = Mic::new();
+        m.set(true);
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        m.set(false);
+        let t = std::time::Instant::now();
+        let got = loop {
+            if let Some(r) = m.take() {
+                break r;
+            }
+            assert!(t.elapsed().as_secs() < 5, "no recording back");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        println!("{} samples at {} hz", got.0.len(), got.1);
+        assert!(got.0.len() as f32 > 0.5 * got.1 as f32, "the mic gave nothing");
+    }
 
     #[test]
     fn mel_matches_whisper_on_a_tone() {
