@@ -1586,8 +1586,6 @@ struct Game {
     smoke_acc: f32,
     /// things that just broke, to flash on the HUD: text, when
     flash: Vec<(String, f64)>,
-    /// the airport notice and when it last changed.
-    airport_note: (String, f64),
     /// a weapon's fireball for the renderer's light: position, power, when
     weapon_flash: Option<(DVec3, f32, f64)>,
     /// aircraft shot down and still falling: they burn on the way down and
@@ -2040,7 +2038,7 @@ impl Game {
             record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, snow: args.snow.unwrap_or(prefs.snow), info_open: args.weather_panel, radial: Default::default(), info_page: if args.weather_panel { menu::Page::Weather } else { menu::Page::Flight }, pause_open: false, pause_page: menu::Page::Game, flight: None, logbook: flightlog::Logbook::load(), challenge: None, challenge_records: challenge::Records::load(), pending_challenge: args.challenge.as_deref().and_then(challenge::by_id), pending_mission: args.mission.as_deref().and_then(missions::by_id), logbook_saves: !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench"), pause_at: args.pause_menu, radial_at: args.flight_menu, settings_sec: args.settings.unwrap_or(settings_ui::Section::General), settings_find: String::new(), look_sens: prefs.look_sens, invert_look_cockpit: prefs.invert_look_cockpit, invert_look_outside_x: prefs.invert_look_outside_x, invert_look_outside_y: prefs.invert_look_outside_y, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
             quit_why: "", g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
-            sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
+            sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, n_scenery: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
             airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None, ai: Default::default(),
             prefs_lang: args.lang.or(prefs.lang),
@@ -9055,68 +9053,6 @@ impl Game {
         });
     }
 
-    /// What the airport panel says: the airfield, the runway in use and the
-    /// wind, and on the way in a guide down the approach (distance, which side
-    /// of the centreline, above or below the 3° glide path); on the ground,
-    /// where on the airfield the aircraft is. (text, colour: 0 plain, 1 good, 2 caution, 3 warning)
-    fn airport_hud(&self) -> Option<Vec<(String, u8)>> {
-        if self.crashed {
-            return None;
-        }
-        let f = self.world.airfield_near(self.plane.pos, 18_000.0)?;
-        let g = &f.geo;
-        let a = g.apt();
-        let mut out = vec![(format!("{}  {}", a.code(), a.name), 0u8)];
-        let wind_kt = self.wx.wind * 1.94384;
-        let wind = if wind_kt < 1.0 { t!("game.calm").to_string() } else { format!("{:03.0}°/{:.0} kt", self.wx.wind_from, wind_kt) };
-        // the runway in use and the wind, nothing more.
-        let active = f.traffic.active.map(|(ri, e)| t!("game.runway_in_use", g.runways[ri].ident[e]));
-        out.push((active.map_or(wind.clone(), |a| format!("{a}  ·  {wind}")), 0));
-        let p = g.local(self.plane.pos);
-        let alt = geo::pos_to_lla(self.plane.pos).2 as f32;
-        let fw = self.plane.forward();
-        let hd = glam::Vec2::new(fw.dot(g.e) as f32, fw.dot(g.n) as f32).normalize_or_zero();
-        if self.plane.on_ground || alt - g.h(p) < 3.0 {
-            if let Some(ri) = g.on_runway(p, 0.0) {
-                let r = &g.runways[ri];
-                let e = if hd.dot(r.dir) >= 0.0 { 0 } else { 1 };
-                let (s, _) = r.local(p);
-                let left = if e == 0 { r.len - s } else { s };
-                out.push((t!("game.on_runway_m_of_runway", r.ident[e], left), 1));
-            } else if let Some(h) = g.holds.iter().find(|h| (h.p - p).length() < 25.0) {
-                let r = &g.runways[h.rwy as usize];
-                out.push((t!("game.holding_point_runway", r.name()), 2));
-            }
-            return Some(out);
-        }
-        // The runway end ahead that we are lined up with best.
-        let mut best: Option<(f32, usize, usize)> = None;
-        for (ri, r) in g.runways.iter().enumerate() {
-            for e in 0..2 {
-                let (thr, dir) = r.end(e);
-                let along = (thr - p).dot(dir);
-                let x = (p - thr).dot(airports::right_of(dir));
-                if along > -200.0 && along < 20_000.0 && hd.dot(dir) > 0.75 && x.abs() < along.max(0.0) * 0.25 + 300.0 && best.map(|b| along < b.0).unwrap_or(true) {
-                    best = Some((along, ri, e));
-                }
-            }
-        }
-        if let Some((along, ri, e)) = best {
-            let r = &g.runways[ri];
-            let (thr, dir) = r.end(e);
-            let x = (p - thr).dot(airports::right_of(dir));
-            let h = alt - g.h(thr);
-            let aim = (along + traffic::aim_dist(r.len)).max(1.0);
-            let gs = h.atan2(aim).to_degrees();
-            let dev = gs - 3.0;
-            let side = if x.abs() < 0.01 * along.max(300.0) + 5.0 { t!("game.on_the_centreline").to_string() } else { t!("game.m_of_the_centreline", x.abs(), if x > 0.0 { t!("game.right") } else { t!("game.left") }) };
-            let glide = if dev.abs() < 0.3 { t!("game.on_glide_path").to_string() } else if dev > 0.0 { t!("game.high", dev) } else { t!("game.low", -dev) };
-            let col = if dev < -0.7 || x.abs() > 0.06 * along + 30.0 { 3 } else if dev.abs() > 0.3 { 2 } else { 1 };
-            out.push((t!("game.runway_nm_ft_above_it", r.ident[e], along.max(0.0) / 1852.0, side, glide, h * 3.28084), col));
-        }
-        Some(out)
-    }
-
     fn ui(&mut self, agl: f64) -> (Vec<egui::ClippedPrimitive>, egui::TexturesDelta, f32) {
         let raw = self.egui_input();
         let (lat, lon, alt) = geo::pos_to_lla(self.plane.pos);
@@ -9133,7 +9069,6 @@ impl Game {
         let mut close_goto = false;
         let mut act = None;
         let mut bar: Option<flightui::Bar> = None;
-        let airport_hud = self.airport_hud();
         let landing_guide = if self.minimap.landing_guidance && !self.crashed {
             self.world.airfield_near(self.plane.pos, 18_000.0).and_then(|field| {
                 let g = &field.geo;
@@ -9185,7 +9120,7 @@ impl Game {
                 self.systems_card(ctx, vs, base_up);
                 // the card and a challenge's result take the top centre while they are up.
                 if !self.info_open && !self.challenge.as_ref().is_some_and(|a| a.result.is_some()) {
-                    self.notices(ctx, airport_hud.as_deref());
+                    self.notices(ctx);
                 }
             }
             self.hotspot_overlay(ctx);
@@ -9397,8 +9332,7 @@ impl Game {
             let report = if self.crashed { Vec::new() } else { p.dmg.report() };
             // warnings, damage and the approach line.
             if self.show_hud {
-                let guide = if self.hud_on() { airport_hud.as_ref().and_then(|l| l.get(2)) } else { None };
-                self.alerts(ctx, &warn, &report, guide);
+                self.alerts(ctx, &warn, &report);
             }
             if !self.flash.is_empty() && !self.crashed {
                 // Each new loss: a small red plate down the left edge (under the systems card,

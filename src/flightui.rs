@@ -256,8 +256,6 @@ pub enum Bar {
     Camera,
 }
 
-/// how long an airport notice shows (s), and its fade.
-const NOTE_SHOW: f64 = 7.0;
 const NOTE_FADE: f64 = 1.0;
 
 impl Game {
@@ -280,27 +278,9 @@ impl Game {
     }
 
     /// the notices at the top centre.
-    pub(crate) fn notices(&mut self, ctx: &egui::Context, airport: Option<&[(String, u8)]>) {
-        // a new airport brings its notice back.
-        let key = airport.map(|l| l.iter().take(2).map(|x| x.0.as_str()).collect::<Vec<_>>().join("|")).unwrap_or_default();
-        if key != self.airport_note.0 {
-            self.airport_note = (key.clone(), if key.is_empty() { -100.0 } else { self.real });
-        }
-        let fade = |since: f64, show: f64| -> f32 { (1.0 - ((self.real - since - (show - NOTE_FADE)) / NOTE_FADE).max(0.0)).clamp(0.0, 1.0) as f32 };
+    pub(crate) fn notices(&mut self, ctx: &egui::Context) {
         let mut notes: Vec<(f32, Vec<(String, egui::FontId, Color32)>)> = Vec::new();
-        if let (Some(lines), a) = (airport, fade(self.airport_note.1, NOTE_SHOW)) {
-            if a > 0.0 && !lines.is_empty() {
-                let mut v = vec![(lines[0].0.clone(), menu::item_title(), Color32::WHITE)];
-                if let Some(l) = lines.get(1) {
-                    v.push((l.0.clone(), menu::caption(), TEXT));
-                }
-                notes.push((a, v));
-            }
-        }
-        // skip a status that repeats the airport notice.
-        let airport_code = airport.and_then(|l| l.first()).and_then(|l| l.0.split_whitespace().next()).unwrap_or("\u{0}");
-        let repeats = !notes.is_empty() && self.status.starts_with(airport_code);
-        if self.real < self.status_until && !self.status.is_empty() && !repeats {
+        if self.real < self.status_until && !self.status.is_empty() {
             let a = ((self.status_until - self.real) / NOTE_FADE).clamp(0.0, 1.0) as f32;
             notes.push((a, vec![(self.status.chars().take(90).collect(), menu::label(), Color32::WHITE)]));
         }
@@ -720,7 +700,6 @@ impl Game {
             p.rect_filled(rb, 0, BOX);
             p.rect_stroke(rb, 0, Stroke::new(1.0, LIT), egui::StrokeKind::Inside);
             p.text(rb.center(), Align2::CENTER_CENTER, format!("{:03.0}°", hdg.rem_euclid(360.0).round() % 360.0), menu::semibold(17.0), Color32::WHITE);
-            p.line_segment([pos2(cx, rb.bottom()), pos2(cx, base)], Stroke::new(1.5, LIT));
         });
     }
 
@@ -889,10 +868,10 @@ impl Game {
     }
 
     /// the approach line, alerts and damage, bottom centre.
-    pub(crate) fn alerts(&self, ctx: &egui::Context, warn: &[(&str, Color32)], report: &[String], guidance: Option<&(String, u8)>) {
+    pub(crate) fn alerts(&self, ctx: &egui::Context, warn: &[(&str, Color32)], report: &[String]) {
         // the panel at the bottom shows the modes itself while it is up.
         let ap = !self.ap_bar_on && (self.ap.on || self.real - self.ap_off_t < 4.0);
-        if warn.is_empty() && report.is_empty() && guidance.is_none() && !ap {
+        if warn.is_empty() && report.is_empty() && !ap {
             return;
         }
         // above the autopilot panel while it is up.
@@ -900,14 +879,6 @@ impl Game {
         egui::Area::new(egui::Id::unique("hud_alerts")).anchor(Align2::CENTER_BOTTOM, [0.0, -lift]).interactable(false).show(ctx, |ui| {
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing = vec2(8.0, 8.0);
-                if let Some((text, col)) = guidance {
-                    // no dot, only a caution or warning tints the line.
-                    let col = match col { 2 => AMBER, 3 => menu::BAD, _ => Color32::WHITE };
-                    panel(ui, glass().inner_margin(egui::Margin::symmetric(16, 8)), |ui| {
-                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-                        ui.label(RichText::new(text).font(num_s()).color(col));
-                    });
-                }
                 if ap {
                     self.ap_strip(ui);
                 }
