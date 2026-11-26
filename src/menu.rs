@@ -858,19 +858,15 @@ pub enum Page {
     Atc,
     /// saved flights and the replay (flightsave.rs, replay.rs)
     Flights,
-    /// tutorials, landing challenges and missions (missions.rs)
-    Missions,
     /// pushback, jet bridge, fuel and boarding (ground.rs)
     Ground,
     /// the pilot's logbook (flightlog.rs)
     Logbook,
-    /// the landing challenges (challenge.rs)
-    Challenges,
 }
 
 impl Page {
     pub const INFO: [Page; 8] = [Page::Flight, Page::Places, Page::Radio, Page::Autopilot, Page::Weather, Page::Checklist, Page::Atc, Page::Ground];
-    pub const PAUSE: [Page; 8] = [Page::Game, Page::Settings, Page::Controls, Page::Failures, Page::Flights, Page::Missions, Page::Logbook, Page::Challenges];
+    pub const PAUSE: [Page; 6] = [Page::Game, Page::Settings, Page::Controls, Page::Failures, Page::Flights, Page::Logbook];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -886,10 +882,8 @@ impl Page {
             Page::Checklist => "Checklist",
             Page::Atc => "ATC",
             Page::Flights => "Flights",
-            Page::Missions => "Missions",
             Page::Ground => "Ground",
             Page::Logbook => "Logbook",
-            Page::Challenges => "Challenges",
         }
     }
 
@@ -915,7 +909,6 @@ impl Page {
         match s.as_str() {
             "pause" | "menu" => return Some(Page::Game),
             "airports" | "places" => return Some(Page::Places),
-            "activities" | "tutorials" => return Some(Page::Missions),
             _ => {}
         }
         Page::INFO.into_iter().chain(Page::PAUSE).find(|p| p.name().to_lowercase().starts_with(&s))

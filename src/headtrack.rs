@@ -39,7 +39,7 @@ pub fn parse(b: &[u8]) -> Option<Pose> {
 pub fn start() {
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
-        let port: u16 = std::env::var("FABLE_OPENTRACK_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(4242);
+        let port = port();
         let _ = std::thread::Builder::new().name("head tracking".into()).spawn(move || {
             let Ok(sock) = std::net::UdpSocket::bind(("127.0.0.1", port)) else {
                 log::info!("head tracking: port {port} taken, not listening");
@@ -56,6 +56,11 @@ pub fn start() {
             }
         });
     });
+}
+
+/// the udp port it listens on: 4242, opentrack's own default.
+pub fn port() -> u16 {
+    std::env::var("FABLE_OPENTRACK_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(4242)
 }
 
 /// the head's pose, while packets keep coming.

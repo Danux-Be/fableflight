@@ -139,8 +139,10 @@ impl Game {
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tr_en("Activities")));
             let mut pl = p.clone();
             pl.set_opacity(rise(3));
-            let all = crate::missions::ALL.len() + crate::challenge::ALL.len();
-            let flown = crate::missions::ALL.iter().filter(|m| self.profile.best.contains_key(m.id)).count() + crate::challenge::ALL.iter().filter(|c| self.challenge_records.top(c.id).is_some()).count();
+            // the activities only: the career's lessons and checkrides are its own.
+            let acts = || crate::missions::ALL.iter().filter(|m| matches!(m.cat, crate::missions::Cat::Tutorial | crate::missions::Cat::Mission));
+            let all = acts().count() + crate::challenge::ALL.len();
+            let flown = acts().filter(|m| self.profile.best.contains_key(m.id)).count() + crate::challenge::ALL.iter().filter(|c| self.challenge_records.top(c.id).is_some()).count();
             activities_bar(&pl, lbb, &r, &format!("{flown} / {all} {}", tr_en("flown")));
             if r.clicked() {
                 press = Some(Tile::Activities);

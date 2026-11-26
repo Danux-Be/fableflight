@@ -454,6 +454,15 @@ pub fn sideways(ctx: &egui::Context) -> bool {
     SIDEWAYS.with(|s| s.get()) == Some(f) || ctx.viewport(|v| v.prev_pass.widgets.get(f).is_some_and(|w| w.sense.senses_drag() && !w.sense.senses_click()))
 }
 
+/// the virtual cursor: an arrow over everything, its tip at `at`.
+pub fn cursor(ctx: &egui::Context, at: Pos2) {
+    let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Debug, egui::Id::unique("pad_cursor")));
+    let pts: Vec<Pos2> = [(0.0, 0.0), (0.0, 19.0), (4.6, 14.8), (7.8, 21.6), (10.6, 20.4), (7.4, 13.6), (13.4, 13.6)].iter().map(|&(x, y)| at + vec2(x, y)).collect();
+    p.add(egui::Shape::convex_polygon(pts.iter().map(|q| *q + vec2(1.0, 1.5)).collect(), Color32::from_black_alpha(110), Stroke::NONE));
+    p.add(egui::Shape::closed_line(pts.clone(), Stroke::new(2.4, Color32::from_rgb(10, 12, 16))));
+    p.add(egui::Shape::convex_polygon(pts, Color32::WHITE, Stroke::NONE));
+}
+
 /// A clear ring round the widget the gamepad has focused, over everything.
 pub fn focus_ring(ctx: &egui::Context, col: Color32) {
     if !active() {

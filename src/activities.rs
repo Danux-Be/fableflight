@@ -14,7 +14,8 @@ pub enum Pick {
     Challenge(usize),
 }
 
-pub const TABS: [&str; 4] = ["Tutorials", "Landing challenges", "Checkrides", "Missions"];
+/// free practice only: the career's lessons and checkrides are flown from its training page.
+pub const TABS: [&str; 3] = ["Tutorials", "Landing challenges", "Missions"];
 
 /// one card: the title, the words, where and in what, how it went, and fly.
 #[allow(clippy::too_many_arguments)]
@@ -68,25 +69,12 @@ impl Game {
                 cards.push((c.name().to_string(), c.about().to_string(), format!("{} {}  ·  {plane}  ·  {}", c.airport, c.runway, c.conditions()), status, Color32::from_rgb(110, 170, 255), Pick::Challenge(i)));
             }
         } else {
-            let cat = match tab {
-                0 => Cat::Tutorial,
-                2 => Cat::Exam,
-                _ => Cat::Mission,
-            };
+            let cat = if tab == 0 { Cat::Tutorial } else { Cat::Mission };
             for m in missions::ALL.iter().filter(|m| m.cat == cat) {
                 let plane = aircraft::by_key(m.aircraft).map_or(m.aircraft, |s| s.name);
                 let best = self.profile.best.get(m.id).copied();
-                let status = match (cat, best) {
-                    (Cat::Exam, Some(b)) => Some((format!("{} {b}", tr_en("PASSED")), OK)),
-                    (Cat::Exam, None) => Some((format!("{} {}", tr_en("PASS MARK"), missions::pass_mark(m)), FAINT)),
-                    (_, Some(_)) => Some((tr_en("DONE").to_string(), OK)),
-                    _ => None,
-                };
-                let col = match cat {
-                    Cat::Tutorial => ACCENT,
-                    Cat::Exam => Color32::from_rgb(255, 150, 70),
-                    Cat::Mission => Color32::from_rgb(178, 140, 255),
-                };
+                let status = best.map(|_| (tr_en("DONE").to_string(), OK));
+                let col = if cat == Cat::Tutorial { ACCENT } else { Color32::from_rgb(178, 140, 255) };
                 let title = tr_en(m.title).trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ' ').to_string();
                 cards.push((title, tr_en(m.brief).to_string(), format!("{}  ·  {plane}", m.airport), status, col, Pick::Mission(m)));
             }
@@ -128,7 +116,7 @@ impl Game {
         let (x0, w) = widgets::columns(screen, 1240.0);
         let mut back = false;
         let mut pick = None;
-        let tab = self.activity_tab.min(3);
+        let tab = self.activity_tab.min(TABS.len() - 1);
         egui::Area::new(egui::Id::unique("activities")).fixed_pos(pos2(x0, 26.0)).constrain(false).show(ctx, |ui| {
             ui.set_width(w);
             let names: Vec<&str> = TABS.iter().map(|t| tr_en(t)).collect();
@@ -154,18 +142,5 @@ impl Game {
         if let Some(p) = pick {
             self.fly_pick(p);
         }
-    }
-
-    /// the pause menu's page: the tabs and the cards, in the panel beside the buttons.
-    pub(crate) fn activities_page(&mut self, ui: &mut egui::Ui) -> Option<Pick> {
-        let names: Vec<&str> = TABS.iter().map(|t| tr_en(t)).collect();
-        let tab = self.activity_tab.min(3);
-        ui.horizontal(|ui| {
-            if let Some(i) = widgets::tab_strip(ui, &names, tab) {
-                self.activity_tab = i;
-            }
-        });
-        ui.add_space(10.0);
-        self.activities_grid(ui, tab, ui.available_width() - 12.0)
     }
 }

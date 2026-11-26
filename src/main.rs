@@ -46,6 +46,7 @@ mod gust;
 mod hangar;
 mod hangar_ui;
 mod bind;
+mod discord;
 mod headtrack;
 mod i18n;
 mod icing;
@@ -494,7 +495,7 @@ struct Args {
     mcp_port: u16,
 }
 
-const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures|logbook|challenges[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--simbrief USER_OR_ID] [--challenge first|crosswind|night|mountain|rain|short|jumbo|paro] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--atc-install] [--framegen-install] [--full-map] [--no-scenery] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
+const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures|logbook[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--simbrief USER_OR_ID] [--challenge first|crosswind|night|mountain|rain|short|jumbo|paro] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--atc-install] [--framegen-install] [--full-map] [--no-scenery] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
 
 fn parse_args() -> Args {
     let v: Vec<String> = std::env::args().skip(1).collect();
@@ -1471,6 +1472,10 @@ struct Game {
     pad_home: bool,
     /// passes the request for a first choice has waited for a screen to take it.
     pad_home_age: u8,
+    /// the pad's virtual cursor is on (R3): it moves `cursor` and A clicks there.
+    vcursor: bool,
+    /// A is down with the cursor: on the ui (true) or the world (false).
+    vcursor_hold: Option<bool>,
     /// `FABLE_PAD="Down@2;A@2.5"`: gamepad buttons at seconds, for scripted shots of the menus.
     pad_script: Option<Vec<(f64, String)>>,
     /// Y (North) held on the gamepad, and whether it has been used with
@@ -1587,8 +1592,6 @@ struct Game {
     smoke_acc: f32,
     /// things that just broke, to flash on the HUD: text, when
     flash: Vec<(String, f64)>,
-    /// the airport notice and when it last changed.
-    airport_note: (String, f64),
     /// a weapon's fireball for the renderer's light: position, power, when
     weapon_flash: Option<(DVec3, f32, f64)>,
     /// aircraft shot down and still falling: they burn on the way down and
@@ -1718,6 +1721,11 @@ struct Game {
     /// the career (career.rs), and the job being flown
     career: career::Career,
     career_flight: Option<career::Flight>,
+    /// discord's status (discord.rs): switched on, the link, what it says and since when, and when it was last looked at.
+    discord_on: bool,
+    discord: Option<discord::Presence>,
+    discord_what: (String, i64),
+    discord_t: f64,
     /// game-managed air traffic (aitraffic.rs)
     ai: aitraffic::AiTraffic,
 }
@@ -2037,14 +2045,14 @@ impl Game {
             cam_yaw: cy.to_radians(), cam_pitch: cp, cam_dist: cd, cam_mode: args.start_view.unwrap_or(prefs.cam_mode), view_before_tail: 0, cam_pos, cam_dir: -plane.forward(), cam_look: plane.pos, orbit: 0.0, cam_rise: 0.0, cam_clear_t: 0.0, cam_ang: None, cam_hold: 0.0,
             utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, shown_at: 0, dyn_k: 1.0, dyn_ms: 0.0, dyn_seen: 0, dyn_skip: 0, dyn_t: 0.0, gfx_eff: gfx, dynq: dynamic::Dynamic::default(), storms_seen: false, topple_buildings: prefs.topple_buildings, atc_voices: prefs.atc_voices, casc_keep: [([[0.0; 4]; 4], DVec3::ZERO); 2], casc_ok: 0, casc_res: 0, dyn_cli: args.dynamic.is_some(), prev_plane: Mat4::IDENTITY, plane_box, lamps,
             frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, planner: Default::default(), ap_bar_on: false, warp: 1, ap_alt_seen: (0.0, 0.0), ils_auto: None, prefs_simbrief: prefs.simbrief.clone(), profile: profile::Profile::load(), toasts: Vec::new(), pilot_tab: 0, activity_tab: 0, arcade: args.arcade || prefs.arcade, goto_open: false, goto_text: String::new(), goto_rx: None,
-            status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_step: None, pad_skip: None, pad_rep: None, pad_home: false, pad_home_age: 0, pad_script: pad_script_from_env(), pad_y: false, pad_y_combo: false, pad_held: Vec::new(), pad_note: (String::new(), 0.0), pad_aim: false, pad_live: None, ap: autopilot::Autopilot::default(), ap_off_t: -100.0, ap_script: args.ap_script.clone(), cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
+            status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_step: None, pad_skip: None, pad_rep: None, pad_home: false, pad_home_age: 0, vcursor: false, vcursor_hold: None, pad_script: pad_script_from_env(), pad_y: false, pad_y_combo: false, pad_held: Vec::new(), pad_note: (String::new(), 0.0), pad_aim: false, pad_live: None, ap: autopilot::Autopilot::default(), ap_off_t: -100.0, ap_script: args.ap_script.clone(), cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
             record: args.record.clone(), rec_audio: Vec::new(), rec_n: 0, rec_t0: Instant::now(), sound_on: prefs.sound_on, volume: prefs.volume, snow: args.snow.unwrap_or(prefs.snow), info_open: args.weather_panel, radial: Default::default(), info_page: if args.weather_panel { menu::Page::Weather } else { menu::Page::Flight }, pause_open: false, pause_page: menu::Page::Game, flight: None, logbook: flightlog::Logbook::load(), challenge: None, challenge_records: challenge::Records::load(), pending_challenge: args.challenge.as_deref().and_then(challenge::by_id), pending_mission: args.mission.as_deref().and_then(missions::by_id), logbook_saves: !std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench"), pause_at: args.pause_menu, radial_at: args.flight_menu, settings_sec: args.settings.unwrap_or(settings_ui::Section::General), settings_find: String::new(), look_sens: prefs.look_sens, invert_look_cockpit: prefs.invert_look_cockpit, invert_look_outside_x: prefs.invert_look_outside_x, invert_look_outside_y: prefs.invert_look_outside_y, head: cockpit::Head::new(cy.to_radians(), cp), cockpit_fov: args.fov.unwrap_or(prefs.cockpit_fov).clamp(30.0, 90.0), head_live: false, warn: audio::Warn::default(), warn_t: [-10.0; 4],
             quit_why: "", g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
-            sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
+            sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, n_scenery: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
-            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ptt: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None, ai: Default::default(),
+            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ptt: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None, discord_on: prefs.discord, discord: None, discord_what: (String::new(), 0), discord_t: -10.0, ai: Default::default(),
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
             live: live::Live::new(prefs.live_traffic),
@@ -2124,8 +2132,7 @@ impl Game {
             };
             g.activity_tab = match t {
                 "challenges" => 1,
-                "checkrides" | "exams" => 2,
-                "missions" => 3,
+                "missions" => 2,
                 _ => 0,
             };
         }
@@ -2792,7 +2799,6 @@ impl Game {
                 let heading = (st.dir.x as f64).atan2(st.dir.y as f64);
                 self.respawn_ground(lat, lon, g.h(at) as f64, heading, 0.0);
                 self.plane.parking_brake = true;
-                self.status = format!("{} {}  ·  {}", a.code(), a.name, tr_en("parked at a stand"));
                 return;
             }
         }
@@ -2812,7 +2818,6 @@ impl Game {
             let (v, notch) = self.spec.approach;
             self.respawn_at(lat, lon, alt, heading, v);
             self.plane.configure(notch, true, v * 3f64.to_radians().sin());
-            self.status = t!("game.final_approach_runway_nm", a.code(), a.name, r.ident[e], d / 1852.0);
             // NAV 1 on the runway's ILS, as a crew would have it set up.
             let (la, lo, _) = geo::pos_to_lla(self.plane.pos);
             if let Some((st, _)) = nav::near(la.to_degrees(), lo.to_degrees(), 20_000.0, nav::Kind::Ils).into_iter().find(|(s, _)| s.name == a.ident && s.ident == r.ident[e]) {
@@ -2824,7 +2829,6 @@ impl Game {
             // On a sloping runway it stands nose up (or down) with the slope.
             let pitch = ((g.h(start + dir * 3.0) - g.h(start - dir * 3.0)) / 6.0).atan() as f64;
             self.respawn_ground(lat, lon, g.h(start) as f64, heading, pitch);
-            self.status = t!("game.runway_m_m", a.code(), a.name, r.ident[e], r.len, r.width);
         }
     }
 
@@ -3311,20 +3315,33 @@ impl Game {
             "speedbrake" if self.spec.chute.is_some() => t!("game.drag_chute"),
             _ => bind::ACTIONS.iter().find(|a| a.id == id).map(|a| a.label()).unwrap_or_else(|| aircraft::c172::cabin::action_label(id)),
         };
-        if aim.is_some() {
-            // The pad: each action with the buttons that do it (none: not on the pad).
+        if aim.is_some() || self.vcursor {
+            // The pad: each action with the buttons that do it (none: not on the pad);
+            // with the virtual cursor, A works it and the bumpers turn it.
+            let cur = self.vcursor;
             let mut rows: Vec<(String, String)> = Vec::new();
-            let mut add = |id: &'static str, extra: &str| rows.push((padmap::spec_of(id), format!("{}{extra}", label(id))));
-            if let Some(id) = h.click { add(id, ""); }
-            if let Some(id) = h.hold { add(id, &if h.click.is_none() { format!(" ({})", t!("game.hold")) } else { String::new() }); }
-            if let Some((up, down)) = h.wheel { add(up, ""); add(down, ""); }
+            let mut add = |id: &'static str, extra: &str, by_cursor: &str| rows.push((if cur { by_cursor.to_string() } else { padmap::spec_of(id) }, format!("{}{extra}", label(id))));
+            if let Some(id) = h.click { add(id, "", "A"); }
+            if let Some(id) = h.hold { add(id, &if h.click.is_none() || cur { format!(" ({})", t!("game.hold")) } else { String::new() }, "A"); }
+            if let Some((up, down)) = h.wheel {
+                if cur {
+                    rows.push(("LB / RB".to_string(), format!("{} / {}", label(down), label(up))));
+                } else {
+                    add(up, "", "");
+                    add(down, "", "");
+                }
+            }
             rows.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
             if let Some(st) = h.click.or(h.wheel.map(|w| w.0)).and_then(|id| self.hot_state(id)) {
                 rows.push((String::new(), st));
             }
             let p = ctx.layer_painter(egui::LayerId::background());
-            let x0 = screen.center().x + 18.0;
-            let y0 = screen.center().y + 16.0;
+            let at = match (cur, self.cursor) {
+                (true, Some((x, y))) => egui::pos2(x as f32 / ctx.pixels_per_point(), y as f32 / ctx.pixels_per_point()) + egui::vec2(6.0, 14.0),
+                _ => screen.center(),
+            };
+            let x0 = at.x + 18.0;
+            let y0 = at.y + 16.0;
             let gw = rows.iter().map(|r| if r.0.is_empty() { 0.0 } else { padui::spec_width(&p, &r.0, 18.0) + 6.0 }).fold(0.0, f32::max);
             for (k, (spec, text)) in rows.iter().enumerate() {
                 let y = y0 + 22.0 * k as f32;
@@ -3602,7 +3619,7 @@ impl Game {
         }
         // Where the pad's buttons go: the globe, the pause menu, the flight
         // panel (which then has the d-pad, A, B and the bumpers), or the aircraft.
-        let nav = nav_of(self.mode, self.pause_open, self.info_open || self.radial.open);
+        let nav = nav_of(self.mode, self.pause_open, self.info_open || self.radial.open || self.mission.as_ref().is_some_and(|r| r.done || r.failed.is_some()));
         // Each thumbstick's dead zone (Settings › Controls › Gamepad), the rest
         // of the travel rescaled so there is no step out of it.
         let pm = &self.binds.pad;
@@ -3645,7 +3662,23 @@ impl Game {
         let dirs = [(Button::DPadUp, egui::Key::ArrowUp), (Button::DPadDown, egui::Key::ArrowDown), (Button::DPadLeft, egui::Key::ArrowLeft), (Button::DPadRight, egui::Key::ArrowRight)];
         let mut held = dirs.iter().find(|(b, _)| pad.is_pressed(*b)).map(|d| d.1);
         let (lx, ly) = (pad.value(Axis::LeftStickX), pad.value(Axis::LeftStickY));
-        let stick_nav = nav == Nav::Pause || (nav == Nav::Globe && !globe);
+        let stick_nav = !self.vcursor && (nav == Nav::Pause || (nav == Nav::Globe && !globe));
+        // the virtual cursor: the right stick moves it, the left too in the menus.
+        if self.vcursor {
+            let size = self.window.inner_size();
+            let (w, h) = (size.width.max(1) as f64, size.height.max(1) as f64);
+            let sq = |v: f64| v * v.abs();
+            let (mut vx, mut vy) = (sq(dzr(right.0)), -sq(dzr(right.1)));
+            if matches!(nav, Nav::Globe | Nav::Pause) {
+                vx += sq(dzl(lx));
+                vy -= sq(dzl(ly));
+            }
+            let (x, y) = self.cursor.unwrap_or((w * 0.5, h * 0.5));
+            let k = 0.9 * h * dt;
+            let p = ((x + vx * k).clamp(0.0, w - 1.0), (y + vy * k).clamp(0.0, h - 1.0));
+            (self.cursor, self.script_cursor) = (Some(p), Some(p));
+            self.pad_aim = false;
+        }
         if held.is_none() && stick_nav && lx.abs().max(ly.abs()) > 0.6 {
             held = Some(if ly.abs() > lx.abs() { if ly > 0.0 { egui::Key::ArrowUp } else { egui::Key::ArrowDown } } else if lx > 0.0 { egui::Key::ArrowRight } else { egui::Key::ArrowLeft });
         }
@@ -3699,8 +3732,8 @@ impl Game {
         }
         // The right stick scrolls the menus and the flight panel: squared,
         // for slow reading near the centre, fast at full tilt.
-        padui::set_scroll(if nav == Nav::Off { 0.0 } else { (ry * ry.abs() * 1600.0 * dt) as f32 });
-        if globe {
+        padui::set_scroll(if nav == Nav::Off || self.vcursor { 0.0 } else { (ry * ry.abs() * 1600.0 * dt) as f32 });
+        if globe && !self.vcursor {
             // Left stick turns the globe (squared, for a fine touch), the triggers zoom.
             let h = self.window.inner_size().height.max(1) as f64;
             let sq = |v: f64| v * v.abs();
@@ -3720,7 +3753,7 @@ impl Game {
         c.throttle = (c.throttle + self.pad.throttle).clamp(-1.0, 1.0);
 
         // (With the flight panel open the right stick scrolls it instead.)
-        if flying && nav != Nav::Panel && self.cam_mode != settings::TAIL_VIEW {
+        if flying && nav != Nav::Panel && self.cam_mode != settings::TAIL_VIEW && !self.vcursor {
             // Right stick: look around, as fast as a quick head turn at full deflection.
             // Pushed right the view swings right, in the cockpit and outside.
             let (sx, sy) = self.look_signs();
@@ -3730,14 +3763,26 @@ impl Game {
             self.cam_pitch = (self.cam_pitch - look_y * rate * 0.8 * sy).clamp(-1.2, 1.4);
         }
         // Looking or flying with the pad: the middle of the view aims at the cockpit's controls.
-        if look_x != 0.0 || look_y != 0.0 || self.pad.pitch != 0.0 || self.pad.roll != 0.0 || !pressed.is_empty() {
+        if !self.vcursor && (look_x != 0.0 || look_y != 0.0 || self.pad.pitch != 0.0 || self.pad.roll != 0.0 || !pressed.is_empty()) {
             self.pad_aim = true;
         }
 
         // Y held before this frame, or pressed in it: what the buttons pressed now mean.
         let y_now = self.pad_y || pressed.contains(&Button::North);
         for &b in &pressed {
+            // with the cursor on, A clicks where it points and the bumpers turn a cockpit knob under it.
+            if self.vcursor && !modifier && b == Button::South {
+                self.vcursor_press(true);
+                continue;
+            }
+            if self.vcursor && !modifier && nav == Nav::Off && matches!(b, Button::LeftTrigger | Button::RightTrigger) && self.hotspot_under_mouse().is_some() {
+                self.hot_wheel(if b == Button::RightTrigger { 1.0 } else { -1.0 });
+                continue;
+            }
             self.pad_button(nav, b, modifier);
+        }
+        if released.contains(&Button::South) {
+            self.vcursor_press(false);
         }
         self.pad_fly_buttons(nav, &down, &pressed, y_now);
         // Y on its own, let go without having been used with another button.
@@ -3774,8 +3819,10 @@ impl Game {
         let mut taps: Vec<&'static str> = Vec::new();
         if matches!(nav, Nav::Off | Nav::Panel) && self.mode == Mode::Fly && !self.pause_open {
             let map = &self.binds.pad;
-            // The flight panel keeps A, B, the d-pad and the bumpers while it is open.
-            let panel = |c: Chord| nav == Nav::Panel && !c.y && matches!(c.btn, PadBtn::A | PadBtn::B | PadBtn::LB | PadBtn::RB | PadBtn::Up | PadBtn::Down | PadBtn::Left | PadBtn::Right);
+            let cursor = self.vcursor;
+            // The flight panel keeps A, B, the d-pad and the bumpers while it is open,
+            // and the virtual cursor keeps A and the bumpers.
+            let panel = |c: Chord| (nav == Nav::Panel && !c.y && matches!(c.btn, PadBtn::A | PadBtn::B | PadBtn::LB | PadBtn::RB | PadBtn::Up | PadBtn::Down | PadBtn::Left | PadBtn::Right)) || (cursor && !c.y && matches!(c.btn, PadBtn::A | PadBtn::LB | PadBtn::RB));
             // While Y is held a button with a Y binding does that, not its own.
             let live = |c: Chord, held: bool| held && c != padmap::Y_ALONE && !panel(c) && if c.y { y } else { !(y && map.has_y(c.btn)) };
             for (id, c) in map.bound() {
@@ -3845,6 +3892,10 @@ impl Game {
             }
             Does::Key(KeyCode::Tab) => {
                 self.flight_menu_key();
+                None
+            }
+            Does::Cursor => {
+                self.toggle_vcursor();
                 None
             }
             Does::Key(k) => {
@@ -4827,7 +4878,9 @@ impl Game {
     /// A gamepad button pressed, for whatever it works at the moment.
     fn pad_button(&mut self, nav: Nav, b: gilrs::Button, modifier: bool) {
         use gilrs::Button;
+        let cursor_btn = self.binds.pad.chord("virtual_cursor").is_some_and(|c| !c.y && c.btn.gilrs() == b);
         match (nav, b) {
+            (Nav::Globe | Nav::Pause, _) if cursor_btn && !modifier => self.toggle_vcursor(),
             // The start menu. Everywhere A presses what is picked out and B
             // steps back towards the main menu. On the globe Menu takes off
             // and X starts at the crosshair; on the settings and aircraft
@@ -4885,9 +4938,142 @@ impl Game {
         }
     }
 
+    /// the pad's virtual cursor on or off; it starts where the mouse was, else in the middle.
+    fn toggle_vcursor(&mut self) {
+        self.vcursor_press(false);
+        self.vcursor = !self.vcursor;
+        if self.vcursor {
+            let s = self.window.inner_size();
+            let p = self.cursor.unwrap_or((s.width as f64 * 0.5, s.height as f64 * 0.5));
+            (self.cursor, self.script_cursor) = (Some(p), Some(p));
+            self.pad_aim = false;
+        } else {
+            self.script_cursor = None;
+        }
+    }
+
+    /// A with the virtual cursor, down or up: a click where it points, on
+    /// the ui, a cockpit control (held while A is) or the globe.
+    fn vcursor_press(&mut self, down: bool) {
+        let Some((x, y)) = self.cursor else { return };
+        let ppp = self.egui_ctx.pixels_per_point() as f64;
+        let pos = egui::pos2((x / ppp) as f32, (y / ppp) as f32);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        if down {
+            if !self.vcursor {
+                return;
+            }
+            // the world only takes it where nothing of the ui is: a cockpit control, or the globe.
+            let over = self.egui_ctx.is_pointer_over_egui();
+            let ui = over || if self.mode == Mode::Fly { self.hotspot_under_mouse().is_none() } else { self.menu.screen != menu::Screen::Fly };
+            if ui {
+                self.pad_events.push(button(true));
+            } else if self.mode == Mode::Fly && self.hotspot_under_mouse().is_some() {
+                self.hot_click(true);
+            } else if self.mode == Mode::Menu && self.menu.screen == menu::Screen::Fly {
+                self.menu.press = Some((x, y));
+                self.menu.dragged = 0.0;
+            }
+            self.vcursor_hold = Some(ui);
+        } else {
+            match self.vcursor_hold.take() {
+                Some(true) => self.pad_events.push(button(false)),
+                Some(false) if self.hot_press.is_some() => self.hot_click(false),
+                Some(false) if self.mode == Mode::Menu => self.globe_release(),
+                _ => {}
+            }
+        }
+    }
+
+    /// the left button let go on the globe: a click (not a drag) chooses the
+    /// spot, a second click on it starts; shift or add mode adds a waypoint,
+    /// and with the planner open an airport fills the departure, then the arrival.
+    fn globe_release(&mut self) {
+        let Some((x, y)) = self.menu.press.take() else { return };
+        if self.menu.dragged >= 6.0 {
+            return;
+        }
+        let size = self.window.inner_size();
+        let (w, h) = (size.width.max(1) as f64, size.height.max(1) as f64);
+        let shift = self.egui_ctx.input(|i| i.modifiers.shift);
+        if shift || (self.planner.open && self.planner.pick_on_globe) {
+            self.plan_add_at(x, y, w, h, 14.0);
+        } else if self.planner.open {
+            if let Some(i) = self.menu.marker_at(x, y) {
+                self.planner_click_airport(i);
+            }
+        } else if let Some(i) = self.menu.marker_at(x, y) {
+            let double = self.real - self.last_click < 0.45;
+            self.last_click = self.real;
+            if double && self.menu.airport == Some(i) {
+                self.begin();
+            } else {
+                self.choose_airport(i);
+            }
+        } else if let Some((lat, lon)) = self.menu.pick_at(x, y, w, h, 60f64.to_radians()) {
+            let double = self.real - self.last_click < 0.45;
+            self.last_click = self.real;
+            if double && self.menu.pick.is_some() {
+                self.begin();
+            } else {
+                self.pick(lat, lon);
+            }
+        }
+    }
+
+    /// discord's status, every few seconds: the kind of flight, the aircraft
+    /// and the nearest airport, since that flight began (discord.rs). scripted
+    /// runs leave it alone.
+    fn discord_tick(&mut self) {
+        if self.real - self.discord_t < 3.0 {
+            return;
+        }
+        self.discord_t = self.real;
+        let scripted = std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench");
+        if !self.discord_on || scripted {
+            if let Some(p) = self.discord.as_mut() {
+                p.set(None);
+            }
+            return;
+        }
+        if self.discord.is_none() {
+            self.discord = discord::Presence::start();
+        }
+        let (details, state) = if self.mode == Mode::Menu {
+            ("In the menus".to_string(), String::new())
+        } else {
+            let what = if let Some(r) = &self.mission {
+                let kind = match r.m.cat {
+                    missions::Cat::Tutorial => "Tutorial",
+                    missions::Cat::Lesson => "Lesson",
+                    missions::Cat::Exam => "Checkride",
+                    missions::Cat::Mission => "Mission",
+                };
+                format!("{kind}: {}", r.m.title)
+            } else if self.career_flight.is_some() {
+                "Career flight".to_string()
+            } else if self.challenge.is_some() {
+                "Landing challenge".to_string()
+            } else {
+                "Free flight".to_string()
+            };
+            let (lat, lon, _) = geo::pos_to_lla(self.plane.pos);
+            let db = airports::Db::get();
+            let near = db.near(lat.to_degrees(), lon.to_degrees(), 40_000.0).into_iter().min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| db.apts[i as usize].ident.clone());
+            (what, near.map_or(self.spec.name.to_string(), |a| format!("{}  ·  near {a}", self.spec.name)))
+        };
+        if self.discord_what.0 != details {
+            self.discord_what = (details.clone(), discord::now());
+        }
+        let since = self.discord_what.1;
+        if let Some(p) = self.discord.as_mut() {
+            p.set(Some(discord::Status { details, state, since }));
+        }
+    }
+
     /// what the gamepad's buttons work at the moment, besides flying.
     fn nav(&self) -> Nav {
-        nav_of(self.mode, self.pause_open, self.info_open || self.radial.open)
+        nav_of(self.mode, self.pause_open, self.info_open || self.radial.open || self.mission_over())
     }
 
     /// the scripted pad (`FABLE_PAD`): its buttons as they come due, as a real pad's presses.
@@ -4904,7 +5090,37 @@ impl Game {
                 "Down" => self.pad_key(egui::Key::ArrowDown),
                 "Left" => self.pad_key(egui::Key::ArrowLeft),
                 "Right" => self.pad_key(egui::Key::ArrowRight),
+                // (let go a moment later, as a thumb does: egui wants press and release in different passes.)
+                "A" if self.vcursor => {
+                    self.vcursor_press(true);
+                    let up = self.real + 0.1;
+                    if let Some(sc) = self.pad_script.as_mut() {
+                        sc.insert(0, (up, "A-up".into()));
+                    }
+                }
+                "A-up" => self.vcursor_press(false),
+                // the lesson flown ends there, passed or not, for shots of its result.
+                "End:pass" | "End:fail" => {
+                    if let Some(r) = self.mission.as_mut() {
+                        if b == "End:pass" {
+                            r.done = true;
+                        } else {
+                            r.failed = Some(tr_en("The aircraft crashed.").into());
+                        }
+                    }
+                }
                 "A" => self.pad_button(nav, Button::South, false),
+                "R3" if nav == Nav::Off || nav == Nav::Panel => {
+                    self.pad_do("virtual_cursor", false);
+                }
+                "R3" => self.pad_button(nav, Button::RightThumb, false),
+                // where the stick has taken the cursor, in window pixels.
+                to if to.starts_with("To:") => {
+                    let p: Vec<f64> = to[3..].split(',').filter_map(|v| v.parse().ok()).collect();
+                    if let [x, y] = p[..] {
+                        (self.cursor, self.script_cursor) = (Some((x, y)), Some((x, y)));
+                    }
+                }
                 "B" => self.pad_button(nav, Button::East, false),
                 "X" => self.pad_button(nav, Button::West, false),
                 "LB" => self.pad_button(nav, Button::LeftTrigger, false),
@@ -5404,10 +5620,12 @@ impl Game {
             self.leave_challenge();
         }
         if list {
+            // the challenges are among the activities, on the menu, not in the flight.
             self.leave_challenge();
-            self.set_pause_menu(true);
-            self.pause_page = menu::Page::Missions;
+            self.to_globe();
+            self.menu.screen = menu::Screen::Activities;
             self.activity_tab = 1;
+            self.pad_home = true;
         }
     }
 
@@ -5493,6 +5711,10 @@ impl Game {
     /// out no first choice of its own gets the first widget on it.
     fn pad_pass(&mut self, ctx: &egui::Context) {
         padui::begin_pass();
+        if let (true, Some((x, y))) = (self.vcursor, self.cursor) {
+            let ppp = ctx.pixels_per_point() as f64;
+            padui::cursor(ctx, egui::pos2((x / ppp) as f32, (y / ppp) as f32));
+        }
         let go = |d| {
             if let Some(id) = padui::step(ctx, d) {
                 ctx.memory_mut(|m| m.request_focus(id));
@@ -6250,7 +6472,7 @@ impl Game {
 
     /// The settings worth keeping, as they are now.
     fn live_settings(&self) -> settings::Settings {
-        settings::Settings { lang: self.prefs_lang, sound_on: self.sound_on, volume: self.volume, cam_mode: self.cam_mode, cockpit_fov: self.cockpit_fov, look_sens: self.look_sens, invert_look_cockpit: self.invert_look_cockpit, invert_look_outside_x: self.invert_look_outside_x, invert_look_outside_y: self.invert_look_outside_y, show_hud: self.show_hud, hud_cockpit: self.hud_cockpit, path_marker: self.path_marker, minimap: self.minimap.visible, landing_guidance: self.minimap.landing_guidance, arcade: self.arcade, minimap_plan: self.minimap.plan, minimap_heading_up: self.minimap.heading_up, minimap_zoom: self.minimap.zoom, minimap_size: self.minimap.size.x, minimap_height: self.minimap.size.y, map_airports: self.minimap.layers.airports, map_navaids: self.minimap.layers.navaids, taa: self.gfx.taa, fullscreen: self.fullscreen, live_traffic: self.live.enabled(), live_weather: self.challenge.as_ref().map_or(self.wx.live, |a| a.kept.0), real_time: self.challenge.as_ref().map_or(self.wx.real_time, |a| a.kept.1), snow: self.snow, last: self.last_start.clone(), multiplayer: self.mp_on || self.mp_held, mp_server: self.mp_server.clone(), mp_name: self.mp_name.clone(), topple_buildings: self.topple_buildings, atc_voices: self.atc_voices, simbrief: self.prefs_simbrief.clone() }
+        settings::Settings { lang: self.prefs_lang, sound_on: self.sound_on, volume: self.volume, cam_mode: self.cam_mode, cockpit_fov: self.cockpit_fov, look_sens: self.look_sens, invert_look_cockpit: self.invert_look_cockpit, invert_look_outside_x: self.invert_look_outside_x, invert_look_outside_y: self.invert_look_outside_y, show_hud: self.show_hud, hud_cockpit: self.hud_cockpit, path_marker: self.path_marker, minimap: self.minimap.visible, landing_guidance: self.minimap.landing_guidance, arcade: self.arcade, minimap_plan: self.minimap.plan, minimap_heading_up: self.minimap.heading_up, minimap_zoom: self.minimap.zoom, minimap_size: self.minimap.size.x, minimap_height: self.minimap.size.y, map_airports: self.minimap.layers.airports, map_navaids: self.minimap.layers.navaids, taa: self.gfx.taa, fullscreen: self.fullscreen, live_traffic: self.live.enabled(), live_weather: self.challenge.as_ref().map_or(self.wx.live, |a| a.kept.0), real_time: self.challenge.as_ref().map_or(self.wx.real_time, |a| a.kept.1), snow: self.snow, last: self.last_start.clone(), multiplayer: self.mp_on || self.mp_held, mp_server: self.mp_server.clone(), mp_name: self.mp_name.clone(), topple_buildings: self.topple_buildings, atc_voices: self.atc_voices, discord: self.discord_on, simbrief: self.prefs_simbrief.clone() }
     }
 
     /// Saves the settings when they have changed (looked at once a second,
@@ -8722,11 +8944,7 @@ impl Game {
                 self.pad_home_focus(&resume);
             }
             ui.add_space(8.0);
-            if self.pause_page == Page::Challenges {
-                self.pause_page = Page::Missions;
-                self.activity_tab = 1;
-            }
-            for (p, text) in [(Page::Settings, t!("game.settings")), (Page::Missions, tr_en("Activities")), (Page::Logbook, t!("log.logbook")), (Page::Flights, tr_en("Flights and replay")), (Page::Controls, t!("game.controls_reference")), (Page::Failures, t!("game.failures_2"))] {
+            for (p, text) in [(Page::Settings, t!("game.settings")), (Page::Logbook, t!("log.logbook")), (Page::Flights, tr_en("Flights and replay")), (Page::Controls, t!("game.controls_reference")), (Page::Failures, t!("game.failures_2"))] {
                 let b = menu::big_button(ui, text, Hint::None, false, page == p);
                 if b.clicked() {
                     self.pause_page = if page == p && p != Page::Settings { Page::Game } else { p };
@@ -8766,7 +8984,7 @@ impl Game {
         });
 
         // The key list or the failures, beside the buttons.
-        if matches!(self.pause_page, Page::Controls | Page::Failures | Page::Flights | Page::Missions | Page::Logbook | Page::Challenges) {
+        if matches!(self.pause_page, Page::Controls | Page::Failures | Page::Flights | Page::Logbook) {
             let x = margin + col_w + 48.0;
             let w = (screen.width() - x - margin).clamp(300.0, 820.0);
             let h = screen.height() - 2.0 * margin.max(64.0);
@@ -8774,17 +8992,12 @@ impl Game {
                 menu::panel().inner_margin(24.0).show(ui, |ui| {
                     ui.set_width(w - 48.0);
                     ui.set_max_height(h - 48.0);
-                    let title = match self.pause_page { Page::Controls => t!("game.controls_reference"), Page::Flights => tr_en("Flights and replay"), Page::Missions => tr_en("Activities"), Page::Logbook => t!("log.logbook"), _ => t!("game.failures_2") };
+                    let title = match self.pause_page { Page::Controls => t!("game.controls_reference"), Page::Flights => tr_en("Flights and replay"), Page::Logbook => t!("log.logbook"), _ => t!("game.failures_2") };
                     ui.label(RichText::new(title).font(menu::page_title()).color(Color32::WHITE));
                     ui.add_space(10.0);
                     egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
                         if self.pause_page == Page::Flights {
                             if self.flights_page(ui) {
-                                *act = Some(PauseAct::Resume);
-                            }
-                        } else if self.pause_page == Page::Missions {
-                            if let Some(p) = self.activities_page(ui) {
-                                self.fly_pick(p);
                                 *act = Some(PauseAct::Resume);
                             }
                         } else if self.pause_page == Page::Controls {
@@ -9058,68 +9271,6 @@ impl Game {
         });
     }
 
-    /// What the airport panel says: the airfield, the runway in use and the
-    /// wind, and on the way in a guide down the approach (distance, which side
-    /// of the centreline, above or below the 3° glide path); on the ground,
-    /// where on the airfield the aircraft is. (text, colour: 0 plain, 1 good, 2 caution, 3 warning)
-    fn airport_hud(&self) -> Option<Vec<(String, u8)>> {
-        if self.crashed {
-            return None;
-        }
-        let f = self.world.airfield_near(self.plane.pos, 18_000.0)?;
-        let g = &f.geo;
-        let a = g.apt();
-        let mut out = vec![(format!("{}  {}", a.code(), a.name), 0u8)];
-        let wind_kt = self.wx.wind * 1.94384;
-        let wind = if wind_kt < 1.0 { t!("game.calm").to_string() } else { format!("{:03.0}°/{:.0} kt", self.wx.wind_from, wind_kt) };
-        // the runway in use and the wind, nothing more.
-        let active = f.traffic.active.map(|(ri, e)| t!("game.runway_in_use", g.runways[ri].ident[e]));
-        out.push((active.map_or(wind.clone(), |a| format!("{a}  ·  {wind}")), 0));
-        let p = g.local(self.plane.pos);
-        let alt = geo::pos_to_lla(self.plane.pos).2 as f32;
-        let fw = self.plane.forward();
-        let hd = glam::Vec2::new(fw.dot(g.e) as f32, fw.dot(g.n) as f32).normalize_or_zero();
-        if self.plane.on_ground || alt - g.h(p) < 3.0 {
-            if let Some(ri) = g.on_runway(p, 0.0) {
-                let r = &g.runways[ri];
-                let e = if hd.dot(r.dir) >= 0.0 { 0 } else { 1 };
-                let (s, _) = r.local(p);
-                let left = if e == 0 { r.len - s } else { s };
-                out.push((t!("game.on_runway_m_of_runway", r.ident[e], left), 1));
-            } else if let Some(h) = g.holds.iter().find(|h| (h.p - p).length() < 25.0) {
-                let r = &g.runways[h.rwy as usize];
-                out.push((t!("game.holding_point_runway", r.name()), 2));
-            }
-            return Some(out);
-        }
-        // The runway end ahead that we are lined up with best.
-        let mut best: Option<(f32, usize, usize)> = None;
-        for (ri, r) in g.runways.iter().enumerate() {
-            for e in 0..2 {
-                let (thr, dir) = r.end(e);
-                let along = (thr - p).dot(dir);
-                let x = (p - thr).dot(airports::right_of(dir));
-                if along > -200.0 && along < 20_000.0 && hd.dot(dir) > 0.75 && x.abs() < along.max(0.0) * 0.25 + 300.0 && best.map(|b| along < b.0).unwrap_or(true) {
-                    best = Some((along, ri, e));
-                }
-            }
-        }
-        if let Some((along, ri, e)) = best {
-            let r = &g.runways[ri];
-            let (thr, dir) = r.end(e);
-            let x = (p - thr).dot(airports::right_of(dir));
-            let h = alt - g.h(thr);
-            let aim = (along + traffic::aim_dist(r.len)).max(1.0);
-            let gs = h.atan2(aim).to_degrees();
-            let dev = gs - 3.0;
-            let side = if x.abs() < 0.01 * along.max(300.0) + 5.0 { t!("game.on_the_centreline").to_string() } else { t!("game.m_of_the_centreline", x.abs(), if x > 0.0 { t!("game.right") } else { t!("game.left") }) };
-            let glide = if dev.abs() < 0.3 { t!("game.on_glide_path").to_string() } else if dev > 0.0 { t!("game.high", dev) } else { t!("game.low", -dev) };
-            let col = if dev < -0.7 || x.abs() > 0.06 * along + 30.0 { 3 } else if dev.abs() > 0.3 { 2 } else { 1 };
-            out.push((t!("game.runway_nm_ft_above_it", r.ident[e], along.max(0.0) / 1852.0, side, glide, h * 3.28084), col));
-        }
-        Some(out)
-    }
-
     fn ui(&mut self, agl: f64) -> (Vec<egui::ClippedPrimitive>, egui::TexturesDelta, f32) {
         let raw = self.egui_input();
         let (lat, lon, alt) = geo::pos_to_lla(self.plane.pos);
@@ -9136,7 +9287,6 @@ impl Game {
         let mut close_goto = false;
         let mut act = None;
         let mut bar: Option<flightui::Bar> = None;
-        let airport_hud = self.airport_hud();
         let landing_guide = if self.minimap.landing_guidance && !self.crashed {
             self.world.airfield_near(self.plane.pos, 18_000.0).and_then(|field| {
                 let g = &field.geo;
@@ -9188,7 +9338,7 @@ impl Game {
                 self.systems_card(ctx, vs, base_up);
                 // the card and a challenge's result take the top centre while they are up.
                 if !self.info_open && !self.challenge.as_ref().is_some_and(|a| a.result.is_some()) {
-                    self.notices(ctx, airport_hud.as_deref());
+                    self.notices(ctx);
                 }
             }
             self.hotspot_overlay(ctx);
@@ -9400,8 +9550,7 @@ impl Game {
             let report = if self.crashed { Vec::new() } else { p.dmg.report() };
             // warnings, damage and the approach line.
             if self.show_hud {
-                let guide = if self.hud_on() { airport_hud.as_ref().and_then(|l| l.get(2)) } else { None };
-                self.alerts(ctx, &warn, &report, guide);
+                self.alerts(ctx, &warn, &report);
             }
             if !self.flash.is_empty() && !self.crashed {
                 // Each new loss: a small red plate down the left edge (under the systems card,
@@ -9524,8 +9673,8 @@ impl Game {
         if self.mouse_captured { self.window.set_cursor_visible(false); }
         // A button or slider left focused on the flight panel would keep the
         // keys from the aircraft, which goes on flying while the panel is open.
-        // (Except where the gamepad works the panel.)
-        if !self.pause_open && !(self.info_open && padui::active()) && !self.egui_ctx.text_edit_focused() {
+        // (Except where the gamepad works the panel, or a lesson's result.)
+        if !self.pause_open && !((self.info_open || self.mission_over()) && padui::active()) && !self.egui_ctx.text_edit_focused() {
             self.egui_ctx.memory_mut(|m| {
                 if let Some(id) = m.focused() {
                     m.surrender_focus(id);
@@ -9755,43 +9904,13 @@ impl ApplicationHandler for App {
                     g.menu.press = None;
                     return;
                 }
-                let size = g.window.inner_size();
-                let (w, h) = (size.width.max(1) as f64, size.height.max(1) as f64);
                 if state == ElementState::Pressed {
                     if !consumed {
                         g.menu.press = g.last_cursor;
                         g.menu.dragged = 0.0;
                     }
-                } else if let Some((x, y)) = g.menu.press.take() {
-                    // A click (not a drag) chooses the spot; a second click on it starts.
-                    // shift or add mode adds a waypoint.
-                    let shift = g.egui_ctx.input(|i| i.modifiers.shift);
-                    if g.menu.dragged < 6.0 && (shift || (g.planner.open && g.planner.pick_on_globe)) {
-                        g.plan_add_at(x, y, w, h, 14.0);
-                    } else if g.menu.dragged < 6.0 && g.planner.open {
-                        // the planner: an airport clicked fills the departure, then the arrival.
-                        if let Some(i) = g.menu.marker_at(x, y) {
-                            g.planner_click_airport(i);
-                        }
-                    } else if g.menu.dragged < 6.0 {
-                        if let Some(i) = g.menu.marker_at(x, y) {
-                            let double = g.real - g.last_click < 0.45;
-                            g.last_click = g.real;
-                            if double && g.menu.airport == Some(i) {
-                                g.begin();
-                            } else {
-                                g.choose_airport(i);
-                            }
-                        } else if let Some((lat, lon)) = g.menu.pick_at(x, y, w, h, 60f64.to_radians()) {
-                            let double = g.real - g.last_click < 0.45;
-                            g.last_click = g.real;
-                            if double && g.menu.pick.is_some() {
-                                g.begin();
-                            } else {
-                                g.pick(lat, lon);
-                            }
-                        }
-                    }
+                } else {
+                    g.globe_release();
                 }
             }
             WindowEvent::MouseInput { state, button: MouseButton::Middle, .. }
@@ -9873,6 +9992,7 @@ impl ApplicationHandler for App {
         let Some(g) = &mut self.game else { return };
         // Answer tool calls even when redraws are delayed; screenshots wait for a frame.
         g.pump_mcp();
+        g.discord_tick();
         let flow = self.frame_pacer.control_flow(Instant::now(), g.gfx.fps_cap);
         event_loop.set_control_flow(flow);
         if flow != ControlFlow::Poll {
@@ -9907,7 +10027,7 @@ impl App {
     }
 }
 
-/// `FABLE_PAD="Down@2;A@2.5"`: gamepad buttons (Up Down Left Right A B X LB RB Menu) at seconds.
+/// `FABLE_PAD="Down@2;A@2.5"`: gamepad buttons (Up Down Left Right A B X LB RB Menu R3, To:x,y for the cursor, End:pass or End:fail for a lesson) at seconds.
 fn pad_script_from_env() -> Option<Vec<(f64, String)>> {
     let s = std::env::var("FABLE_PAD").ok()?;
     let mut v: Vec<(f64, String)> = s.split(';').filter_map(|c| c.trim().split_once('@').and_then(|(b, t)| Some((t.parse().ok()?, b.to_string())))).collect();

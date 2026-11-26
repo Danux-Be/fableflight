@@ -10,8 +10,11 @@ use egui::{Color32, RichText};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Cat {
+    /// free practice, among the activities.
     Tutorial,
-    /// a checkride for a licence (career.rs): passed at `pass_mark`.
+    /// a lesson for a licence (career.rs), flown from the career only.
+    Lesson,
+    /// a checkride for a licence (career.rs): passed at `pass_mark`, flown from the career only.
     Exam,
     Mission,
 }
@@ -150,6 +153,75 @@ pub static ALL: &[Mission] = &[
         sk("At 200 feet disconnect the autopilot and land by hand.", &["ap"], Goal::Autopilot(false)),
         st("Touch down.", Goal::Landed),
         st("Stop on the runway.", Goal::Stopped),
+    ] },
+    // the career's own lessons (career.rs): flown from its training page only, never among the activities.
+    Mission { id: "c_ppl1", cat: Cat::Lesson, title: "PPL 1. Straight, level and turns", brief: "Over the bay with your instructor: hold the aircraft level, turn onto headings and climb.", aircraft: "c172", airport: "KPAO", runway: None, start: Start::Air { nm: 8.0, bearing: 110.0, ft: 3000.0, kt: 100.0 }, hour: 10.0, weather: Some("fair"), cold: false, steps: &[
+        st("You have the controls. Hold the nose on the horizon: straight and level.", Goal::Level(200.0, 10.0)),
+        sk("A medium turn left onto a heading of 270, then roll out.", &["roll_left"], Goal::Heading(270.0, 10.0)),
+        sk("Now a turn right, all the way round to a heading of 090.", &["roll_right"], Goal::Heading(90.0, 10.0)),
+        sk("Climb with power to 3,500 feet.", &["throttle_up", "pitch_up"], Goal::AltAbove(3500.0)),
+        st("Level off and hold it there.", Goal::Level(200.0, 8.0)),
+        st("Good. Everything else is built on this.", Goal::Read(5.0)),
+    ] },
+    Mission { id: "c_ppl2", cat: Cat::Lesson, title: "PPL 2. Circuits", brief: "Livermore: take off, fly the circuit and land back on the same runway.", aircraft: "c172", airport: "KLVK", runway: Some("25R"), start: Start::Runway, hour: 11.0, weather: Some("fair"), cold: false, steps: &[
+        sk("Release the brake and take off.", &["parking_brake", "throttle_up"], Goal::Airborne),
+        st("Climb straight ahead to 1,000 feet above the field.", Goal::AglAbove(1000.0)),
+        sk("Turn left onto the downwind leg, heading 070, and level off.", &["roll_left"], Goal::Heading(70.0, 15.0)),
+        st("Fly base and final, and land back on runway 25R.", Goal::LandAt("KLVK")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_ppl3", cat: Cat::Lesson, title: "PPL 3. Navigation", brief: "Hayward to Livermore over the hills, finding the way by the ground below.", aircraft: "c172", airport: "KHWD", runway: Some("28L"), start: Start::Runway, hour: 13.0, weather: Some("fair"), cold: false, steps: &[
+        sk("Release the brake and take off from Hayward.", &["parking_brake", "throttle_up"], Goal::Airborne),
+        st("Climb to 3,500 feet and head east, over the hills toward Livermore.", Goal::AltAbove(3500.0)),
+        st("Find Livermore and land there.", Goal::LandAt("KLVK")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_ir1", cat: Cat::Lesson, title: "IR 1. Tracking a radial", brief: "In cloud east of Oakland: tune a VOR and track to it on the instruments alone.", aircraft: "c172", airport: "KOAK", runway: None, start: Start::Air { nm: 15.0, bearing: 90.0, ft: 4000.0, kt: 100.0 }, hour: 14.0, weather: Some("overcast"), cold: false, steps: &[
+        sk("In cloud. Open the radio page and tune NAV 1 to the nearest VOR.", &["flight_panel"], Goal::NavTuned),
+        sk("Set the course until the needle centres with a TO flag.", &["obs_left", "obs_right"], Goal::CdiCentred),
+        st("Keep the needle centred on the instruments alone until the flag turns to FROM.", Goal::NavFrom),
+        st("Station passed, without seeing the ground once.", Goal::Read(5.0)),
+    ] },
+    Mission { id: "c_ir2", cat: Cat::Lesson, title: "IR 2. ILS by hand", brief: "The ILS to Oakland 30 in cloud, flown by hand on the needles.", aircraft: "c172", airport: "KOAK", runway: Some("30"), start: Start::Air { nm: 9.0, bearing: 114.0, ft: 2500.0, kt: 95.0 }, hour: 16.0, weather: Some("overcast"), cold: false, steps: &[
+        st("NAV 1 is on the ILS. Intercept the localizer, then follow both needles by hand.", Goal::Read(8.0)),
+        st("Hold the localizer and the glide slope down to 1,000 feet.", Goal::AglBelow(1000.0)),
+        st("Keep it on the needles to 300 feet.", Goal::AglBelow(300.0)),
+        st("Runway in sight: land on 30.", Goal::LandAt("KOAK")),
+    ] },
+    Mission { id: "c_night", cat: Cat::Lesson, title: "Night circuit", brief: "Half Moon Bay after dark: a circuit over the black sea by the runway lights.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 21.5, weather: Some("clear"), cold: false, steps: &[
+        sk("Release the brake and take off into the dark.", &["parking_brake", "throttle_up"], Goal::Airborne),
+        st("Climb to 1,000 feet over the sea, holding the attitude on the instruments.", Goal::AglAbove(1000.0)),
+        st("Fly the circuit by the runway lights and land back on 30.", Goal::LandAt("KHAF")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_atpl", cat: Cat::Lesson, title: "ATPL. Heavy rain approach", brief: "A long final into San Francisco 28L through heavy rain, by hand.", aircraft: "g650", airport: "KSFO", runway: Some("28L"), start: Start::Final, hour: 15.0, weather: Some("storm"), cold: false, steps: &[
+        st("Heavy rain on a long final for 28L. Fly it by hand and keep it stable.", Goal::Read(6.0)),
+        st("Stable at 500 feet: on speed, on the glide path.", Goal::AglBelow(500.0)),
+        st("Land on 28L.", Goal::LandAt("KSFO")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_bizjet", cat: Cat::Lesson, title: "Gulfstream type rating", brief: "The G650's autopilot flies the ILS into Oakland 30; you land it.", aircraft: "g650", airport: "KOAK", runway: Some("30"), start: Start::Air { nm: 14.0, bearing: 114.0, ft: 3000.0, kt: 170.0 }, hour: 10.0, weather: Some("fair"), cold: false, steps: &[
+        sk("Engage the autopilot.", &["ap"], Goal::Autopilot(true)),
+        sk("Arm the approach mode (APR) for the ILS.", &["ap_apr"], Goal::ApproachArmed),
+        sk("Slow down and lower the gear.", &["throttle_down", "gear"], Goal::GearDown),
+        sk("Flaps down two notches as it slows.", &["flaps_down"], Goal::FlapsAtLeast(2)),
+        st("Wait for the glide slope: the autopilot captures it and starts down.", Goal::GlideslopeCaptured),
+        sk("At 200 feet disconnect the autopilot and land by hand.", &["ap"], Goal::Autopilot(false)),
+        st("Touch down.", Goal::Landed),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_747", cat: Cat::Lesson, title: "747 type rating", brief: "A 747 on a long final into San Francisco 28R: your first landing in the jumbo.", aircraft: "747", airport: "KSFO", runway: Some("28R"), start: Start::Final, hour: 12.0, weather: Some("fair"), cold: false, steps: &[
+        st("Gear down and flaps set. Fly the approach by hand.", Goal::Read(6.0)),
+        st("Stable at 500 feet: on speed, on the glide path.", Goal::AglBelow(500.0)),
+        st("Land on 28R.", Goal::LandAt("KSFO")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
+    ] },
+    Mission { id: "c_aero", cat: Cat::Lesson, title: "Precision landing", brief: "In the Robin at Half Moon Bay: power off over the threshold, down in the touchdown zone.", aircraft: "dr400", airport: "KHAF", runway: Some("30"), start: Start::Final, hour: 9.0, weather: Some("fair"), cold: false, steps: &[
+        st("On final in the Robin. Aim for the touchdown zone.", Goal::Read(6.0)),
+        st("Down to 200 feet on the glide path.", Goal::AglBelow(200.0)),
+        sk("Over the threshold close the throttle.", &["throttle_down"], Goal::ThrottleBelow(0.1)),
+        st("Land in the touchdown zone.", Goal::LandAt("KHAF")),
+        sk("Stop on the runway.", &["brakes"], Goal::Stopped),
     ] },
     Mission { id: "e_ppl", cat: Cat::Exam, title: "Private pilot checkride", brief: "The examiner is aboard: a circuit at Half Moon Bay, flown by hand, and a landing in the touchdown zone.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 14.0, weather: Some("fair"), cold: false, steps: &[
         st("The examiner is watching. Release the brake and take off from runway 30.", Goal::Airborne),
@@ -505,13 +577,17 @@ impl Game {
         self.mission = Some(run);
     }
 
-    /// the mission card: what it is, the steps done and the one to do, and the result at the end.
+    /// the mission card while it runs: what it is, and the step to do now.
+    /// when it is over the result screen takes its place.
     pub(crate) fn mission_card(&mut self, ctx: &egui::Context) {
         let Some(run) = self.mission.as_ref() else { return };
+        if run.done || run.failed.is_some() {
+            self.mission_result(ctx);
+            return;
+        }
         let mut close = false;
-        let mut again = false;
         let m = run.m;
-        let (step, n, done, failed, rating) = (run.step, m.steps.len(), run.done, run.failed.clone(), run.rating);
+        let (step, n) = (run.step, m.steps.len());
         let top = if self.hud_on() { flightui::right_top(ctx) } else { 24.0 };
         egui::Area::new(egui::Id::unique("mission_card")).anchor(egui::Align2::RIGHT_TOP, [-14.0, top]).show(ctx, |ui| {
             flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(16, 12)), |ui| {
@@ -520,29 +596,71 @@ impl Game {
                 // the title, and the step it is on beside it.
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tr_en(m.title)).font(menu::semibold(16.0)).color(Color32::WHITE));
-                    if !done && failed.is_none() {
-                        menu::at_right(ui, "mission_step", |ui| {
-                            ui.label(RichText::new(format!("{} / {n}", step + 1)).font(menu::label()).color(flightui::SOFT));
-                        });
-                    }
+                    menu::at_right(ui, "mission_step", |ui| {
+                        ui.label(RichText::new(format!("{} / {n}", step + 1)).font(menu::label()).color(flightui::SOFT));
+                    });
                 });
                 ui.add_space(4.0);
-                if let Some(why) = &failed {
-                    result_line(ui, tr_en("Not passed"), menu::BAD);
-                    ui.add(egui::Label::new(RichText::new(why).font(menu::body()).color(menu::TEXT)).wrap());
-                } else if done {
-                    result_line(ui, if m.cat == Cat::Exam { tr_en("Passed") } else { tr_en("Complete") }, menu::OK);
-                } else if let Some(s) = m.steps.get(step) {
+                if let Some(s) = m.steps.get(step) {
                     // only the step to do now.
                     ui.add(egui::Label::new(RichText::new(tr_en(s.text)).font(menu::medium(15.0)).color(Color32::WHITE)).wrap());
                     self.step_controls(ui, s.does);
                     ui.add_space(6.0);
                     flightui::meter(ui, step as f32 / n.max(1) as f32, flightui::LIT);
                 }
+                ui.add_space(6.0);
+                if flightui::text_link(ui, tr_en("Abandon")).clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close {
+            self.end_mission();
+        }
+    }
+
+    /// the end of a lesson, checkride or mission, in the middle of the view:
+    /// passed or not, the landing's marks, and what next. passed: the next
+    /// lesson (or keep flying), fly it again, or back to the menu it came
+    /// from; not passed: try again, back to the menu, or keep flying.
+    fn mission_result(&mut self, ctx: &egui::Context) {
+        let Some(run) = self.mission.as_ref() else { return };
+        let (m, failed, rating, career) = (run.m, run.failed.clone(), run.rating, run.career);
+        let next = if failed.is_none() { next_lesson(m) } else { None };
+        #[derive(Clone, Copy)]
+        enum Go {
+            Next(&'static Mission),
+            Again,
+            Menu,
+            Fly,
+        }
+        let mut go = None;
+        let screen = ctx.content_rect();
+        egui::Area::new(egui::Id::unique("mission_result")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+            ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::unique("mission_result_dim"))).rect_filled(screen, 0.0, Color32::from_black_alpha(120));
+            flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(28, 24)), |ui| {
+                ui.set_width(380.0);
+                ui.spacing_mut().item_spacing.y = 6.0;
+                let kind = match m.cat {
+                    Cat::Tutorial => tr_en("Tutorial"),
+                    Cat::Lesson => tr_en("Lesson"),
+                    Cat::Exam => tr_en("Checkride"),
+                    Cat::Mission => tr_en("Mission"),
+                };
+                ui.label(RichText::new(kind.to_uppercase()).font(menu::bold(13.0)).color(flightui::SOFT));
+                ui.label(RichText::new(tr_en(m.title)).font(menu::semibold(18.0)).color(Color32::WHITE));
+                ui.add_space(6.0);
+                match &failed {
+                    Some(why) => {
+                        result_line(ui, tr_en("Not passed"), menu::BAD);
+                        ui.add(egui::Label::new(RichText::new(why).font(menu::body()).color(menu::TEXT)).wrap());
+                    }
+                    None => result_line(ui, if m.cat == Cat::Exam { tr_en("Passed") } else { tr_en("Complete") }, menu::OK),
+                }
                 if let Some(r) = rating {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{}", r.score)).font(menu::bold(30.0)).color(if r.score >= 75 { menu::ACCENT } else { Color32::WHITE }));
+                        ui.label(RichText::new(format!("{}", r.score)).font(menu::bold(34.0)).color(if r.score >= 75 { menu::ACCENT } else { Color32::WHITE }));
                         ui.vertical(|ui| {
                             ui.label(RichText::new(format!("{} {}", tr_en("Landing"), r.grade())).font(menu::semibold(14.0)).color(Color32::WHITE));
                             let along = if r.on_runway { format!("{:.0} m {}", r.along, tr_en("past the threshold")) } else { tr_en("off the runway").into() };
@@ -554,27 +672,70 @@ impl Game {
                         flightui::note(ui, &format!("{} {}", tr_en("Pass mark"), pass_mark(m)));
                     }
                 }
-                ui.add_space(6.0);
-                if done || failed.is_some() {
-                    ui.horizontal(|ui| {
-                        if flightui::key(ui, tr_en("Try again"), false, 100.0, 28.0).clicked() {
-                            again = true;
-                        }
-                        if flightui::key(ui, tr_en("Close"), false, 80.0, 28.0).clicked() {
-                            close = true;
-                        }
-                    });
-                } else if flightui::text_link(ui, tr_en("Abandon")).clicked() {
-                    close = true;
+                ui.add_space(14.0);
+                ui.spacing_mut().item_spacing.y = 8.0;
+                // the first is what most would do next, and where the pad starts.
+                let mut opts: Vec<(String, Go)> = Vec::new();
+                match (&failed, next) {
+                    (None, Some(n)) => opts.push((format!("{}: {}", tr_en("Next"), tr_en(n.title)), Go::Next(n))),
+                    (None, None) => opts.push((tr_en("Keep flying").to_string(), Go::Fly)),
+                    (Some(_), _) => opts.push((tr_en("Try again").to_string(), Go::Again)),
+                }
+                if failed.is_none() {
+                    opts.push((tr_en("Fly it again").to_string(), Go::Again));
+                }
+                opts.push((tr_en("Back to the menu").to_string(), Go::Menu));
+                if failed.is_some() {
+                    opts.push((tr_en("Keep flying").to_string(), Go::Fly));
+                }
+                for (k, (text, g)) in opts.iter().enumerate() {
+                    let r = menu::big_button(ui, text, crate::padui::Hint::None, k == 0, false);
+                    if k == 0 && crate::padui::active() && ui.ctx().memory(|mem| mem.focused()).is_none() {
+                        r.request_focus();
+                    }
+                    if r.clicked() {
+                        go = Some(*g);
+                    }
                 }
             });
         });
-        if again {
-            self.start_mission(m);
-        } else if close {
-            self.end_mission();
+        match go {
+            Some(Go::Next(n)) => {
+                let career = self.mission.as_ref().is_some_and(|r| r.career);
+                self.start_mission(n);
+                if let Some(r) = self.mission.as_mut() {
+                    r.career = career;
+                }
+            }
+            Some(Go::Again) => {
+                self.start_mission(m);
+                if let Some(r) = self.mission.as_mut() {
+                    r.career = career;
+                }
+            }
+            Some(Go::Menu) => {
+                self.to_globe();
+                self.menu.screen = if career { crate::menu::Screen::Career } else { crate::menu::Screen::Activities };
+                self.pad_home = true;
+            }
+            Some(Go::Fly) => self.end_mission(),
+            None => {}
         }
     }
+
+    /// the result screen is up: the pad's a, b and d-pad work it, not the aircraft.
+    pub(crate) fn mission_over(&self) -> bool {
+        self.mission.as_ref().is_some_and(|r| r.done || r.failed.is_some())
+    }
+}
+
+/// the lesson after this one, for tutorials, which go in order.
+fn next_lesson(m: &Mission) -> Option<&'static Mission> {
+    if m.cat != Cat::Tutorial {
+        return None;
+    }
+    let i = ALL.iter().position(|x| x.id == m.id)?;
+    ALL.get(i + 1).filter(|n| n.cat == Cat::Tutorial)
 }
 
 /// a big word for how it ended.
@@ -588,13 +749,35 @@ pub fn tick(p: &egui::Painter, c: egui::Pos2, s: f32, col: Color32) {
 }
 
 impl Game {
+    /// how the virtual cursor works a control in this cockpit: r3 for the
+    /// cursor, then a on a switch or a bumper on a knob (none: no such control).
+    fn by_cursor(&self, id: &str) -> Option<String> {
+        let cursor = crate::padmap::spec_of("virtual_cursor");
+        if cursor.is_empty() {
+            return None;
+        }
+        let then = self.cockpit_controls.iter().find_map(|(h, _)| match h.wheel {
+            Some((up, _)) if up == id => Some("RB"),
+            Some((_, down)) if down == id => Some("LB"),
+            _ if h.click == Some(id) || h.hold == Some(id) => Some("A"),
+            _ => None,
+        })?;
+        Some(format!("{cursor} › {then}"))
+    }
+
     /// the controls a step uses, as what is in hand works them: the pad's
-    /// buttons and sticks while a pad is in use (the key where the pad has
-    /// none), else the keys as bound now.
+    /// buttons and sticks while a pad is in use, or for a control the pad has
+    /// no button for, the virtual cursor onto it in the cockpit (r3, then a
+    /// or a bumper); else the keys as bound now.
     fn step_controls(&self, ui: &mut egui::Ui, does: &[&'static str]) {
         let mut shown: Vec<(bool, String)> = Vec::new();
         for id in does {
-            let pad = if crate::padui::active() { crate::padmap::spec_for(id) } else { String::new() };
+            let pad = if crate::padui::active() {
+                let s = crate::padmap::spec_for(id);
+                if s.is_empty() { self.by_cursor(id).unwrap_or_default() } else { s }
+            } else {
+                String::new()
+            };
             let c = if !pad.is_empty() {
                 (true, pad)
             } else if let Some(k) = crate::bind::ACTIONS.iter().find(|a| a.id == *id).and_then(|a| self.binds.key_of(a)) {
