@@ -1313,6 +1313,9 @@ settings.head_tracking_waiting = "En attente d'OpenTrack sur le port {}"
 settings.discord = "Discord"
 settings.discord_status = "Montrer ce que vous pilotez"
 settings.discord_status_hint = "votre avion et l'aéroport le plus proche sur votre profil Discord, quand Discord est ouvert"
+settings.atc_microphone = "Microphone"
+settings.atc_microphone_hint = "Le micro qu'écoute l'alternat. Un casque Bluetooth passe en qualité d'appel quand son propre micro est ouvert ; choisissez ici le micro de l'ordinateur pour garder un bon son."
+settings.atc_microphone_default = "Micro par défaut du système"
 
 # flight planner and simbrief
 plan.none_yet = "Pas de plan de vol : volez librement, ou préparez une route entre deux aérodromes."

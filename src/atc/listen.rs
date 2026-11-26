@@ -21,6 +21,31 @@ const LONGEST: f32 = 25.0;
 /// whisper is unloaded after this long without a call.
 const IDLE: std::time::Duration = std::time::Duration::from_secs(180);
 
+/// the microphone push to talk records, by name (empty: the system's default).
+static MIC_NAME: parking_lot::Mutex<String> = parking_lot::Mutex::new(String::new());
+/// the microphones there are, as last looked up, and when.
+static MICS: parking_lot::Mutex<(Vec<String>, Option<std::time::Instant>)> = parking_lot::Mutex::new((Vec::new(), None));
+
+/// records from this microphone from the next call on (empty: the system's default).
+pub fn set_microphone(name: &str) {
+    *MIC_NAME.lock() = name.to_string();
+}
+
+/// the microphones there are, by name. looked up on a thread now and then
+/// (it can take a moment), so the first call may come back empty.
+pub fn microphones() -> Vec<String> {
+    let mut m = MICS.lock();
+    if m.1.is_none_or(|t| t.elapsed().as_secs() > 5) {
+        m.1 = Some(std::time::Instant::now());
+        let _ = std::thread::Builder::new().name("atc-mics".into()).spawn(|| {
+            use cpal::traits::{DeviceTrait, HostTrait};
+            let names: Vec<String> = cpal::default_host().input_devices().map(|l| l.filter_map(|d| d.description().ok().map(|x| x.name().to_string())).collect()).unwrap_or_default();
+            MICS.lock().0 = names;
+        });
+    }
+    m.0.clone()
+}
+
 /// the microphone, on its own thread (a stream may not leave the thread it was made on).
 pub struct Mic {
     cmd: Sender<bool>,
@@ -60,10 +85,14 @@ fn mic_thread(rx: Receiver<bool>, tx: Sender<(Vec<f32>, u32)>) {
             let open = || -> Result<(cpal::Stream, u32), String> {
                 let host = cpal::default_host();
                 let default = host.default_input_device().ok_or("no microphone")?;
-                // the same mic as listed, not windows' "default device" handle: that one
-                // opens through an async call that fails on this thread's com apartment.
+                // the one chosen in the settings, else the default as listed, not windows'
+                // "default device" handle: that one opens through an async call that fails
+                // on this thread's com apartment.
+                let want = MIC_NAME.lock().clone();
                 let id = default.id().ok();
-                let dev = host.input_devices().ok().and_then(|mut l| l.find(|d| d.id().ok() == id && id.is_some())).unwrap_or(default);
+                let listed = |pick: &dyn Fn(&cpal::Device) -> bool| host.input_devices().ok().and_then(|mut l| l.find(|d| pick(d)));
+                let named = (!want.is_empty()).then(|| listed(&|d| d.description().is_ok_and(|x| x.name() == want))).flatten();
+                let dev = named.or_else(|| listed(&|d| id.is_some() && d.id().ok() == id)).unwrap_or(default);
                 let cfg = dev.default_input_config().map_err(|e| e.to_string())?;
                 let rate = cfg.sample_rate();
                 let s = match cfg.sample_format() {

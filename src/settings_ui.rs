@@ -561,6 +561,22 @@ impl Game {
             row(ui, t!("settings.atc_voices"), t!("settings.atc_voices_hint"), |ui| {
                 menu::switch(ui, &mut self.atc_voices);
             });
+            // a bluetooth headset drops to call quality while its own mic is open: another mic keeps it in music mode.
+            row_help(ui, t!("settings.atc_microphone"), t!("settings.atc_microphone_hint"), |ui| {
+                let mics = crate::atc::listen::microphones();
+                let default = t!("settings.atc_microphone_default").to_string();
+                let shown = if self.atc_mic.is_empty() { default.clone() } else { self.atc_mic.clone() };
+                let before = self.atc_mic.clone();
+                egui::ComboBox::from_id_salt("atc_mic").width(260.0).selected_text(egui::RichText::new(shown).font(menu::label())).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.atc_mic, String::new(), default);
+                    for m in &mics {
+                        ui.selectable_value(&mut self.atc_mic, m.clone(), m);
+                    }
+                });
+                if self.atc_mic != before {
+                    crate::atc::listen::set_microphone(&self.atc_mic);
+                }
+            });
             row_help(ui, t!("settings.atc_voice_pack"), t!("settings.atc_voices_about"), |ui| {
                 use crate::atc::install::{self, State};
                 let caption = |ui: &mut Ui, s: &str| {

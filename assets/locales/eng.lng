@@ -1359,6 +1359,9 @@ settings.head_tracking_waiting = "Waiting for OpenTrack on port {}"
 settings.discord = "Discord"
 settings.discord_status = "Show what you fly"
 settings.discord_status_hint = "your aircraft and the nearest airport on your Discord profile, while Discord runs"
+settings.atc_microphone = "Microphone"
+settings.atc_microphone_hint = "The microphone push to talk listens to. A Bluetooth headset switches to call quality while its own microphone is open; pick the computer's microphone here to keep it sounding right."
+settings.atc_microphone_default = "System default"
 
 # flight planner and simbrief
 plan.none_yet = "No flight plan: fly free, or plan a route between two airports."
