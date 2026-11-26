@@ -1340,6 +1340,11 @@ plan.rnav_generated = "RNAV {}"
 plan.departure_generated = "Departure {}"
 settings.full_screen = "Full screen"
 settings.f11_or_alt_enter_switches_at = "F11 or Alt+Enter switches at any time"
+settings.head_tracking = "Head tracking"
+settings.head_tracking_how = "With a webcam: install OpenTrack, set its input to neuralnet tracker and its output to UDP over network, 127.0.0.1 port {}, then press Start. In the cockpit the view turns and leans with your head. TrackIR and phone trackers work the same way through OpenTrack."
+settings.get_opentrack = "Get OpenTrack"
+settings.head_tracking_on = "Tracking"
+settings.head_tracking_waiting = "Waiting for OpenTrack on port {}"
 
 # flight planner and simbrief
 plan.none_yet = "No flight plan: fly free, or plan a route between two airports."

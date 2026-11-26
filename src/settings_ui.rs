@@ -585,6 +585,22 @@ impl Game {
             row(ui, t!("settings.invert_outside_vertical"), t!("settings.invert_view_hint"), |ui| {
                 menu::switch(ui, &mut self.invert_look_outside_y);
             });
+            // a webcam (or trackir, or a phone) through opentrack: what it says is live.
+            let port = crate::headtrack::port();
+            row_help(ui, t!("settings.head_tracking"), &t!("settings.head_tracking_how", port), |ui| {
+                let on = crate::headtrack::pose().is_some();
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    let (dot, text) = if on { (menu::OK, t!("settings.head_tracking_on").to_string()) } else { (menu::DIM, t!("settings.head_tracking_waiting", port).to_string()) };
+                    let (r, _) = ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
+                    ui.painter().circle_filled(r.center(), 3.5, dot);
+                    ui.label(egui::RichText::new(text).font(menu::label()).color(if on { egui::Color32::WHITE } else { menu::DIM }));
+                    if menu::button(ui, t!("settings.get_opentrack")).clicked() {
+                        ui.ctx().open_url(egui::OpenUrl::new_tab("https://github.com/opentrack/opentrack/releases"));
+                    }
+                });
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+            });
         });
     }
 

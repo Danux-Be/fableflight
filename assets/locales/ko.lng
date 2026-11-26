@@ -425,6 +425,11 @@ settings.no_gamepad = "게임패드 없음"
 settings.not_bound = "미지정"
 settings.flight_path_marker = "비행 경로 마커"
 settings.a_ring_on_the_hud = "항공기가 실제로 향하는 곳을 HUD에 고리로 표시"
+settings.head_tracking = "헤드 트래킹"
+settings.head_tracking_how = "웹캠 사용 시: OpenTrack을 설치하고 입력을 neuralnet tracker, 출력을 UDP over network(127.0.0.1, 포트 {})로 설정한 뒤 Start를 누르세요. 조종석 시점이 머리 움직임을 따라갑니다. TrackIR과 휴대폰 트래커도 OpenTrack으로 똑같이 작동합니다."
+settings.get_opentrack = "OpenTrack 받기"
+settings.head_tracking_on = "추적 중"
+settings.head_tracking_waiting = "포트 {}에서 OpenTrack 대기 중"
 
 # ---- graphics settings
 graphics.level_off = "끔"
