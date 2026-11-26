@@ -1723,10 +1723,10 @@ struct Game {
     /// the career (career.rs), and the job being flown
     career: career::Career,
     career_flight: Option<career::Flight>,
-    /// discord's status (discord.rs): switched on, the link, what it says and since when, and when it was last looked at.
+    /// discord's status (discord.rs): switched on, the link, since when the game runs, and when it was last looked at.
     discord_on: bool,
     discord: Option<discord::Presence>,
-    discord_what: (String, i64),
+    discord_since: i64,
     discord_t: f64,
     /// game-managed air traffic (aitraffic.rs)
     ai: aitraffic::AiTraffic,
@@ -2054,7 +2054,7 @@ impl Game {
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, n_scenery: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
-            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ptt: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None, discord_on: prefs.discord, discord: None, discord_what: (String::new(), 0), discord_t: -10.0, ai: Default::default(),
+            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ptt: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None, discord_on: prefs.discord, discord: None, discord_since: 0, discord_t: -10.0, ai: Default::default(),
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
             live: live::Live::new(prefs.live_traffic),
@@ -5025,9 +5025,9 @@ impl Game {
         }
     }
 
-    /// discord's status, every few seconds: the kind of flight, the aircraft
-    /// and the nearest airport, since that flight began (discord.rs). scripted
-    /// runs leave it alone.
+    /// discord's status, every few seconds: "flying a" the aircraft, or only
+    /// the game in the menus; discord adds the name and the time played since
+    /// the game started (discord.rs). scripted runs leave it alone.
     fn discord_tick(&mut self) {
         if self.real - self.discord_t < 3.0 {
             return;
@@ -5043,35 +5043,13 @@ impl Game {
         if self.discord.is_none() {
             self.discord = discord::Presence::start();
         }
-        let (details, state) = if self.mode == Mode::Menu {
-            ("In the menus".to_string(), String::new())
-        } else {
-            let what = if let Some(r) = &self.mission {
-                let kind = match r.m.cat {
-                    missions::Cat::Tutorial => "Tutorial",
-                    missions::Cat::Lesson => "Lesson",
-                    missions::Cat::Exam => "Checkride",
-                    missions::Cat::Mission => "Mission",
-                };
-                format!("{kind}: {}", r.m.title)
-            } else if self.career_flight.is_some() {
-                "Career flight".to_string()
-            } else if self.challenge.is_some() {
-                "Landing challenge".to_string()
-            } else {
-                "Free flight".to_string()
-            };
-            let (lat, lon, _) = geo::pos_to_lla(self.plane.pos);
-            let db = airports::Db::get();
-            let near = db.near(lat.to_degrees(), lon.to_degrees(), 40_000.0).into_iter().min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| db.apts[i as usize].ident.clone());
-            (what, near.map_or(self.spec.name.to_string(), |a| format!("{}  ·  near {a}", self.spec.name)))
-        };
-        if self.discord_what.0 != details {
-            self.discord_what = (details.clone(), discord::now());
+        if self.discord_since == 0 {
+            self.discord_since = discord::now();
         }
-        let since = self.discord_what.1;
+        let details = if self.mode == Mode::Menu { String::new() } else { discord::flying(self.spec.name) };
+        let since = self.discord_since;
         if let Some(p) = self.discord.as_mut() {
-            p.set(Some(discord::Status { details, state, since }));
+            p.set(Some(discord::Status { details, since }));
         }
     }
 
