@@ -1345,6 +1345,9 @@ settings.head_tracking_how = "With a webcam: install OpenTrack, set its input to
 settings.get_opentrack = "Get OpenTrack"
 settings.head_tracking_on = "Tracking"
 settings.head_tracking_waiting = "Waiting for OpenTrack on port {}"
+settings.discord = "Discord"
+settings.discord_status = "Show what you fly"
+settings.discord_status_hint = "your aircraft and the nearest airport on your Discord profile, while Discord runs"
 
 # flight planner and simbrief
 plan.none_yet = "No flight plan: fly free, or plan a route between two airports."

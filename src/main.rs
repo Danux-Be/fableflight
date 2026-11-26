@@ -46,6 +46,7 @@ mod gust;
 mod hangar;
 mod hangar_ui;
 mod bind;
+mod discord;
 mod headtrack;
 mod i18n;
 mod icing;
@@ -1718,6 +1719,11 @@ struct Game {
     /// the career (career.rs), and the job being flown
     career: career::Career,
     career_flight: Option<career::Flight>,
+    /// discord's status (discord.rs): switched on, the link, what it says and since when, and when it was last looked at.
+    discord_on: bool,
+    discord: Option<discord::Presence>,
+    discord_what: (String, i64),
+    discord_t: f64,
     /// game-managed air traffic (aitraffic.rs)
     ai: aitraffic::AiTraffic,
 }
@@ -2044,7 +2050,7 @@ impl Game {
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, n_scenery: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
-            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None, ai: Default::default(),
+            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None, discord_on: prefs.discord, discord: None, discord_what: (String::new(), 0), discord_t: -10.0, ai: Default::default(),
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
             live: live::Live::new(prefs.live_traffic),
@@ -5013,6 +5019,56 @@ impl Game {
         }
     }
 
+    /// discord's status, every few seconds: the kind of flight, the aircraft
+    /// and the nearest airport, since that flight began (discord.rs). scripted
+    /// runs leave it alone.
+    fn discord_tick(&mut self) {
+        if self.real - self.discord_t < 3.0 {
+            return;
+        }
+        self.discord_t = self.real;
+        let scripted = std::env::args().any(|a| a == "--headless" || a == "--shot" || a == "--record" || a == "--bench");
+        if !self.discord_on || scripted {
+            if let Some(p) = self.discord.as_mut() {
+                p.set(None);
+            }
+            return;
+        }
+        if self.discord.is_none() {
+            self.discord = discord::Presence::start();
+        }
+        let (details, state) = if self.mode == Mode::Menu {
+            ("In the menus".to_string(), String::new())
+        } else {
+            let what = if let Some(r) = &self.mission {
+                let kind = match r.m.cat {
+                    missions::Cat::Tutorial => "Tutorial",
+                    missions::Cat::Lesson => "Lesson",
+                    missions::Cat::Exam => "Checkride",
+                    missions::Cat::Mission => "Mission",
+                };
+                format!("{kind}: {}", r.m.title)
+            } else if self.career_flight.is_some() {
+                "Career flight".to_string()
+            } else if self.challenge.is_some() {
+                "Landing challenge".to_string()
+            } else {
+                "Free flight".to_string()
+            };
+            let (lat, lon, _) = geo::pos_to_lla(self.plane.pos);
+            let db = airports::Db::get();
+            let near = db.near(lat.to_degrees(), lon.to_degrees(), 40_000.0).into_iter().min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| db.apts[i as usize].ident.clone());
+            (what, near.map_or(self.spec.name.to_string(), |a| format!("{}  ·  near {a}", self.spec.name)))
+        };
+        if self.discord_what.0 != details {
+            self.discord_what = (details.clone(), discord::now());
+        }
+        let since = self.discord_what.1;
+        if let Some(p) = self.discord.as_mut() {
+            p.set(Some(discord::Status { details, state, since }));
+        }
+    }
+
     /// what the gamepad's buttons work at the moment, besides flying.
     fn nav(&self) -> Nav {
         nav_of(self.mode, self.pause_open, self.info_open || self.radial.open || self.mission_over())
@@ -6414,7 +6470,7 @@ impl Game {
 
     /// The settings worth keeping, as they are now.
     fn live_settings(&self) -> settings::Settings {
-        settings::Settings { lang: self.prefs_lang, sound_on: self.sound_on, volume: self.volume, cam_mode: self.cam_mode, cockpit_fov: self.cockpit_fov, look_sens: self.look_sens, invert_look_cockpit: self.invert_look_cockpit, invert_look_outside_x: self.invert_look_outside_x, invert_look_outside_y: self.invert_look_outside_y, show_hud: self.show_hud, hud_cockpit: self.hud_cockpit, path_marker: self.path_marker, minimap: self.minimap.visible, landing_guidance: self.minimap.landing_guidance, arcade: self.arcade, minimap_plan: self.minimap.plan, minimap_heading_up: self.minimap.heading_up, minimap_zoom: self.minimap.zoom, minimap_size: self.minimap.size.x, minimap_height: self.minimap.size.y, map_airports: self.minimap.layers.airports, map_navaids: self.minimap.layers.navaids, taa: self.gfx.taa, fullscreen: self.fullscreen, live_traffic: self.live.enabled(), live_weather: self.challenge.as_ref().map_or(self.wx.live, |a| a.kept.0), real_time: self.challenge.as_ref().map_or(self.wx.real_time, |a| a.kept.1), snow: self.snow, last: self.last_start.clone(), multiplayer: self.mp_on || self.mp_held, mp_server: self.mp_server.clone(), mp_name: self.mp_name.clone(), topple_buildings: self.topple_buildings, simbrief: self.prefs_simbrief.clone() }
+        settings::Settings { lang: self.prefs_lang, sound_on: self.sound_on, volume: self.volume, cam_mode: self.cam_mode, cockpit_fov: self.cockpit_fov, look_sens: self.look_sens, invert_look_cockpit: self.invert_look_cockpit, invert_look_outside_x: self.invert_look_outside_x, invert_look_outside_y: self.invert_look_outside_y, show_hud: self.show_hud, hud_cockpit: self.hud_cockpit, path_marker: self.path_marker, minimap: self.minimap.visible, landing_guidance: self.minimap.landing_guidance, arcade: self.arcade, minimap_plan: self.minimap.plan, minimap_heading_up: self.minimap.heading_up, minimap_zoom: self.minimap.zoom, minimap_size: self.minimap.size.x, minimap_height: self.minimap.size.y, map_airports: self.minimap.layers.airports, map_navaids: self.minimap.layers.navaids, taa: self.gfx.taa, fullscreen: self.fullscreen, live_traffic: self.live.enabled(), live_weather: self.challenge.as_ref().map_or(self.wx.live, |a| a.kept.0), real_time: self.challenge.as_ref().map_or(self.wx.real_time, |a| a.kept.1), snow: self.snow, last: self.last_start.clone(), multiplayer: self.mp_on || self.mp_held, mp_server: self.mp_server.clone(), mp_name: self.mp_name.clone(), topple_buildings: self.topple_buildings, discord: self.discord_on, simbrief: self.prefs_simbrief.clone() }
     }
 
     /// Saves the settings when they have changed (looked at once a second,
@@ -9933,6 +9989,7 @@ impl ApplicationHandler for App {
         let Some(g) = &mut self.game else { return };
         // Answer tool calls even when redraws are delayed; screenshots wait for a frame.
         g.pump_mcp();
+        g.discord_tick();
         let flow = self.frame_pacer.control_flow(Instant::now(), g.gfx.fps_cap);
         event_loop.set_control_flow(flow);
         if flow != ControlFlow::Poll {

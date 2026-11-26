@@ -778,6 +778,11 @@ impl Game {
     }
 
     fn set_multiplayer(&mut self, ui: &mut Ui, in_flight: bool) {
+        card(ui, t!("settings.discord"), |ui| {
+            row(ui, t!("settings.discord_status"), t!("settings.discord_status_hint"), |ui| {
+                menu::switch(ui, &mut self.discord_on);
+            });
+        });
         card(ui, t!("settings.connection"), |ui| {
             // Where it stands, and the one button that changes it.
             let (col, line) = self.mp_line();

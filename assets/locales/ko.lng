@@ -430,6 +430,9 @@ settings.head_tracking_how = "웹캠 사용 시: OpenTrack을 설치하고 입�
 settings.get_opentrack = "OpenTrack 받기"
 settings.head_tracking_on = "추적 중"
 settings.head_tracking_waiting = "포트 {}에서 OpenTrack 대기 중"
+settings.discord = "디스코드"
+settings.discord_status = "비행 중인 기체 표시"
+settings.discord_status_hint = "디스코드가 실행 중일 때 프로필에 기체와 가장 가까운 공항을 표시합니다"
 
 # ---- graphics settings
 graphics.level_off = "끔"

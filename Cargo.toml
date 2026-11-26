@@ -11,6 +11,8 @@ default-run = "fablegame"
 mem-stats = ["wgpu/counters"]
 
 [dependencies]
+# discord rich presence over its local ipc (discord.rs).
+discord-rich-presence = "1.1.0"
 anyhow = "1.0.104"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 crossbeam-channel = "0.5.17"
