@@ -5622,6 +5622,7 @@ impl Game {
                 self.flash.push((t!("game.balloon_strike").to_string(), self.real));
             }
         }
+
     }
 
     /// A bird hit the aircraft: a thud, a burst of feathers, a note. No damage.
@@ -7719,7 +7720,7 @@ impl Game {
                 // Logged with each scripted shot, for comparing builds.
                 log::info!("fps {:.1}  rain {:.2} (glass {:.2}, wet {:.2}, hail {:.2})  sigma {:.2} draft {:.1}  birds {} in {} flocks ({} drawn, nearest {:.0} m)  scenery {}", self.fps, self.cam_rain, self.wx.rain, self.glass.wet, self.cam_hail, self.plane.air.sigma_w, self.plane.air.draft, self.birds.count(), self.birds.flocks.len(), self.bird_insts, self.birds.nearest(self.prev_cam), scenery.len());
                 if self.balloons.count() > 0 {
-                    log::info!("balloons {} (nearest {:.0} m)", self.balloons.count(), self.balloons.nearest(self.prev_cam));
+                    log::info!("balloons {} (nearest {:.0} m, {} burners lit near)", self.balloons.count(), self.balloons.nearest(self.prev_cam), self.balloons.jets(self.prev_cam).len());
                 }
                 Some(self.shots.remove(0).1)
             }

@@ -109,7 +109,7 @@ CREAM = c(0.78, 0.64, 0.36)
 WHITE = c(0.76, 0.76, 0.73)
 BLACK = c(0.018, 0.018, 0.022)
 TEAL = c(0.02, 0.32, 0.32)
-WICKER = c(0.52, 0.37, 0.18)
+WICKER = c(0.60, 0.43, 0.20)
 WICKER_DK = c(0.27, 0.17, 0.07)
 LEATHER = c(0.10, 0.055, 0.03)
 SUEDE = c(0.20, 0.10, 0.05)
@@ -817,6 +817,65 @@ def rig_far(coll):
     return make_object("rig far", bm, coll)
 
 
+FLAGS = ["fr", "be", "ch", "de"]
+
+
+def flag_colour(kind, u, v):
+    """The flag's colour at u (0 at the hoist .. 1 at the fly), v (0 bottom .. 1 top)."""
+    if kind == "fr":
+        return [c(0.0, 0.08, 0.40), WHITE, c(0.75, 0.02, 0.04)][min(int(u * 3), 2)]
+    if kind == "be":
+        return [BLACK, c(0.95, 0.70, 0.02), c(0.75, 0.02, 0.04)][min(int(u * 3), 2)]
+    if kind == "de":
+        return [c(0.85, 0.62, 0.0), c(0.75, 0.0, 0.0), BLACK][min(int(v * 3), 2)]
+    # Switzerland (and Savoy): a white cross on red.
+    x, y = u * 1.5 - 0.75, v - 0.5
+    cross = (abs(x) < 0.11 and abs(y) < 0.32) or (abs(y) < 0.11 and abs(x) < 0.32)
+    return WHITE if cross else c(0.80, 0.02, 0.02)
+
+
+def flag(kind, coll):
+    """A flag on a line hung from a corner of the basket: the line down 3.5 m,
+    the flag tied along its lowest metre, drooping and rippling in still air
+    (the balloon goes with the wind, so there is none to fly it). Origin at
+    the line's top, tied under the basket's rim at a corner."""
+    bm = bmesh.new()
+    layer = colour_layer(bm)
+    use(ROPE_M)
+    line = [V((0.0, 0.0, -0.02 * k * k)) + V((0.03 * math.sin(k * 0.9), 0.0, -0.35 * k)) for k in range(11)]
+    # (A thin line: a twist would not show at 6 mm.)
+    sweep(bm, layer, line, 0.006, CREAM, sides=5)
+    use(FABRIC_M)
+    w, hgt = 0.9, 0.6
+    nu, nv = 10, 6
+    top = line[-1] + V((0.0, 0.0, 0.85))
+    grid = []
+    for i in range(nu + 1):
+        u = i / nu
+        col = []
+        for j in range(nv + 1):
+            v = j / nv
+            # Out from the line, sagging more towards the fly, in soft folds.
+            x = w * u * 0.93
+            z = -hgt * (1 - v) - 0.22 * u * u
+            y = 0.06 * math.sin(u * 7.0 + 0.6) * u
+            col.append(bm.verts.new(top + V((x, y, z))))
+        grid.append(col)
+    for i in range(nu):
+        for j in range(nv):
+            q = (grid[i][j], grid[i + 1][j], grid[i + 1][j + 1], grid[i][j + 1])
+            colr = flag_colour(kind, (i + 0.5) / nu, (j + 0.5) / nv)
+            f = bm.faces.new(q)
+            f.smooth = True
+            paint(f, layer, colr)
+            # (Two-sided.)
+            g = bm.faces.new([bm.verts.new(v_.co) for v_ in q[::-1]])
+            g.smooth = True
+            paint(g, layer, colr)
+    use(TRIM)
+    return make_object(f"flag {kind}", bm, coll)
+
+
 def flame(coll):
     """The burner flame, 1 m nominal (the game scales and flickers it): a
     blue root, a white-yellow core, orange, and red-tinged tips."""
@@ -831,7 +890,7 @@ def flame(coll):
 
 
 # ---------------------------------------------------------------------- build
-EXPECTED = [f"env {s}" for s in SCHEMES] + [f"env {s} far" for s in SCHEMES] + ["skirt", "wires sport", "wires large", "rig sport", "rig large", "rig far", "flame"]
+EXPECTED = [f"env {s}" for s in SCHEMES] + [f"env {s} far" for s in SCHEMES] + ["skirt", "wires sport", "wires large", "rig sport", "rig large", "rig far", "flame"] + [f"flag {k}" for k in FLAGS]
 
 
 def build():
@@ -853,6 +912,9 @@ def build():
     rl.location = (0.0, -150.0, 0.0)
     rf = rig_far(coll)
     rf.location = (0.0, -70.0, 0.0)
+    for i, k in enumerate(FLAGS):
+        fg = flag(k, coll)
+        fg.location = (3.0 + 1.5 * i, 0.0, 1.0)
     fl = flame(coll)
     fl.location = (0.0, 0.0, S_NOZZLE_Z)
     # The passenger balloon's envelope, for looking at (not exported: the

@@ -6,8 +6,11 @@
 //! near and far, its skirt and flying wires, two rigs (a sport balloon after
 //! the Cameron O-105, a passenger balloon after the Ultramagic N-425, whose
 //! envelope is the same one scaled by `LARGE_SCALE`), and the burner flame.
-//! They are drawn as instanced solids (inst.wgsl): the fabric lets the sun
-//! through a little, the flame glows.
+//! They are drawn as instanced solids (inst.wgsl, by material: ripstop
+//! nylon with its seams and load tapes, woven wicker, suede, rope, steel):
+//! the cloth lets the sun through and glows from inside while the burner
+//! is lit, and each burner's flame is drawn as moving fire. About one
+//! balloon in three trails a flag on a line under its basket.
 //!
 //! Each site has a schedule for the day, made from the site and the date (so
 //! it is the same every time the day is flown): how many balloons, when each
@@ -36,6 +39,7 @@
 //!   Mara and the Napa Valley: daily passenger flights;
 //! - the Arve valley under the Mont Blanc and Flanders (evening flights,
 //!   May to September): a handful of balloons.
+//!
 //! Counts and seasons are estimates from operators' and festivals' published
 //! figures and press reports, not data.
 
@@ -50,7 +54,7 @@ use std::sync::OnceLock;
 /// The colour schemes, as named in balloons.py.
 pub const SCHEMES: [&str; 8] = ["rainbow", "harlequin", "bands", "chevron", "blocks", "wave", "checks", "stripes"];
 /// The pieces after the envelopes (near, then far), in mesh-id order.
-const PARTS: [&str; 7] = ["skirt", "wires sport", "wires large", "rig sport", "rig large", "rig far", "flame"];
+const PARTS: [&str; 11] = ["skirt", "wires sport", "wires large", "rig sport", "rig large", "rig far", "flame", "flag fr", "flag be", "flag ch", "flag de"];
 /// First mesh id of the balloons in the instanced-solid library (main.rs `solids`).
 pub const BASE: u32 = crate::birds::BASE + (crate::birds::Kind::ALL.len() * crate::birds::PIECES.len()) as u32;
 const ENV: u32 = BASE;
@@ -62,6 +66,16 @@ const RIG_SPORT: u32 = SKIRT + 3;
 const RIG_LARGE: u32 = SKIRT + 4;
 const RIG_FAR: u32 = SKIRT + 5;
 const FLAME: u32 = SKIRT + 6;
+/// Flags on a line under the basket: France, Belgium, Switzerland, Germany.
+const FLAG: u32 = SKIRT + 7;
+const FLAGS: u32 = 4;
+/// Where a flag's line is tied, from the middle of the basket floor (x, y
+/// up, z): a corner under the rim, sport and passenger basket.
+const FLAG_AT: [[f64; 3]; 2] = [[0.60, 0.95, 0.75], [1.08, 1.10, 2.28]];
+/// The burners lit within this are counted for the log (main.rs).
+pub const FLAME_JET: f64 = 600.0;
+/// Each burner's place on its frame (x, z), sport and passenger rig.
+const BURNERS: [&[(f64, f64)]; 2] = [&[(-0.17, 0.0), (0.17, 0.0)], &[(-0.2, -0.2), (0.2, -0.2), (-0.2, 0.2), (0.2, 0.2)]];
 
 /// The passenger balloon's envelope is the sport one this much bigger.
 pub const LARGE_SCALE: f64 = 1.6;
@@ -306,6 +320,11 @@ impl Balloon {
 
     fn mouth(&self) -> f64 {
         MOUTH[self.plan.large as usize]
+    }
+
+    /// Which flag hangs under its basket, if any (about one balloon in three).
+    pub fn flag(&self) -> Option<u32> {
+        (self.plan.seed % 3 == 0).then_some(((self.plan.seed >> 8) % FLAGS as u64) as u32)
     }
 
     /// Where the middle of the envelope is (for collisions).
@@ -575,11 +594,32 @@ impl Balloons {
             let h = agl.unwrap_or_else(|| rng.range(80.0, 500.0));
             b.p = b.p.normalize() * (geo::R + g + h);
             if agl.is_some() {
-                b.plan.cruise = (h, h);
+                // (Climbing slowly from there: the burner works often, to be seen.)
+                b.plan.cruise = (h + 150.0, h + 150.0);
                 b.plan.minutes = 600.0;
             }
             self.list.push(b);
         }
+    }
+
+    /// The burner jets lit near the camera, for the particle system: each
+    /// burner's nozzle, the balloon's up, and how fast the balloon moves.
+    pub fn jets(&self, cam: DVec3) -> Vec<(DVec3, DVec3, DVec3)> {
+        let mut out = Vec::new();
+        for b in self.list.iter().filter(|b| b.burner && b.p.distance(cam) < FLAME_JET) {
+            let up = b.p.normalize();
+            let (e, n, _) = geo::enu(b.p);
+            let fwd = e * b.yaw.sin() + n * b.yaw.cos();
+            let right = fwd.cross(up).normalize();
+            let big = b.plan.large as usize;
+            let nozzle = b.p + up * NOZZLE[big];
+            let vel = b.v + up * b.vz;
+            // (The sport rig's double burner, the passenger rig's four.)
+            for &(x, z) in BURNERS[big] {
+                out.push((nozzle + right * x - fwd * z, up, vel));
+            }
+        }
+        out
     }
 
     /// An aircraft at `a` (moving to `b`, radius `r`) through an envelope: that
@@ -635,19 +675,38 @@ impl Balloons {
                     out.push((RIG_FAR, inst(base(DVec3::splat(if b.plan.large { 1.6 } else { 1.0 }), 0.0))));
                 }
             } else {
-                out.push((ENV + scheme, scaled(base(env_s, MOUTH[big]), ks)));
-                out.push((SKIRT, scaled(base(DVec3::splat(ks), MOUTH[big]), ks)));
+                let mut ei = scaled(base(env_s, MOUTH[big]), ks);
+                // (The burner lit: the envelope glows from inside, inst.wgsl.)
+                ei.ext[1] = if b.burner { 1.0 } else { 0.0 };
+                out.push((ENV + scheme, ei));
+                // (No scoop: like most envelopes, the cloth runs down to the
+                // mouth; the "skirt" piece stays in the pack, unused.)
+                let _ = SKIRT;
                 if b.collapse < 0.3 {
                     out.push((if b.plan.large { WIRES_LARGE } else { WIRES_SPORT }, inst(base(DVec3::ONE, 0.0))));
                 }
                 out.push((if b.plan.large { RIG_LARGE } else { RIG_SPORT }, inst(base(DVec3::ONE, 0.0))));
             }
+            if let Some(f) = b.flag() {
+                if d < 3_000.0 {
+                    let [x, y, z] = FLAG_AT[big];
+                    let m = base(DVec3::ONE, 0.0) * Mat4::from_translation(glam::Vec3::new(x as f32, y as f32, z as f32));
+                    out.push((FLAG + f, inst(m)));
+                }
+            }
             if b.burner && d < 15_000.0 {
-                // A roaring jet about three metres long, flickering.
-                let f = (time * 23.0 + k as f64 * 1.7).sin() * 0.5 + (time * 37.0 + k as f64).sin() * 0.3;
-                let len = (if b.plan.large { 3.6 } else { 2.9 }) * (1.0 + 0.08 * f);
-                let w = 1.0 + 0.1 * f;
-                out.push((FLAME, inst(base(DVec3::new(w, len, w), NOZZLE[big]))));
+                // A roaring jet from each burner, three metres or so long,
+                // surging (inst.wgsl draws the fire itself, moving).
+                for (j, &(x, z)) in BURNERS[big].iter().enumerate() {
+                    let ph = k as f64 * 1.7 + j as f64 * 2.3;
+                    let f = (time * 11.0 + ph).sin() * 0.5 + (time * 17.0 + ph * 1.3).sin() * 0.3;
+                    let len = (if b.plan.large { 3.4 } else { 3.0 }) * (1.0 + 0.07 * f);
+                    let w = 1.15 + 0.08 * f;
+                    let m = base(DVec3::new(w, len, w), NOZZLE[big]) * Mat4::from_translation(glam::Vec3::new(x as f32, 0.0, z as f32) / glam::Vec3::new(w as f32, len as f32, w as f32));
+                    let mut fi = inst(m);
+                    fi.ext = [1.0, len as f32, (ph * 0.37).fract() as f32, 0.0];
+                    out.push((FLAME, fi));
+                }
             }
         }
     }

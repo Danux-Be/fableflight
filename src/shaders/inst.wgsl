@@ -147,11 +147,33 @@ fn balloon_surface(in: VOut, N0: vec3f, V: vec3f, m: f32, l: Light, sh: f32, px_
   var spec_pow = 30.0;
   var mirror = 0.0;
   if (m > 1.9) {
-    // The burner flame: bright whatever the light, brighter at night; a
-    // little flicker along it.
+    // The burner flame, drawn as fire: noise carried up the jet at the
+    // speed of the gas cuts its outline into licking tongues (dithered at the
+    // edges, smoothed by the TAA); a blue root at the jets, a yellow-white
+    // core, orange then red at the tips. Its own light, scaled to the sun's
+    // as the fireballs are, so the exposure sees it as bright as it is.
+    // ext.y: the flame's length (m), ext.z: its own phase.
+    let len = max(in.ext.y, 0.5);
+    let v = clamp(in.L.y / len, 0.0, 1.0);
+    let t = G.time.x + in.ext.z * 40.0;
+    let q = vec3f(in.L.x * 2.2, in.L.y * 0.55 - t * 3.2, in.L.z * 2.2) + in.ext.z * 7.0;
+    let n1 = textureSampleLevel(t_noise, s_repeat, q * 0.5, 0.0);
+    let n2 = textureSampleLevel(t_noise, s_repeat, q * 1.3 + vec3f(0.0, -t * 1.5, 0.0), 0.0);
+    let turb = n1.g * 0.65 + n2.b * 0.35;
+    // Thinner towards the edge of the mesh (seen edge-on) and the tip.
+    let facing = abs(dot(N0, -V));
+    let body = facing * (1.15 - v * 0.85) + (turb - 0.5) * (0.9 + 0.8 * v);
+    let dither = ign(in.clip.xy + fract(G.time.x * 7.3) * 64.0);
+    if (body < 0.18 + 0.3 * dither) { discard; }
+    let heat = clamp(body * 1.3 - v * 0.35 + (turb - 0.5) * 0.4, 0.0, 1.0);
+    var col = mix(vec3f(0.9, 0.12, 0.02), vec3f(1.0, 0.45, 0.06), smoothstep(0.1, 0.4, heat));
+    col = mix(col, vec3f(1.0, 0.82, 0.42), smoothstep(0.4, 0.75, heat));
+    col = mix(col, vec3f(1.0, 0.96, 0.85), smoothstep(0.75, 1.0, heat));
+    col = mix(vec3f(0.25, 0.4, 1.0), col, smoothstep(0.02, 0.12, v));
     let night = 1.0 - smoothstep(-0.05, 0.12, dot(up, G.sun_dir.xyz));
-    let fl = textureSampleLevel(t_noise, s_repeat, Lr * vec3f(1.5, 0.4, 1.5), 0.0).r;
-    return vec4f(in.col.rgb * (4.0 + 6.0 * night) * (0.8 + 0.4 * fl), 0.0);
+    let bright = (0.5 + 1.2 * heat) * (0.06 * G.sun_dir.w + 3.0 * night + 0.6);
+    g_amb = vec3f(0.0);
+    return vec4f(col * bright, 0.0);
   }
   if (m > 1.47) {
     // Ripstop nylon, polyurethane coated: a fine grid of heavier threads,
@@ -163,16 +185,18 @@ fn balloon_surface(in: VOut, N0: vec3f, V: vec3f, m: f32, l: Light, sh: f32, px_
     let fw = px;
     let rs = max(lines(a, 0.0065, 0.12, fw), lines(Lr.y, 0.0065, 0.12, fw)) * detail(fw, 0.0065);
     albedo *= 1.0 - 0.10 * rs;
-    // Creases: running mostly up and down the gores, stronger low down.
-    let q = vec3f(Lr.x * 0.9, Lr.y * 0.12, Lr.z * 0.9);
-    let e = 0.15;
-    let n0 = textureSampleLevel(t_noise, s_repeat, q * 0.5, 0.0).g;
-    let nx = textureSampleLevel(t_noise, s_repeat, (q + vec3f(e, 0.0, 0.0)) * 0.5, 0.0).g;
-    let nz = textureSampleLevel(t_noise, s_repeat, (q + vec3f(0.0, 0.0, e)) * 0.5, 0.0).g;
-    let ny = textureSampleLevel(t_noise, s_repeat, (q + vec3f(0.0, e, 0.0)) * 0.5, 0.0).g;
-    let crease = (0.35 + 0.9 * (1.0 - smoothstep(0.5, 4.0, Lr.y))) * detail(px, 0.6);
-    let g = vec3f(nx - n0, (ny - n0) * 0.3, nz - n0) / e;
-    N = normalize(N - g * 0.035 * crease);
+    // Creases: soft vertical ripples in the cloth, half a metre or so apart
+    // and wandering, deepest low down where the fabric gathers into the
+    // mouth. Only their slope across the gore tips the normal, sideways:
+    // a 3D noise there made blotches where the sun grazes the envelope.
+    let wn = textureSampleLevel(t_noise, s_repeat, vec3f(a * 0.05, Lr.y * 0.035, 0.37), 0.0);
+    let ph = wn.r * 14.0;
+    let slope = cos(a * 9.0 + ph) * 0.65 + cos(a * 21.0 + ph * 1.7 + 1.3) * 0.35;
+    let tdir = cross(up, N0);
+    let amp = (0.010 + 0.055 * (1.0 - smoothstep(0.4, 4.5, Lr.y))) * detail(px, 0.08);
+    if (dot(tdir, tdir) > 1e-6) {
+      N = normalize(N0 + normalize(tdir) * slope * amp);
+    }
     // (A satin sheen, broad and soft: the creases barely move it.)
     let Ns = N0;
     gloss = 0.018;
@@ -211,6 +235,13 @@ fn balloon_surface(in: VOut, N0: vec3f, V: vec3f, m: f32, l: Light, sh: f32, px_
     // (Not this face's shadow: the face is turned from the sun, and the
     // shadow map's speckle would show through.)
     c += in.col.rgb * l.sun * back * 0.3;
+    // The burner lit (ext.y): the flame lights the cloth from inside, most
+    // near the mouth; at dawn and at night the whole envelope glows.
+    if (in.ext.y > 0.5) {
+      let night = 1.0 - smoothstep(-0.08, 0.15, dot(up, G.sun_dir.xyz));
+      let near_mouth = exp(-max(Lr.y, 0.0) / 7.0);
+      c += in.col.rgb * vec3f(1.0, 0.62, 0.3) * near_mouth * (0.02 * G.sun_dir.w + 2.5 * night);
+    }
     c += l.sun * spec + sky_lut(normalize(reflect(V, Ns) + up * 0.1)) * fres * 0.15;
     // (A taut, convex envelope has no nooks for the screen-space ambient
     // occlusion to darken: left out of it, as its noise showed on the
@@ -283,7 +314,15 @@ fn balloon_surface(in: VOut, N0: vec3f, V: vec3f, m: f32, l: Light, sh: f32, px_
   strand = mix(strand, in.col.rgb * 0.72, stake_m);
   let gap = smoothstep(0.0, 0.2, fv) * smoothstep(1.0, 0.8, fv);
   strand *= 0.35 + 0.65 * gap;
+  // Every 14 cm or so a band of tighter, darker waling (three rods twisted
+  // together), the rows between in the plain golden weave.
+  let wv = Lr.y / 0.14;
+  let wf = fract(wv);
+  let wale = smoothstep(0.0, 0.03, wf) * (1.0 - smoothstep(0.17, 0.2, wf)) * detail(fw, 0.05);
+  let twist = 0.75 + 0.25 * sin((u * 160.0 + Lr.y * 220.0));
+  strand = mix(strand, in.col.rgb * 0.62 * twist, wale);
   albedo = mix(in.col.rgb * 0.8, strand, dt);
+  albedo *= 1.0 - 0.2 * wale * (1.0 - dt);
   // Rounded strands: the normal tips up on their top half, down below.
   N = normalize(N + up * cos(3.14159 * fv) * 0.55 * dt * (1.0 - stake_m));
   return vec4f(shade_lit(in.P, N, albedo, l, sh), 0.0);
