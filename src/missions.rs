@@ -729,13 +729,17 @@ impl Game {
     }
 }
 
-/// the lesson after this one, for tutorials, which go in order.
+/// the lesson after this one: the next tutorial, or the career's next lesson
+/// for the same licence (c_ppl1, c_ppl2, c_ppl3).
 fn next_lesson(m: &Mission) -> Option<&'static Mission> {
-    if m.cat != Cat::Tutorial {
-        return None;
-    }
+    let series = |id: &str| id.trim_end_matches(|c: char| c.is_ascii_digit()).to_string();
     let i = ALL.iter().position(|x| x.id == m.id)?;
-    ALL.get(i + 1).filter(|n| n.cat == Cat::Tutorial)
+    let n = ALL.get(i + 1)?;
+    match m.cat {
+        Cat::Tutorial => (n.cat == Cat::Tutorial).then_some(n),
+        Cat::Lesson => (n.cat == Cat::Lesson && series(n.id) == series(m.id)).then_some(n),
+        _ => None,
+    }
 }
 
 /// a big word for how it ended.
@@ -809,6 +813,17 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_lessons_follow_their_own_series() {
+        let by = |id| by_id(id).unwrap();
+        assert_eq!(next_lesson(by("t1")).map(|m| m.id), Some("t2"));
+        assert_eq!(next_lesson(by("t6")).map(|m| m.id), None);
+        assert_eq!(next_lesson(by("c_ppl2")).map(|m| m.id), Some("c_ppl3"));
+        assert_eq!(next_lesson(by("c_ppl3")).map(|m| m.id), None);
+        assert_eq!(next_lesson(by("c_ir1")).map(|m| m.id), Some("c_ir2"));
+        assert_eq!(next_lesson(by("e_ppl")).map(|m| m.id), None);
+    }
 
     #[test]
     fn every_control_a_step_shows_is_an_action() {
