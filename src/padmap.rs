@@ -166,7 +166,7 @@ const LAYOUT: &[(&str, Chord)] = {
         ("flaps_up", b(LB)),
         ("flaps_down", b(RB)),
         ("gear", b(L3)),
-        ("view_reset", b(R3)),
+        ("virtual_cursor", b(R3)),
         ("view_ahead", b(Up)),
         ("view_down", b(Down)),
         ("view_left", b(Left)),
@@ -198,6 +198,12 @@ pub fn actions() -> &'static [(&'static str, Option<Chord>)] {
     static ALL: std::sync::OnceLock<Vec<(&'static str, Option<Chord>)>> = std::sync::OnceLock::new();
     ALL.get_or_init(|| {
         let mut v: Vec<_> = LAYOUT.iter().map(|&(id, c)| (id, Some(c))).collect();
+        // views the layout leaves free can still be given a button.
+        for (id, _) in VIEWS {
+            if !v.iter().any(|(a, _)| *a == id) {
+                v.push((id, None));
+            }
+        }
         for a in crate::bind::ACTIONS {
             let skip = NOT_ON_PAD.contains(&a.id) || ROCKET.iter().any(|r| r.1 == a.id) || v.iter().any(|(id, _)| *id == a.id);
             if !skip {
@@ -222,9 +228,14 @@ fn default_of(id: &str) -> Option<Chord> {
 pub enum Does {
     Key(KeyCode),
     View(View),
+    /// the virtual cursor on or off.
+    Cursor,
 }
 
 pub fn does(id: &str, rocket: bool) -> Option<Does> {
+    if id == "virtual_cursor" {
+        return Some(Does::Cursor);
+    }
     if let Some((_, v)) = VIEWS.iter().find(|(v, _)| *v == id) {
         return Some(Does::View(*v));
     }
@@ -241,6 +252,7 @@ pub fn label(id: &str) -> &'static str {
         "view_left" => t!("gamepad.look_left"),
         "view_right" => t!("gamepad.look_right"),
         "view_reset" => t!("gamepad.reset_the_view"),
+        "virtual_cursor" => t!("gamepad.virtual_cursor"),
         "ap" => t!("gamepad.autopilot_rocket_autoland"),
         "master_arm" => t!("gamepad.master_arm_rocket_engines"),
         "target_lock" => t!("gamepad.lock_target_rocket_staging"),

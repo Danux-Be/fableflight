@@ -505,13 +505,17 @@ impl Game {
         self.mission = Some(run);
     }
 
-    /// the mission card: what it is, the steps done and the one to do, and the result at the end.
+    /// the mission card while it runs: what it is, and the step to do now.
+    /// when it is over the result screen takes its place.
     pub(crate) fn mission_card(&mut self, ctx: &egui::Context) {
         let Some(run) = self.mission.as_ref() else { return };
+        if run.done || run.failed.is_some() {
+            self.mission_result(ctx);
+            return;
+        }
         let mut close = false;
-        let mut again = false;
         let m = run.m;
-        let (step, n, done, failed, rating) = (run.step, m.steps.len(), run.done, run.failed.clone(), run.rating);
+        let (step, n) = (run.step, m.steps.len());
         let top = if self.hud_on() { flightui::right_top(ctx) } else { 24.0 };
         egui::Area::new(egui::Id::unique("mission_card")).anchor(egui::Align2::RIGHT_TOP, [-14.0, top]).show(ctx, |ui| {
             flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(16, 12)), |ui| {
@@ -520,29 +524,70 @@ impl Game {
                 // the title, and the step it is on beside it.
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tr_en(m.title)).font(menu::semibold(16.0)).color(Color32::WHITE));
-                    if !done && failed.is_none() {
-                        menu::at_right(ui, "mission_step", |ui| {
-                            ui.label(RichText::new(format!("{} / {n}", step + 1)).font(menu::label()).color(flightui::SOFT));
-                        });
-                    }
+                    menu::at_right(ui, "mission_step", |ui| {
+                        ui.label(RichText::new(format!("{} / {n}", step + 1)).font(menu::label()).color(flightui::SOFT));
+                    });
                 });
                 ui.add_space(4.0);
-                if let Some(why) = &failed {
-                    result_line(ui, tr_en("Not passed"), menu::BAD);
-                    ui.add(egui::Label::new(RichText::new(why).font(menu::body()).color(menu::TEXT)).wrap());
-                } else if done {
-                    result_line(ui, if m.cat == Cat::Exam { tr_en("Passed") } else { tr_en("Complete") }, menu::OK);
-                } else if let Some(s) = m.steps.get(step) {
+                if let Some(s) = m.steps.get(step) {
                     // only the step to do now.
                     ui.add(egui::Label::new(RichText::new(tr_en(s.text)).font(menu::medium(15.0)).color(Color32::WHITE)).wrap());
                     self.step_controls(ui, s.does);
                     ui.add_space(6.0);
                     flightui::meter(ui, step as f32 / n.max(1) as f32, flightui::LIT);
                 }
+                ui.add_space(6.0);
+                if flightui::text_link(ui, tr_en("Abandon")).clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close {
+            self.end_mission();
+        }
+    }
+
+    /// the end of a lesson, checkride or mission, in the middle of the view:
+    /// passed or not, the landing's marks, and what next. passed: the next
+    /// lesson (or keep flying), fly it again, or back to the menu it came
+    /// from; not passed: try again, back to the menu, or keep flying.
+    fn mission_result(&mut self, ctx: &egui::Context) {
+        let Some(run) = self.mission.as_ref() else { return };
+        let (m, failed, rating, career) = (run.m, run.failed.clone(), run.rating, run.career);
+        let next = if failed.is_none() { next_lesson(m) } else { None };
+        #[derive(Clone, Copy)]
+        enum Go {
+            Next(&'static Mission),
+            Again,
+            Menu,
+            Fly,
+        }
+        let mut go = None;
+        let screen = ctx.content_rect();
+        egui::Area::new(egui::Id::unique("mission_result")).order(egui::Order::Foreground).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+            ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::unique("mission_result_dim"))).rect_filled(screen, 0.0, Color32::from_black_alpha(120));
+            flightui::panel(ui, flightui::glass().inner_margin(egui::Margin::symmetric(28, 24)), |ui| {
+                ui.set_width(380.0);
+                ui.spacing_mut().item_spacing.y = 6.0;
+                let kind = match m.cat {
+                    Cat::Tutorial => tr_en("Tutorial"),
+                    Cat::Exam => tr_en("Checkride"),
+                    Cat::Mission => tr_en("Mission"),
+                };
+                ui.label(RichText::new(kind.to_uppercase()).font(menu::bold(13.0)).color(flightui::SOFT));
+                ui.label(RichText::new(tr_en(m.title)).font(menu::semibold(18.0)).color(Color32::WHITE));
+                ui.add_space(6.0);
+                match &failed {
+                    Some(why) => {
+                        result_line(ui, tr_en("Not passed"), menu::BAD);
+                        ui.add(egui::Label::new(RichText::new(why).font(menu::body()).color(menu::TEXT)).wrap());
+                    }
+                    None => result_line(ui, if m.cat == Cat::Exam { tr_en("Passed") } else { tr_en("Complete") }, menu::OK),
+                }
                 if let Some(r) = rating {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(format!("{}", r.score)).font(menu::bold(30.0)).color(if r.score >= 75 { menu::ACCENT } else { Color32::WHITE }));
+                        ui.label(RichText::new(format!("{}", r.score)).font(menu::bold(34.0)).color(if r.score >= 75 { menu::ACCENT } else { Color32::WHITE }));
                         ui.vertical(|ui| {
                             ui.label(RichText::new(format!("{} {}", tr_en("Landing"), r.grade())).font(menu::semibold(14.0)).color(Color32::WHITE));
                             let along = if r.on_runway { format!("{:.0} m {}", r.along, tr_en("past the threshold")) } else { tr_en("off the runway").into() };
@@ -554,27 +599,70 @@ impl Game {
                         flightui::note(ui, &format!("{} {}", tr_en("Pass mark"), pass_mark(m)));
                     }
                 }
-                ui.add_space(6.0);
-                if done || failed.is_some() {
-                    ui.horizontal(|ui| {
-                        if flightui::key(ui, tr_en("Try again"), false, 100.0, 28.0).clicked() {
-                            again = true;
-                        }
-                        if flightui::key(ui, tr_en("Close"), false, 80.0, 28.0).clicked() {
-                            close = true;
-                        }
-                    });
-                } else if flightui::text_link(ui, tr_en("Abandon")).clicked() {
-                    close = true;
+                ui.add_space(14.0);
+                ui.spacing_mut().item_spacing.y = 8.0;
+                // the first is what most would do next, and where the pad starts.
+                let mut opts: Vec<(String, Go)> = Vec::new();
+                match (&failed, next) {
+                    (None, Some(n)) => opts.push((format!("{}: {}", tr_en("Next"), tr_en(n.title)), Go::Next(n))),
+                    (None, None) => opts.push((tr_en("Keep flying").to_string(), Go::Fly)),
+                    (Some(_), _) => opts.push((tr_en("Try again").to_string(), Go::Again)),
+                }
+                if failed.is_none() {
+                    opts.push((tr_en("Fly it again").to_string(), Go::Again));
+                }
+                opts.push((tr_en("Back to the menu").to_string(), Go::Menu));
+                if failed.is_some() {
+                    opts.push((tr_en("Keep flying").to_string(), Go::Fly));
+                }
+                for (k, (text, g)) in opts.iter().enumerate() {
+                    let r = menu::big_button(ui, text, crate::padui::Hint::None, k == 0, false);
+                    if k == 0 && crate::padui::active() && ui.ctx().memory(|mem| mem.focused()).is_none() {
+                        r.request_focus();
+                    }
+                    if r.clicked() {
+                        go = Some(*g);
+                    }
                 }
             });
         });
-        if again {
-            self.start_mission(m);
-        } else if close {
-            self.end_mission();
+        match go {
+            Some(Go::Next(n)) => {
+                let career = self.mission.as_ref().is_some_and(|r| r.career);
+                self.start_mission(n);
+                if let Some(r) = self.mission.as_mut() {
+                    r.career = career;
+                }
+            }
+            Some(Go::Again) => {
+                self.start_mission(m);
+                if let Some(r) = self.mission.as_mut() {
+                    r.career = career;
+                }
+            }
+            Some(Go::Menu) => {
+                self.to_globe();
+                self.menu.screen = if career { crate::menu::Screen::Career } else { crate::menu::Screen::Activities };
+                self.pad_home = true;
+            }
+            Some(Go::Fly) => self.end_mission(),
+            None => {}
         }
     }
+
+    /// the result screen is up: the pad's a, b and d-pad work it, not the aircraft.
+    pub(crate) fn mission_over(&self) -> bool {
+        self.mission.as_ref().is_some_and(|r| r.done || r.failed.is_some())
+    }
+}
+
+/// the lesson after this one, for tutorials, which go in order.
+fn next_lesson(m: &Mission) -> Option<&'static Mission> {
+    if m.cat != Cat::Tutorial {
+        return None;
+    }
+    let i = ALL.iter().position(|x| x.id == m.id)?;
+    ALL.get(i + 1).filter(|n| n.cat == Cat::Tutorial)
 }
 
 /// a big word for how it ended.
@@ -588,13 +676,35 @@ pub fn tick(p: &egui::Painter, c: egui::Pos2, s: f32, col: Color32) {
 }
 
 impl Game {
+    /// how the virtual cursor works a control in this cockpit: r3 for the
+    /// cursor, then a on a switch or a bumper on a knob (none: no such control).
+    fn by_cursor(&self, id: &str) -> Option<String> {
+        let cursor = crate::padmap::spec_of("virtual_cursor");
+        if cursor.is_empty() {
+            return None;
+        }
+        let then = self.cockpit_controls.iter().find_map(|(h, _)| match h.wheel {
+            Some((up, _)) if up == id => Some("RB"),
+            Some((_, down)) if down == id => Some("LB"),
+            _ if h.click == Some(id) || h.hold == Some(id) => Some("A"),
+            _ => None,
+        })?;
+        Some(format!("{cursor} › {then}"))
+    }
+
     /// the controls a step uses, as what is in hand works them: the pad's
-    /// buttons and sticks while a pad is in use (the key where the pad has
-    /// none), else the keys as bound now.
+    /// buttons and sticks while a pad is in use, or for a control the pad has
+    /// no button for, the virtual cursor onto it in the cockpit (r3, then a
+    /// or a bumper); else the keys as bound now.
     fn step_controls(&self, ui: &mut egui::Ui, does: &[&'static str]) {
         let mut shown: Vec<(bool, String)> = Vec::new();
         for id in does {
-            let pad = if crate::padui::active() { crate::padmap::spec_for(id) } else { String::new() };
+            let pad = if crate::padui::active() {
+                let s = crate::padmap::spec_for(id);
+                if s.is_empty() { self.by_cursor(id).unwrap_or_default() } else { s }
+            } else {
+                String::new()
+            };
             let c = if !pad.is_empty() {
                 (true, pad)
             } else if let Some(k) = crate::bind::ACTIONS.iter().find(|a| a.id == *id).and_then(|a| self.binds.key_of(a)) {
