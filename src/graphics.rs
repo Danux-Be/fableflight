@@ -276,6 +276,24 @@ impl Graphics {
                 }
             });
         });
+        let n = crate::balloons::cap(self.balloons);
+        let balloons = if n > 0 { t!("graphics.balloons_caps", n) } else { t!("graphics.no_balloons").to_string() };
+        row(ui, t!("graphics.balloons"), &help(t!("graphics.balloons_hint"), balloons), |ui| {
+            menu::segments(ui, |ui| {
+                for l in [Level::Off, Level::Low, Level::Medium, Level::High] {
+                    menu::seg(ui, &mut self.balloons, l, l.label());
+                }
+            });
+        });
+        let km = crate::turbines::reach(self.turbines) / 1000.0;
+        let turbines = if km > 0.0 { t!("graphics.turbines_caps", km) } else { t!("graphics.no_turbines").to_string() };
+        row(ui, t!("graphics.turbines"), &help(t!("graphics.turbines_hint"), turbines), |ui| {
+            menu::segments(ui, |ui| {
+                for l in [Level::Off, Level::Low, Level::Medium, Level::High] {
+                    menu::seg(ui, &mut self.turbines, l, l.label());
+                }
+            });
+        });
         row_help(ui, t!("graphics.ambient_occlusion"), t!("graphics.ambient_occlusion_hint"), |ui| {
             menu::switch(ui, &mut self.ao);
         });
