@@ -62,6 +62,9 @@ pub struct Target {
     pub blowing: f32,
     /// surface relative humidity (0..1) from temperature and dew point when reported
     pub humidity: Option<f32>,
+    /// the surface temperature brought down to sea level at the standard
+    /// lapse rate, off the standard 15 c (k; None: not reported)
+    pub isa_dev: Option<f64>,
     /// what it came from, for the weather panel: "EBBR" or "Open-Meteo",
     /// and the report itself (the raw METAR)
     pub station: String,
@@ -117,6 +120,7 @@ impl LiveWx {
             }
             // Hand-set weather: the standard atmosphere.
             wx.qnh = 1013.25;
+            wx.isa_dev = 0.0;
             wx.freezing = None;
             wx.blowing = 0.0;
             wx.humidity = None;
@@ -195,6 +199,9 @@ impl LiveWx {
             wx.qnh += (q - wx.qnh) * k;
         }
         wx.blowing = t.blowing;
+        if let Some(d) = t.isa_dev {
+            wx.isa_dev += (d - wx.isa_dev) * k;
+        }
         wx.humidity = match (wx.humidity, t.humidity) {
             (Some(a), Some(b)) => Some(a + (b - a) * k as f32),
             (_, b) => b,
@@ -565,6 +572,7 @@ fn from_metar(m: &serde_json::Value) -> Option<Target> {
         freezing: freezing_for(m["temp"].as_f64().filter(|t| (-80.0..60.0).contains(t)).map(|t| crate::snow::freezing_level(t, elev)), elev, p.snow),
         blowing: p.blowing,
         humidity: rh_from_td(m["temp"].as_f64(), m["dewp"].as_f64()),
+        isa_dev: isa_dev(m["temp"].as_f64(), elev),
         station,
         raw,
     })
@@ -583,6 +591,11 @@ struct Precip {
     snow: Option<f32>,
     /// snow blown up off the ground: BLSN 1, DRSN (drifting, low) 0.5
     blowing: f32,
+}
+
+/// a surface temperature (c) at `elev` (m) as the sea-level temperature off standard (k).
+fn isa_dev(temp_c: Option<f64>, elev: f64) -> Option<f64> {
+    temp_c.filter(|t| (-80.0..60.0).contains(t)).map(|t| t + crate::snow::LAPSE * elev - 15.0)
 }
 
 /// Surface relative humidity (0..1) from temperature and dew point (°C) via Magnus-Tetens.
@@ -851,6 +864,7 @@ fn from_open_meteo(j: &serde_json::Value) -> Option<Target> {
         freezing: freezing_for(f("temperature_2m").filter(|t| (-80.0..60.0).contains(t)).map(|t| crate::snow::freezing_level(t, elev)), elev, snow),
         blowing: 0.0,
         humidity: rh_from_td(f("temperature_2m"), f("dew_point_2m")),
+        isa_dev: isa_dev(f("temperature_2m"), elev),
         station: "Open-Meteo".into(),
         raw: String::new(),
     })

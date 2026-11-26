@@ -278,6 +278,8 @@ pub static SPEC: Spec = Spec {
     approach: (34.0, 2),
     cam_dist: 13.0,
     shadow_r: 5.2,
+    rotor: None,
+    floats: false,
     sound: Sound::Piston,
 };
 
