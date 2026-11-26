@@ -556,6 +556,53 @@ impl Game {
                 ui.add_enabled(self.sound_on, egui::Slider::new(&mut self.volume, 0.0..=1.0).custom_formatter(|v, _| format!("{:.0}%", v * 100.0)));
             });
         });
+        // the controllers heard on the radio, with the voice pack downloaded on request (atc/install.rs).
+        card(ui, t!("settings.atc"), |ui| {
+            row(ui, t!("settings.atc_voices"), t!("settings.atc_voices_hint"), |ui| {
+                menu::switch(ui, &mut self.atc_voices);
+            });
+            // a bluetooth headset drops to call quality while its own mic is open: another mic keeps it in music mode.
+            row_help(ui, t!("settings.atc_microphone"), t!("settings.atc_microphone_hint"), |ui| {
+                let mics = crate::atc::listen::microphones();
+                let default = t!("settings.atc_microphone_default").to_string();
+                let shown = if self.atc_mic.is_empty() { default.clone() } else { self.atc_mic.clone() };
+                let before = self.atc_mic.clone();
+                egui::ComboBox::from_id_salt("atc_mic").width(260.0).selected_text(egui::RichText::new(shown).font(menu::label())).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.atc_mic, String::new(), default);
+                    for m in &mics {
+                        ui.selectable_value(&mut self.atc_mic, m.clone(), m);
+                    }
+                });
+                if self.atc_mic != before {
+                    crate::atc::listen::set_microphone(&self.atc_mic);
+                }
+            });
+            row_help(ui, t!("settings.atc_voice_pack"), t!("settings.atc_voices_about"), |ui| {
+                use crate::atc::install::{self, State};
+                let caption = |ui: &mut Ui, s: &str| {
+                    ui.label(RichText::new(s).font(menu::caption()).color(DIM));
+                };
+                match install::state() {
+                    State::Unsupported => caption(ui, t!("settings.atc_voices_unsupported")),
+                    State::NotInstalled | State::Failed(_) => {
+                        if menu::button(ui, &t!("settings.atc_voices_download", crate::bytes(install::download_size()))).clicked() {
+                            install::install();
+                        }
+                        if let State::Failed(e) = install::state() {
+                            caption(ui, &t!("settings.atc_voices_failed", e));
+                        }
+                    }
+                    State::Downloading(a, b) => {
+                        ui.add(egui::ProgressBar::new(a as f32 / b.max(1) as f32).desired_width(200.0).text(format!("{} / {}", crate::bytes(a), crate::bytes(b))));
+                    }
+                    State::Installed => {
+                        if menu::button(ui, t!("settings.atc_voices_remove")).clicked() {
+                            install::remove();
+                        }
+                    }
+                }
+            });
+        });
     }
 
     fn set_camera(&mut self, ui: &mut Ui, in_flight: bool) {

@@ -168,7 +168,8 @@ const LAYOUT: &[(&str, Chord)] = {
         ("gear", b(L3)),
         ("virtual_cursor", b(R3)),
         ("view_ahead", b(Up)),
-        ("view_down", b(Down)),
+        // held while speaking to atc (atc.rs), as caps lock is on the keys.
+        ("atc_talk", b(Down)),
         ("view_left", b(Left)),
         ("view_right", b(Right)),
         ("camera", b(View)),
@@ -891,7 +892,9 @@ mod tests {
         assert_eq!(r[0], ("LS".to_string(), "pitch and roll"));
         assert!(r.contains(&("A / B".to_string(), "throttle up / down (hold)")));
         assert!(r.contains(&("Y + Up / Down".to_string(), "trim nose down / up")));
-        assert!(r.contains(&("Dpad".to_string(), "quick views")));
+        // the d-pad: three quick views, and down held to talk to atc.
+        assert_eq!(m.chord("atc_talk"), Some(b(Down)));
+        assert!(r.iter().any(|x| x.0 == "Down") && r.iter().any(|x| x.0 == "Up") && !r.iter().any(|x| x.0 == "Dpad"));
         assert_eq!(does("tail_view", false), Some(Does::Key(KeyCode::F6)));
     }
 

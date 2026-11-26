@@ -90,6 +90,9 @@ pub struct Weather {
     /// surface relative humidity (0..1) from live weather's temperature and
     /// dew point when available; None with hand-set weather
     pub humidity: Option<f32>,
+    /// how much warmer than the standard atmosphere the day is at sea level
+    /// (k), from the real weather's surface temperature; 0 with hand-set weather
+    pub isa_dev: f64,
 }
 
 /// What kind of convective cell: a shower (towering cumulus or a small
@@ -339,7 +342,7 @@ fn sites(q: DVec3, grid: f64, range: f64, mut f: impl FnMut(DVec3, f64, u32)) {
 impl Weather {
     pub fn new(clouds: f32) -> Self {
         // A light west-south-westerly, as the smoke always drifted before there was a slider for it.
-        Self { clouds, cloud_base: 1500.0, cloud_depth: 4500.0, storms: 0.2, alto: 0.25, haze: 1.0, rain: 0.0, rain_set: None, deck: 0.0, deck_at: None, deck_ground: None, deck_place: None, deck_prev: None, deck_fade: 0.0, wind: 4.0, wind_from: 248.0, gusts: 0.15, aloft: Vec::new(), time_rate: 1.0, moon_age: 11.5, cloud_off: DVec3::ZERO, sun: 0.5, thermal_off: DVec3::ZERO, cells: Vec::new(), placed: Vec::new(), live_cells: Vec::new(), radar_cover: None, deck_goal: None, deck_tau: 6.0, live: false, live_station: String::new(), live_raw: String::new(), real_time: false, showers_only: false, qnh: 1013.25, freezing: None, blowing: 0.0, humidity: None }
+        Self { clouds, cloud_base: 1500.0, cloud_depth: 4500.0, storms: 0.2, alto: 0.25, haze: 1.0, rain: 0.0, rain_set: None, deck: 0.0, deck_at: None, deck_ground: None, deck_place: None, deck_prev: None, deck_fade: 0.0, wind: 4.0, wind_from: 248.0, gusts: 0.15, aloft: Vec::new(), time_rate: 1.0, moon_age: 11.5, cloud_off: DVec3::ZERO, sun: 0.5, thermal_off: DVec3::ZERO, cells: Vec::new(), placed: Vec::new(), live_cells: Vec::new(), radar_cover: None, deck_goal: None, deck_tau: 6.0, live: false, live_station: String::new(), live_raw: String::new(), real_time: false, showers_only: false, qnh: 1013.25, freezing: None, blowing: 0.0, humidity: None, isa_dev: 0.0 }
     }
 
     /// The rain deck's mean base and top, metres above sea level: the heavier
@@ -993,7 +996,7 @@ impl Weather {
         let top = self.mixed_top();
         let convt = 1.1 * conv * (1.0 - smoothstep(0.85 * top, 1.15 * top, agl)) * smoothstep(0.0, 60.0, agl).max(0.3);
         // In the cloud layer itself (strongest where it is cumulus-like rather than a flat deck).
-        let (_, _, alt) = geo::pos_to_lla(pos);
+        let (lat, _, alt) = geo::pos_to_lla(pos);
         let (base, ctop) = (self.base() as f64, (self.base() + self.depth()) as f64);
         let inside = smoothstep(base - 150.0, base + 100.0, alt) * (1.0 - smoothstep(ctop - 100.0, ctop + 200.0, alt));
         let cloud = inside * self.clouds as f64 * (0.7 + 0.8 * self.convection() + 0.6 * self.storms as f64);
@@ -1009,7 +1012,8 @@ impl Weather {
         let st = crate::storm::local(self, pos, agl, t);
         let storm = st.sigma;
         let draft = st.draft;
-        let rest = convt * convt + cloud * cloud + deck * deck + storm * storm + background * background;
+        let cat = self.clear_air(pos, lat, alt);
+        let rest = convt * convt + cloud * cloud + deck * deck + storm * storm + background * background + cat * cat;
         let sigma_w = (mech * mech + rest).sqrt().min(13.0);
         // Near the ground the eddies are as small as the height and the horizontal
         // gusts larger than the vertical; aloft they are a few hundred metres across.
@@ -1020,6 +1024,30 @@ impl Weather {
         // out sideways like that; a storm's are as strong across as up.)
         let sigma_h = (mech * mech / k.powf(0.8).clamp(0.25, 1.0) + rest).sqrt().min(13.0);
         Air { sigma_w, sigma_h, len_w, len_h, draft: self.thermal(pos, agl, t) * sunlit * if water { 0.2 } else { 1.0 } + draft, gust: st.gust }
+    }
+
+    /// clear air turbulence (sigma, m/s): where the wind changes fast with
+    /// height aloft, on the flanks of the jet stream, in patches tens of
+    /// kilometres long and a few hundred metres deep. light from about 4 kt per
+    /// 1000 ft of shear, moderate to severe past 8 (the vertical wind shear
+    /// rule of thumb forecasters use, Ellrod and Knapp 1992).
+    pub fn clear_air(&self, pos: DVec3, lat: f64, alt: f64) -> f64 {
+        if !(4_500.0..16_000.0).contains(&alt) {
+            return 0.0;
+        }
+        let wind = |a: f64| {
+            let (v, from) = self.profile(lat, a, a);
+            let r = from.to_radians();
+            DVec2::new(r.sin(), r.cos()) * v
+        };
+        let shear = (wind(alt + 300.0) - wind(alt - 300.0)).length() / 600.0;
+        let strength = smoothstep(0.0065, 0.016, shear);
+        if strength <= 0.0 {
+            return 0.0;
+        }
+        // patches: a slow lattice noise, flattened (wide and shallow).
+        let patch = smoothstep(0.45, 0.75, value_noise(pos / 45_000.0 + DVec3::Y * (alt / 700.0)));
+        4.5 * strength * patch
     }
 
     /// the flight card's weather: real weather and time, the presets, then the day, wind and sky in tiles.
@@ -1330,6 +1358,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn clear_air_turbulence_rides_the_jet_streams_shear() {
+        let mut wx = Weather::new(0.1);
+        let at = |lat: f64, lon: f64, alt: f64| geo::lla_to_pos(lat.to_radians(), lon.to_radians(), alt);
+        let lat45 = 45f64.to_radians();
+        // no reported jet: the gentle default profile has no shear to speak of.
+        let calm = (0..200).map(|i| wx.clear_air(at(45.0, i as f64 * 0.3, 9_800.0), lat45, 9_800.0)).fold(0.0, f64::max);
+        assert_eq!(calm, 0.0);
+        // a jet of 70 m/s at 250 hpa over 35 m/s at 300 hpa: patches of it, not everywhere.
+        wx.aloft = vec![Aloft { alt: 1500.0, speed: 10.0, from: 260.0 }, Aloft { alt: 5600.0, speed: 25.0, from: 270.0 }, Aloft { alt: 9200.0, speed: 35.0, from: 270.0 }, Aloft { alt: 10400.0, speed: 70.0, from: 270.0 }];
+        let s: Vec<f64> = (0..400).map(|i| wx.clear_air(at(45.0, i as f64 * 0.05, 9_800.0), lat45, 9_800.0)).collect();
+        let rough = s.iter().filter(|x| **x > 0.5).count();
+        assert!(rough > 20 && rough < 380, "rough in {rough} of 400");
+        assert!(s.iter().all(|x| *x <= 4.5));
+        // down low and far above, none.
+        assert_eq!(wx.clear_air(at(45.0, 0.0, 3_000.0), lat45, 3_000.0), 0.0);
+        // and it reaches the airframe.
+        let i = s.iter().position(|x| *x > 1.5).expect("a rough patch");
+        let p = at(45.0, i as f64 * 0.05, 9_800.0);
+        let rough = wx.air(p, 9_000.0, 0.0, false).sigma_w;
+        wx.aloft.clear();
+        assert!(rough > wx.air(p, 9_000.0, 0.0, false).sigma_w + 1.0);
+    }
+
+    #[test]
     fn the_wind_profile_is_continuous_veers_and_shears_with_stability() {
         let lat = 45f64.to_radians();
         for (sun, wind) in [(0.9, 5.0), (-0.3, 5.0), (0.5, 14.0), (-0.3, 0.0)] {
@@ -1626,5 +1678,3 @@ mod tests {
         assert!(hi > 1.0 && lo < -0.2, "{lo} {hi}");
     }
 }
-
-

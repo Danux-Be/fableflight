@@ -940,6 +940,7 @@ pub const CONTROLS: &[(&str, &[(&str, &str)])] = &[
         ("[ / ]", "OBS course left / right"),
         ("X", "altimeter to the QNH"),
         (".", "parking brake"),
+        ("Caps Lock", "push to talk to atc (hold)"),
     ]),
     ("VIEW", &[
         ("C", "chase / cockpit camera"),

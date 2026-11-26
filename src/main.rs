@@ -495,7 +495,7 @@ struct Args {
     mcp_port: u16,
 }
 
-const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures|logbook[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--simbrief USER_OR_ID] [--challenge first|crosswind|night|mountain|rain|short|jumbo|paro] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--framegen-install] [--full-map] [--no-scenery] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
+const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures|logbook[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--simbrief USER_OR_ID] [--challenge first|crosswind|night|mountain|rain|short|jumbo|paro] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--atc-install] [--framegen-install] [--full-map] [--no-scenery] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
 
 fn parse_args() -> Args {
     let v: Vec<String> = std::env::args().skip(1).collect();
@@ -1439,6 +1439,9 @@ struct Game {
     arcade: bool,
     /// a building crashed into always comes down whole (settings.rs)
     topple_buildings: bool,
+    atc_voices: bool,
+    /// the microphone push to talk records (empty: the system's default).
+    atc_mic: String,
     goto_open: bool,
     goto_text: String,
     goto_rx: Option<std::sync::mpsc::Receiver<Option<(f64, f64, f64, String)>>>,
@@ -1701,6 +1704,7 @@ struct Game {
     /// the checklists' ticks (checklist.rs), and the controllers (atc.rs)
     checks: checklist::Checklists,
     atc: atc::Atc,
+    ptt: atc::Ptt,
     /// when the next word on the ice may go out (icing.rs)
     ice_note_t: f64,
     /// the flight as recorded, the replay being watched (replay.rs), and the name a save is to get
@@ -2041,7 +2045,7 @@ impl Game {
             gkey: src.google.key(), gkey_show: false, gm_logo: None, stills: std::collections::HashMap::new(), window, r, world, src, spec, model, piece_mesh, group_mesh, piece_cut, piece_inner, group_pivots, hangar: Vec::new(), building: Vec::new(), crashed: false, crash: None, crash_real: 0.0, egui_ctx, egui_state, keys: HashSet::new(), drag: false, lean_drag: None, last_cursor: None,
             minimap: minimap::Minimap::new(&prefs),
             cam_yaw: cy.to_radians(), cam_pitch: cp, cam_dist: cd, cam_mode: args.start_view.unwrap_or(prefs.cam_mode), view_before_tail: 0, cam_pos, cam_dir: -plane.forward(), cam_look: plane.pos, orbit: 0.0, cam_rise: 0.0, cam_clear_t: 0.0, cam_ang: None, cam_hold: 0.0,
-            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, shown_at: 0, dyn_k: 1.0, dyn_ms: 0.0, dyn_seen: 0, dyn_skip: 0, dyn_t: 0.0, gfx_eff: gfx, dynq: dynamic::Dynamic::default(), storms_seen: false, topple_buildings: prefs.topple_buildings, casc_keep: [([[0.0; 4]; 4], DVec3::ZERO); 2], casc_ok: 0, casc_res: 0, dyn_cli: args.dynamic.is_some(), prev_plane: Mat4::IDENTITY, plane_box, lamps,
+            utc: (args.hour - lon / 15.0).rem_euclid(24.0), doy: args.day.unwrap_or(doy), wx, time: 0.0, real: 0.0, last: Instant::now(), acc: 0.0, wave_off: DVec2::ZERO, shore: shore::Shore::default(), ocean_off: DVec2::ZERO, prev_cam: cam_pos, prev_vp: [[0.0; 4]; 4], gfx, gfx_applied: None, shown_at: 0, dyn_k: 1.0, dyn_ms: 0.0, dyn_seen: 0, dyn_skip: 0, dyn_t: 0.0, gfx_eff: gfx, dynq: dynamic::Dynamic::default(), storms_seen: false, topple_buildings: prefs.topple_buildings, atc_voices: prefs.atc_voices, atc_mic: prefs.atc_mic.clone(), casc_keep: [([[0.0; 4]; 4], DVec3::ZERO); 2], casc_ok: 0, casc_res: 0, dyn_cli: args.dynamic.is_some(), prev_plane: Mat4::IDENTITY, plane_box, lamps,
             frame: 0, fps: 60.0, fps_log: (args.fps_log, Instant::now(), 0, 0.0), paused: false, show_help: false, show_hud: !args.no_hud && prefs.show_hud, hud_cockpit: prefs.hud_cockpit, path_marker: prefs.path_marker, fullscreen: prefs.fullscreen, plan: flightplan::Plan::new(), mouse_yoke: false, yoke: (0.0, 0.0), yoke_thr: 0.0, planner: Default::default(), ap_bar_on: false, warp: 1, ap_alt_seen: (0.0, 0.0), ils_auto: None, prefs_simbrief: prefs.simbrief.clone(), profile: profile::Profile::load(), toasts: Vec::new(), pilot_tab: 0, activity_tab: 0, arcade: args.arcade || prefs.arcade, goto_open: false, goto_text: String::new(), goto_rx: None,
             status, status_until: 8.0, shots: args.shots.clone(), crash_at: args.crash_at, boost_at: args.boost_at, stage_at: args.stage_at, engines: args.engines, hold: args.hold, gilrs: open_gamepads(), pad: Controls::default(), pad_id: None, pad_fixed: Vec::new(), pad_events: Vec::new(), pad_step: None, pad_skip: None, pad_rep: None, pad_home: false, pad_home_age: 0, vcursor: false, vcursor_hold: None, pad_script: pad_script_from_env(), pad_y: false, pad_y_combo: false, pad_held: Vec::new(), pad_note: (String::new(), 0.0), pad_aim: false, pad_live: None, ap: autopilot::Autopilot::default(), ap_off_t: -100.0, ap_script: args.ap_script.clone(), cam_home: (cy.to_radians(), cp), rng: crash::Rng(secs.to_bits() | 1),
             audio: if args.record.is_some() { Some(audio::Audio::offline()) } else if args.mute { None } else { audio::Audio::new() },
@@ -2050,7 +2054,7 @@ impl Game {
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
             start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, n_scenery: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
-            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None, discord_on: prefs.discord, discord: None, discord_since: 0, discord_t: -10.0, ai: Default::default(),
+            airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new), checks: Default::default(), atc: Default::default(), ptt: Default::default(), ice_note_t: 0.0, rec: Default::default(), replay: None, save_name: String::new(), mission: None, ground: Default::default(), stand_start: false, import_path: String::new(), import_note: String::new(), career: career::Career::load(), career_flight: None, discord_on: prefs.discord, discord: None, discord_since: 0, discord_t: -10.0, ai: Default::default(),
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
             live: live::Live::new(prefs.live_traffic),
@@ -2147,6 +2151,8 @@ impl Game {
         if !scripted {
             headtrack::start();
         }
+        // the microphone push to talk records, as chosen.
+        atc::listen::set_microphone(&g.atc_mic);
         if let Some(r) = &args.route {
             let (lat, lon, _) = geo::pos_to_lla(g.plane.pos);
             let here = (lat.to_degrees(), lon.to_degrees());
@@ -2368,7 +2374,7 @@ impl Game {
             // The glass cockpit's engine and air data (b747/deck747.wgsl).
             let (_, _, h) = geo::pos_to_lla(p.pos);
             let mach = p.mach();
-            let oat = 15.0 - 6.5 * h.clamp(0.0, 11000.0) / 1000.0;
+            let oat = plane::atmosphere(h).0 - 273.15;
             let tat = oat + (oat + 273.15) * 0.2 * mach * mach;
             let x = ((p.n1 - 0.2) / 0.82).clamp(0.0, 1.2);
             let running = if p.running { (p.n1 / 0.15).clamp(0.0, 1.0) } else { 0.0 };
@@ -4678,7 +4684,7 @@ impl Game {
         let hdg = p.forward().dot(east).atan2(p.forward().dot(north));
         let mut data = [[0.0; 4]; 12];
         data[0] = [(self.radios.setting(self.wx.qnh) * 0.029529983 * 100.0) as f32,
-            ((h * 3.28084 + (1013.25 - self.wx.qnh) * 27.3) / 100.0) as f32,
+            (plane::pressure_alt(h) * 3.28084 / 100.0) as f32,
             gs as f32, (p.spec.fuel_kg / 0.72 / 3.785 / 2.0) as f32];
         let adf = self.radios.adf.as_ref().and_then(|s| nav::adf_bearing(s, p.pos, hdg.to_degrees())).filter(|_| p.sys.powered());
         data[1] = [self.radios.nav.as_ref().map(|s| s.freq_khz as f32 / 1000.0).unwrap_or(0.0),
@@ -6448,7 +6454,7 @@ impl Game {
 
     /// The settings worth keeping, as they are now.
     fn live_settings(&self) -> settings::Settings {
-        settings::Settings { lang: self.prefs_lang, sound_on: self.sound_on, volume: self.volume, cam_mode: self.cam_mode, cockpit_fov: self.cockpit_fov, look_sens: self.look_sens, invert_look_cockpit: self.invert_look_cockpit, invert_look_outside_x: self.invert_look_outside_x, invert_look_outside_y: self.invert_look_outside_y, show_hud: self.show_hud, hud_cockpit: self.hud_cockpit, path_marker: self.path_marker, minimap: self.minimap.visible, landing_guidance: self.minimap.landing_guidance, arcade: self.arcade, minimap_plan: self.minimap.plan, minimap_heading_up: self.minimap.heading_up, minimap_zoom: self.minimap.zoom, minimap_size: self.minimap.size.x, minimap_height: self.minimap.size.y, map_airports: self.minimap.layers.airports, map_navaids: self.minimap.layers.navaids, taa: self.gfx.taa, fullscreen: self.fullscreen, live_traffic: self.live.enabled(), live_weather: self.challenge.as_ref().map_or(self.wx.live, |a| a.kept.0), real_time: self.challenge.as_ref().map_or(self.wx.real_time, |a| a.kept.1), snow: self.snow, last: self.last_start.clone(), multiplayer: self.mp_on || self.mp_held, mp_server: self.mp_server.clone(), mp_name: self.mp_name.clone(), topple_buildings: self.topple_buildings, discord: self.discord_on, simbrief: self.prefs_simbrief.clone() }
+        settings::Settings { lang: self.prefs_lang, sound_on: self.sound_on, volume: self.volume, cam_mode: self.cam_mode, cockpit_fov: self.cockpit_fov, look_sens: self.look_sens, invert_look_cockpit: self.invert_look_cockpit, invert_look_outside_x: self.invert_look_outside_x, invert_look_outside_y: self.invert_look_outside_y, show_hud: self.show_hud, hud_cockpit: self.hud_cockpit, path_marker: self.path_marker, minimap: self.minimap.visible, landing_guidance: self.minimap.landing_guidance, arcade: self.arcade, minimap_plan: self.minimap.plan, minimap_heading_up: self.minimap.heading_up, minimap_zoom: self.minimap.zoom, minimap_size: self.minimap.size.x, minimap_height: self.minimap.size.y, map_airports: self.minimap.layers.airports, map_navaids: self.minimap.layers.navaids, taa: self.gfx.taa, fullscreen: self.fullscreen, live_traffic: self.live.enabled(), live_weather: self.challenge.as_ref().map_or(self.wx.live, |a| a.kept.0), real_time: self.challenge.as_ref().map_or(self.wx.real_time, |a| a.kept.1), snow: self.snow, last: self.last_start.clone(), multiplayer: self.mp_on || self.mp_held, mp_server: self.mp_server.clone(), mp_name: self.mp_name.clone(), topple_buildings: self.topple_buildings, atc_voices: self.atc_voices, atc_mic: self.atc_mic.clone(), discord: self.discord_on, simbrief: self.prefs_simbrief.clone() }
     }
 
     /// Saves the settings when they have changed (looked at once a second,
@@ -6735,6 +6741,7 @@ impl Game {
             self.wx.step_deck(dt, self.plane.pos, gh);
             self.wx.rain = self.wx.rain_at(self.plane.pos, agl, self.time) as f32;
             self.wx.advance(dt, self.plane.pos);
+            plane::set_air(self.wx.qnh, self.wx.isa_dev);
             // The wakes of the other aircraft about: airport traffic, live traffic and other players.
             if dt > 0.0 {
                 let mut targets = self.live.targets();
@@ -10207,6 +10214,15 @@ fn fly_check(key: Option<&String>) -> i32 {
     let dt = 1.0 / 120.0;
     let kt = |v: f64| v * 1.943_84;
     println!("{}: mass {:.0} kg, cruise {:.0} kt, approach {:.0} kt, vne {:.0} kt", spec.name, spec.mass, kt(spec.cruise), kt(spec.approach.0), kt(spec.vne));
+    // the day's air: `--oat C` (at sea level) and `--qnh HPA`, standard without them.
+    let argv: Vec<String> = std::env::args().collect();
+    let num = |flag: &str| argv.iter().position(|a| a == flag).and_then(|i| argv.get(i + 1)).and_then(|v| v.parse::<f64>().ok());
+    let (oat, qnh) = (num("--oat"), num("--qnh"));
+    if oat.is_some() || qnh.is_some() {
+        let (qnh, dev) = (qnh.unwrap_or(1013.25), oat.map_or(0.0, |t| t - 15.0));
+        plane::set_air(qnh, dev);
+        println!("  air: qnh {qnh:.0} hpa, {dev:+.0} c from standard");
+    }
     let (lat, lon) = (37.6f64, -122.37f64);
     // wings held level; pitch to an attitude (degrees), gently
     let level = |p: &Plane| (p.right().dot(p.pos.normalize()) * 3.0 + p.omega.z * 0.5).clamp(-1.0, 1.0);
@@ -10333,6 +10349,25 @@ fn main() -> anyhow::Result<()> {
         eprintln!();
         match r.and_then(|_| fsr4::verify()) {
             Ok(dir) => println!("installed and verified in {}", dir.display()),
+            Err(e) => {
+                eprintln!("failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        std::process::exit(0);
+    }
+    if argv.iter().any(|a| a == "--atc-install") {
+        // The ATC voice pack (Kokoro and ONNX Runtime), as atc/install.rs fetches it.
+        let last = std::cell::Cell::new(0u64);
+        let r = atc::install::download(&|done, total| {
+            if done >= last.get() + (8 << 20) || done == total {
+                last.set(done);
+                eprint!("\rATC voices: {} / {}", bytes(done), bytes(total));
+            }
+        });
+        eprintln!();
+        match r {
+            Ok(()) => println!("installed in {}", atc::install::dir().unwrap_or_default().display()),
             Err(e) => {
                 eprintln!("failed: {e}");
                 std::process::exit(1);
