@@ -69,6 +69,8 @@ pub enum Goal {
 
 pub struct Step {
     pub text: &'static str,
+    /// the controls it uses (`bind::ACTIONS` ids): the card shows their keys or pad buttons.
+    pub does: &'static [&'static str],
     pub goal: Goal,
 }
 
@@ -89,45 +91,50 @@ pub struct Mission {
 }
 
 const fn st(text: &'static str, goal: Goal) -> Step {
-    Step { text, goal }
+    Step { text, does: &[], goal }
+}
+
+/// a step with the controls it uses.
+const fn sk(text: &'static str, does: &'static [&'static str], goal: Goal) -> Step {
+    Step { text, does, goal }
 }
 
 pub static ALL: &[Mission] = &[
     Mission { id: "t1", cat: Cat::Tutorial, title: "1. First flight", brief: "Take off from Half Moon Bay on the Californian coast, climb out and level off.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 10.0, weather: Some("fair"), cold: false, steps: &[
-        st("Welcome aboard. Release the parking brake with the full stop key (.).", Goal::ParkingBrake(false)),
-        st("Push the throttle all the way in: hold Left Shift until it reads 100 %.", Goal::ThrottleAbove(0.95)),
-        st("Keep straight with the rudder (Q and E). At 55 knots ease the nose up with S.", Goal::Airborne),
-        st("Positive climb: raise the landing gear with L.", Goal::GearUp),
+        sk("Welcome aboard. Release the parking brake.", &["parking_brake"], Goal::ParkingBrake(false)),
+        sk("Push the throttle all the way in, until it reads 100 %.", &["throttle_up"], Goal::ThrottleAbove(0.95)),
+        sk("Keep straight with the rudder. At 55 knots ease the nose up.", &["rudder_left", "pitch_up"], Goal::Airborne),
+        sk("Positive climb: raise the landing gear.", &["gear"], Goal::GearUp),
         st("Climb at about 80 knots to 1,500 feet above the ground.", Goal::AglAbove(1500.0)),
         st("Level off: lower the nose to the horizon and hold it there.", Goal::Level(200.0, 6.0)),
-        st("Set cruise power: bring the throttle back to about 75 % with Left Ctrl.", Goal::ThrottleBelow(0.8)),
-        st("Turn left to a heading of 180 with a gentle bank (A), then roll level.", Goal::Heading(180.0, 10.0)),
+        sk("Set cruise power: bring the throttle back to about 75 %.", &["throttle_down"], Goal::ThrottleBelow(0.8)),
+        sk("Turn left to a heading of 180 with a gentle bank, then roll level.", &["roll_left"], Goal::Heading(180.0, 10.0)),
         st("Well flown. That is the end of the lesson.", Goal::Read(5.0)),
     ] },
     Mission { id: "t2", cat: Cat::Tutorial, title: "2. Landing", brief: "From a long final into Half Moon Bay: hold the glide path and the speed, flare and stop.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Final, hour: 16.0, weather: Some("fair"), cold: false, steps: &[
         st("You are on a 3 degree final, gear down and flaps set. Keep the aiming point steady in the windshield.", Goal::Read(8.0)),
         st("Hold about 70 knots: the throttle sets the glide path, the nose the speed. Down to 200 feet.", Goal::AglBelow(200.0)),
-        st("Over the threshold close the throttle (hold Left Ctrl).", Goal::ThrottleBelow(0.1)),
-        st("Flare: raise the nose gently and let it settle onto the main wheels.", Goal::Landed),
-        st("Brake to a stop with B.", Goal::Stopped),
+        sk("Over the threshold close the throttle.", &["throttle_down"], Goal::ThrottleBelow(0.1)),
+        sk("Flare: raise the nose gently and let it settle onto the main wheels.", &["pitch_up"], Goal::Landed),
+        sk("Brake to a stop.", &["brakes"], Goal::Stopped),
     ] },
     Mission { id: "t3", cat: Cat::Tutorial, title: "3. Engine start", brief: "Start the Cessna from cold and dark, as the checklist has it.", aircraft: "c172", airport: "KHAF", runway: Some("30"), start: Start::Runway, hour: 9.0, weather: Some("clear"), cold: true, steps: &[
-        st("The aircraft is cold and dark. Set the parking brake with the full stop key (.).", Goal::ParkingBrake(true)),
-        st("Battery master on: Insert.", Goal::Master(true)),
-        st("Mixture full rich: Page Up.", Goal::MixtureRich),
-        st("Crack the throttle open: tap Left Shift to about 10 %.", Goal::ThrottleAbove(0.05)),
-        st("Magnetos on: I.", Goal::Ignition(true)),
-        st("Hold the starter (O) until the engine catches.", Goal::Running),
-        st("Running. The checklist (Tab, the clipboard) has the rest before taxi.", Goal::Read(6.0)),
+        sk("The aircraft is cold and dark. Set the parking brake.", &["parking_brake"], Goal::ParkingBrake(true)),
+        sk("Battery master on.", &["master"], Goal::Master(true)),
+        sk("Mixture full rich.", &["mixture_rich"], Goal::MixtureRich),
+        sk("Crack the throttle open to about 10 %.", &["throttle_up"], Goal::ThrottleAbove(0.05)),
+        sk("Magnetos on.", &["ignition"], Goal::Ignition(true)),
+        sk("Hold the starter until the engine catches.", &["starter"], Goal::Running),
+        sk("Running. The checklist in the flight menu (the clipboard) has the rest before taxi.", &["flight_panel"], Goal::Read(6.0)),
     ] },
     Mission { id: "t4", cat: Cat::Tutorial, title: "4. Radio navigation", brief: "Track to a VOR with NAV 1 and the course needle.", aircraft: "c172", airport: "KSFO", runway: None, start: Start::Air { nm: 14.0, bearing: 200.0, ft: 3500.0, kt: 100.0 }, hour: 11.0, weather: Some("fair"), cold: false, steps: &[
-        st("Open the radio page (Tab, then the mast) and tune NAV 1 to the nearest VOR.", Goal::NavTuned),
-        st("Turn the OBS ([ and ]) or press Direct until the needle centres with a TO flag.", Goal::CdiCentred),
+        sk("Open the radio page (the flight menu, then the mast) and tune NAV 1 to the nearest VOR.", &["flight_panel"], Goal::NavTuned),
+        sk("Turn the OBS or press Direct until the needle centres with a TO flag.", &["obs_left", "obs_right"], Goal::CdiCentred),
         st("Fly that course, keeping the needle centred, until the flag turns to FROM over the station.", Goal::NavFrom),
         st("Station passed. You can navigate by radio.", Goal::Read(5.0)),
     ] },
     Mission { id: "t5", cat: Cat::Tutorial, title: "5. Talking to ATC", brief: "From a towered airport: taxi, takeoff and handoff, all on the radio.", aircraft: "c172", airport: "KSQL", runway: None, start: Start::Runway, hour: 12.0, weather: Some("fair"), cold: false, steps: &[
-        st("Open the ATC page (Tab, the headset) and tune the ground frequency from the list.", Goal::ComTuned(atc::Kind::Gnd)),
+        sk("Open the ATC page (the flight menu, the headset) and tune the ground frequency from the list.", &["flight_panel"], Goal::ComTuned(atc::Kind::Gnd)),
         st("Call ground: Request taxi.", Goal::AtcPhase(atc::Phase::Taxi)),
         st("Tune the tower and call: Ready for departure.", Goal::AtcPhase(atc::Phase::Takeoff)),
         st("Cleared for takeoff. Take off.", Goal::Airborne),
@@ -135,12 +142,12 @@ pub static ALL: &[Mission] = &[
         st("That is how a departure works on the radio.", Goal::Read(5.0)),
     ] },
     Mission { id: "t6", cat: Cat::Tutorial, title: "6. Autopilot and ILS", brief: "Let the Gulfstream's autopilot fly the ILS into San Francisco.", aircraft: "g650", airport: "KSFO", runway: Some("28R"), start: Start::Air { nm: 16.0, bearing: 110.0, ft: 4000.0, kt: 180.0 }, hour: 18.0, weather: Some("fair"), cold: false, steps: &[
-        st("Engage the autopilot: F5.", Goal::Autopilot(true)),
-        st("NAV 1 is on the ILS. Arm the approach mode with 9 (APR).", Goal::ApproachArmed),
-        st("Slow down with the autothrottle or the throttle, and lower the gear (L).", Goal::GearDown),
-        st("Flaps down two notches (F) as it slows.", Goal::FlapsAtLeast(2)),
+        sk("Engage the autopilot.", &["ap"], Goal::Autopilot(true)),
+        sk("NAV 1 is on the ILS. Arm the approach mode (APR).", &["ap_apr"], Goal::ApproachArmed),
+        sk("Slow down with the autothrottle or the throttle, and lower the gear.", &["throttle_down", "gear"], Goal::GearDown),
+        sk("Flaps down two notches as it slows.", &["flaps_down"], Goal::FlapsAtLeast(2)),
         st("Wait for the glide slope: the autopilot captures it and starts down.", Goal::GlideslopeCaptured),
-        st("At 200 feet disconnect the autopilot (F5) and land by hand.", Goal::Autopilot(false)),
+        sk("At 200 feet disconnect the autopilot and land by hand.", &["ap"], Goal::Autopilot(false)),
         st("Touch down.", Goal::Landed),
         st("Stop on the runway.", Goal::Stopped),
     ] },
@@ -171,8 +178,8 @@ pub static ALL: &[Mission] = &[
         st("Stop and let your passenger out.", Goal::Stopped),
     ] },
     Mission { id: "m_mach2", cat: Cat::Mission, title: "Mach 2 over the Atlantic", brief: "Out of London in Concorde: climb, light the reheat and go supersonic over the sea.", aircraft: "concorde", airport: "EGLL", runway: Some("27R"), start: Start::Runway, hour: 11.0, weather: Some("fair"), cold: false, steps: &[
-        st("Take off with the reheat lit (throttle past full, or Space).", Goal::Airborne),
-        st("Gear up, nose and visor up (V), climb to 28,000 feet.", Goal::AltAbove(28_000.0)),
+        sk("Take off with the reheat lit: the throttle past full.", &["throttle_up", "boost"], Goal::Airborne),
+        sk("Gear up, nose and visor up, climb to 28,000 feet.", &["gear", "flaps_up"], Goal::AltAbove(28_000.0)),
         st("Over the sea, accelerate through Mach 1 and climb on.", Goal::MachAbove(1.0)),
         st("Cruise climb to 50,000 feet at Mach 2.", Goal::MachAbove(1.95)),
         st("Mach 2: twice the speed of sound, on the edge of space.", Goal::Read(6.0)),
@@ -528,6 +535,7 @@ impl Game {
                 } else if let Some(s) = m.steps.get(step) {
                     // only the step to do now.
                     ui.add(egui::Label::new(RichText::new(tr_en(s.text)).font(menu::medium(15.0)).color(Color32::WHITE)).wrap());
+                    self.step_controls(ui, s.does);
                     ui.add_space(6.0);
                     flightui::meter(ui, step as f32 / n.max(1) as f32, flightui::LIT);
                 }
@@ -579,9 +587,56 @@ pub fn tick(p: &egui::Painter, c: egui::Pos2, s: f32, col: Color32) {
     p.add(egui::Shape::line(vec![c + egui::vec2(-s, 0.0), c + egui::vec2(-s * 0.3, s * 0.7), c + egui::vec2(s, -s * 0.6)], egui::Stroke::new(1.8, col)));
 }
 
+impl Game {
+    /// the controls a step uses, as what is in hand works them: the pad's
+    /// buttons and sticks while a pad is in use (the key where the pad has
+    /// none), else the keys as bound now.
+    fn step_controls(&self, ui: &mut egui::Ui, does: &[&'static str]) {
+        let mut shown: Vec<(bool, String)> = Vec::new();
+        for id in does {
+            let pad = if crate::padui::active() { crate::padmap::spec_for(id) } else { String::new() };
+            let c = if !pad.is_empty() {
+                (true, pad)
+            } else if let Some(k) = crate::bind::ACTIONS.iter().find(|a| a.id == *id).and_then(|a| self.binds.key_of(a)) {
+                (false, crate::bind::key_name(k))
+            } else {
+                continue;
+            };
+            if !shown.contains(&c) {
+                shown.push(c);
+            }
+        }
+        if shown.is_empty() {
+            return;
+        }
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 10.0;
+            for (pad, spec) in &shown {
+                if *pad {
+                    crate::padui::glyphs(ui, spec, 22.0);
+                } else {
+                    menu::key_cap(ui, spec);
+                }
+            }
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_control_a_step_shows_is_an_action() {
+        for m in ALL {
+            for st in m.steps {
+                for id in st.does {
+                    assert!(crate::bind::ACTIONS.iter().any(|a| a.id == *id), "{}: no action {id}", m.id);
+                }
+            }
+        }
+    }
 
     #[test]
     fn every_mission_starts_somewhere_real_in_a_real_aircraft() {

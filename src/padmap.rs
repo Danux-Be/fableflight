@@ -771,6 +771,21 @@ pub fn spec_of(id: &str) -> String {
     NOW.with(|n| n.borrow().chord(id).map(Chord::spec).unwrap_or_default())
 }
 
+/// The same, with the flying keys as the stick that flies them: pitch,
+/// roll and rudder are axes on the pad, not buttons.
+pub fn spec_for(id: &str) -> String {
+    let axis = match id {
+        "pitch_up" | "pitch_down" => Some(PadAxis::Pitch),
+        "roll_left" | "roll_right" => Some(PadAxis::Roll),
+        "rudder_left" | "rudder_right" => Some(PadAxis::Rudder),
+        _ => None,
+    };
+    match axis {
+        Some(a) => NOW.with(|n| n.borrow().axis(a).map(|s| s.stick.spec()).unwrap_or_default()),
+        None => spec_of(id),
+    }
+}
+
 /// Actions shown on one row of the controls list when they sit together
 /// (all with Y, or all without): their buttons joined, and what they do.
 const GROUPS: &[(&[&str], &str)] = &[
