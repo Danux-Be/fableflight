@@ -54,6 +54,8 @@ use std::sync::OnceLock;
 /// The colour schemes, as named in balloons.py.
 pub const SCHEMES: [&str; 8] = ["rainbow", "harlequin", "bands", "chevron", "blocks", "wave", "checks", "stripes"];
 /// The pieces after the envelopes (near, then far), in mesh-id order.
+/// How many meshes the balloons add to the instanced solids.
+pub const N_MESHES: u32 = (2 * SCHEMES.len() + PARTS.len()) as u32;
 const PARTS: [&str; 11] = ["skirt", "wires sport", "wires large", "rig sport", "rig large", "rig far", "flame", "flag fr", "flag be", "flag ch", "flag de"];
 /// First mesh id of the balloons in the instanced-solid library (main.rs `solids`).
 pub const BASE: u32 = crate::birds::BASE + (crate::birds::Kind::ALL.len() * crate::birds::PIECES.len()) as u32;

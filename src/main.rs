@@ -6,6 +6,7 @@ mod approach;
 mod audio;
 mod autopilot;
 mod balloons;
+mod turbines;
 mod birds;
 mod buildings;
 mod aircraft;
@@ -310,6 +311,8 @@ struct Args {
     flocks: Vec<(birds::Kind, f64, f64, Option<f64>)>,
     /// --balloons off|low|medium|high: hot-air balloons for this run (balloons.rs)
     balloons: Option<graphics::Level>,
+    /// --turbines off|low|medium|high: wind turbines for this run (turbines.rs)
+    turbines: Option<graphics::Level>,
     /// --balloons-at KM,BEARING[,N[,AGL]]: a group of balloons up there now
     balloons_at: Option<(f64, f64, u32, Option<f64>)>,
     /// --balloon-view YAW,PITCH,DIST,HEIGHT: the outside camera on the
@@ -451,7 +454,7 @@ struct Args {
     mcp_port: u16,
 }
 
-const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--balloons off|low|medium|high] [--balloons-at KM,BEARING[,N[,AGL_M]]] [--balloon-view YAW,PITCH,DIST,HEIGHT] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--full-map] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--no-scenery] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
+const CLI_USAGE: &str = "fablegame [--version] [--menu | --no-menu] [--menu-screen main|fly|aircraft|settings] [--menu-view LAT,LON,ALT_M] [--hangar mine|download[:FOLDER]] [--place \"city or address\"] [--lat D --lon D] [--alt M | --agl M] [--heading DEG] [--speed KT] [--time HOURS] [--time-rate X] [--day 0..364] [--clouds 0..1] [--storms 0..1] [--alto 0..1] [--wind KT,FROM_DEG] [--haze 0.2..40] [--rain 0..1] [--rain-at KM,BEARING] [--wet 0..1] [--birds off|low|medium|high] [--balloons off|low|medium|high] [--balloons-at KM,BEARING[,N[,AGL_M]]] [--balloon-view YAW,PITCH,DIST,HEIGHT] [--turbines off|low|medium|high] [--flock gull|crow|starling|buzzard|goose,KM[,BEARING[,AGL_M]]] [--snow auto|off|always] [--weather [clear|fair|hazy|overcast|windy|storm]] [--storm-at KM,BEARING[,RADIUS_KM][,shower|thunder|severe|supercell]] [--squall-at KM,BEARING[,LENGTH_KM]] [--strike cg|ic,KM,BEARING@SECONDS] [--flight-menu SECONDS] [--pause-menu flight|places|radio|weather|game|settings[:SECTION]|controls|failures[@SECONDS]] [--settings general|graphics|sound|camera|controls|map] [--airport CODE [--runway 28L] [--approach]] [--route \"KSFO OAK 37.9,-122.1 KSMF\"] [--aircraft KEY] [--max-zoom 8..19] [--cockpit | --tail-view] [--fov DEG] [--windowed | --fullscreen] [--width PX --height PX] [--no-vsync] [--no-taa] [--graphics very-low|low|medium|high|ultra] [--storm-quality low|medium|high|ultra] [--contrails | --no-contrails] [--dynamic FPS] [--render-scale 0.35..2] [--upscaler bilinear|fsr1|fsr3|fsr4] [--fsr4-install] [--headless] [--minimap plan|satellite] [--minimap-up north|heading] [--full-map] [--fps-log] [--bench SECONDS] [--mute] [--lang CODE] [--fuel 0..1] [--cold] [--arcade] [--mcp | --no-mcp] [--mcp-port PORT] [--offline] [--imagery URL_TEMPLATE] [--google | --no-google] [--photoreal | --no-photoreal] [--photo-detail low|medium|high|ultra] [--no-pave] [--google-key KEY] [--hold SECONDS] [--no-scenery] [--livery N] [--still] [--boost-at SECONDS] [--stage-at SECONDS] [--engines GROUP] [--ship] [--damage ...]";
 
 fn parse_args() -> Args {
     let v: Vec<String> = std::env::args().skip(1).collect();
@@ -486,6 +489,7 @@ fn parse_args_from(v: &[String]) -> Result<Args, String> {
         flocks: Vec::new(),
         balloons: None,
         balloons_at: None,
+        turbines: None,
         balloon_view: None,
         squall_at: Vec::new(),
         rain_at: None,
@@ -698,6 +702,10 @@ fn parse_args_from(v: &[String]) -> Result<Args, String> {
             "--balloons" => {
                 let s = req(flag, i)?;
                 a.balloons = Some(graphics::Level::parse(s).ok_or_else(|| format!("{flag}: invalid level '{s}'"))?);
+            }
+            "--turbines" => {
+                let s = req(flag, i)?;
+                a.turbines = Some(graphics::Level::parse(s).ok_or_else(|| format!("{flag}: invalid level '{s}'"))?);
             }
             "--balloon-view" => {
                 let v = req_nums(flag, i, 4, 4)?;
@@ -1517,6 +1525,10 @@ struct Game {
     bird_insts: usize,
     /// hot-air balloons near the camera (balloons.rs), and the setting for this run if given
     balloons: balloons::Balloons,
+    turbines: turbines::Turbines,
+    turbines_level: Option<graphics::Level>,
+    /// the turbines' pieces drawn last frame
+    turbine_insts: usize,
     balloons_level: Option<graphics::Level>,
     balloon_view: Option<[f64; 4]>,
     /// the flown aircraft's shape for bird strikes, and which type it is of
@@ -1788,6 +1800,8 @@ impl Game {
         solids.extend(birds::models().meshes.iter().cloned());
         debug_assert_eq!(solids.len() as u32, balloons::BASE);
         solids.extend(balloons::models().meshes.iter().cloned());
+        debug_assert_eq!(solids.len() as u32, turbines::BASE);
+        solids.extend(turbines::models().meshes.iter().cloned());
         r.set_inst_meshes(&solids);
         r.set_scenery(scenery::packs());
         r.set_people(scenery::people());
@@ -1915,7 +1929,7 @@ impl Game {
             g_slow: 1.0, last_bump: 0.0, was_ground: false, prev_vs: 0.0, prev_gear: plane.gear, prev_flaps: plane.flaps, quit: false,
             mode: if args.menu.unwrap_or(true) { Mode::Menu } else { Mode::Fly }, menu, menu_go: args.menu_go, heading: args.heading.to_radians(), destr: destruct::Destruction::new(secs.to_bits()),
             sheds: damage::Sheds::default(), fx_anchor: plane.pos, fx_shift: DVec3::ZERO, smoke_acc: 0.0, flash: Vec::new(), airport_note: (String::new(), -100.0), weapon_flash: None, kills: Vec::new(), damage_spec: args.damage.clone(), wreck_dirty: false, wreck_t: 0.0, wreck_seen: 0.0,
-            start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, n_scenery: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, balloons: balloons::Balloons::with_forced(args.balloons_at), balloons_level: args.balloons, balloon_view: args.balloon_view, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
+            start_rx: None, loading: None, name_rx: None, last_click: -10.0, n_cars: 0, n_scenery: 0, skyglow: Default::default(), snowmap: Default::default(), snowtrack: Default::default(), birds: birds::Birds::with_flocks(args.flocks.clone()), birds_level: args.birds, contrails: contrails::Contrails::new(), contrail_draw: contrails::DrawData::default(), bird_insts: 0, balloons: balloons::Balloons::with_forced(args.balloons_at), turbines: Default::default(), turbines_level: args.turbines, turbine_insts: 0, balloons_level: args.balloons, balloon_view: args.balloon_view, bird_shape: ("", birds::Shape::default()), gauges: gauges::Gauges::new(&plane, secs.to_bits()), glass, lightning, rain_field: storm::RainField::default(), cam_rain: 0.0, cam_hail: 0.0, snow_field: storm::RainField::default(), cam_snow: start_snow, cam_blow: 0.0, fresh: snow::Fresh::default(), fresh_line: 0.0, storm_adapt: 0.0, city_adapt: 0.0, city_probe: None, plane, weapons,
             airport_rx: None, hold_spot: None, bench: args.bench.map(Bench::new),
             prefs_lang: args.lang.or(prefs.lang),
             prefs_t: 0.0,
@@ -5598,6 +5612,19 @@ impl Game {
 
     /// Flies the hot-air balloons (balloons.rs) of the sites near the camera,
     /// and tears the envelope of any the aircraft goes through.
+    /// The wind turbines near the camera: gathered, stood on their ground.
+    fn step_turbines(&mut self, dt: f64) {
+        let world = &self.world;
+        let ground = |lat: f64, lon: f64| world.ground(lat, lon).map(|g| (g.h, g.water));
+        self.turbines.step(dt, self.prev_cam, self.turbines_level.unwrap_or(self.gfx_eff.turbines), &ground);
+    }
+
+    /// The wind the turbines turn in: at 100 m over the camera.
+    fn turbine_wind(&self, at: DVec3) -> turbines::Wind {
+        let w = self.wx.steady(at, 100.0);
+        turbines::Wind { dir: w, speed: w.length() }
+    }
+
     fn step_balloons(&mut self, dt: f64) {
         let level = self.balloons_level.unwrap_or(self.gfx_eff.balloons);
         let world = &self.world;
@@ -6513,7 +6540,17 @@ impl Game {
             self.acc = (self.acc + dt).min(h * MAX_SUBSTEPS as f64);
             while self.acc >= h && steps < MAX_SUBSTEPS {
                 self.acc -= h;
-                let imp = self.plane.step(h, &c, &self.world);
+                let mut imp = self.plane.step(h, &c, &self.world);
+                // Into a wind turbine's tower or through its rotor: a crash,
+                // as into a building.
+                if imp.is_none() && self.mode == Mode::Fly && !self.crashed && self.turbines.count() > 0 {
+                    let p = self.plane.pos;
+                    let wind = self.turbine_wind(p);
+                    if let Some(at) = self.turbines.hit(p - self.plane.vel * h, p, (self.spec.span as f64 * 0.4).max(3.0), &wind) {
+                        log::info!("flew into a wind turbine");
+                        imp = Some(plane::Impact { pos: at, vel: self.plane.vel, water: false, ground_h: geo::pos_to_lla(at).2, building: None });
+                    }
+                }
                 if self.flight.is_some() {
                     let s = self.log_sample();
                     let events = self.flight.as_mut().map(|f| f.step(s, h)).unwrap_or_default();
@@ -6737,6 +6774,7 @@ impl Game {
                     self.bird_strike(s, &mut femit);
                 }
                 self.step_balloons(dt);
+                self.step_turbines(dt);
             }
         }
         crate::gputime::cpu("sim.destruction+birds");
@@ -7629,6 +7667,10 @@ impl Game {
             self.birds.instances(cam, 2.0 * (fov as f64 * 0.5).tan() / h as f64, &|rel, r| world.in_view(rel, r), &mut insts);
             self.bird_insts = insts.len() - before;
             self.balloons.instances(cam, self.time, &|rel, r| world.in_view(rel, r), &mut insts, &mut people);
+            let wind = self.turbine_wind(cam);
+            let before = insts.len();
+            self.turbines.instances(cam, self.time, self.turbines_level.unwrap_or(self.gfx_eff.turbines), &wind, sun_up < -0.04, &|rel, r| world.in_view(rel, r), &mut insts, &mut air_lights);
+            self.turbine_insts = insts.len() - before;
             self.n_scenery = scenery.len();
             // The apron floodlights are on from dusk to dawn.
             let on = 1.0 - ((sun_up as f32 + 0.08) / 0.18).clamp(0.0, 1.0);
@@ -7723,6 +7765,10 @@ impl Game {
                 log::info!("fps {:.1}  rain {:.2} (glass {:.2}, wet {:.2}, hail {:.2})  sigma {:.2} draft {:.1}  birds {} in {} flocks ({} drawn, nearest {:.0} m)  scenery {}", self.fps, self.cam_rain, self.wx.rain, self.glass.wet, self.cam_hail, self.plane.air.sigma_w, self.plane.air.draft, self.birds.count(), self.birds.flocks.len(), self.bird_insts, self.birds.nearest(self.prev_cam), scenery.len());
                 if self.balloons.count() > 0 {
                     log::info!("balloons {} (nearest {:.0} m, {} burners lit near)", self.balloons.count(), self.balloons.nearest(self.prev_cam), self.balloons.jets(self.prev_cam).len());
+                }
+                if self.turbines.count() > 0 {
+                    let (d, h) = self.turbines.nearest(self.prev_cam);
+                    log::info!("wind turbines {} near ({} standing, {} pieces drawn, nearest {:.0} m, its foot at {:.0} m)", self.turbines.count(), self.turbines.standing(), self.turbine_insts, d, h);
                 }
                 Some(self.shots.remove(0).1)
             }
