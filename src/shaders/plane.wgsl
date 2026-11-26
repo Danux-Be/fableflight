@@ -1601,8 +1601,10 @@ fn plume(in: VOut) -> vec4f {
   let ab = burner();
   let dry = dry_power();
   let L = in.L;
-  // (how far aft of the nozzle, in the Hornet's plume's lengths)
-  let z = (L.z - nozzle_at(L).z) / select(plume_scale(), SR71_PLUME.y, kind() == 7u);
+  // (how far aft of the nozzle, in the Hornet's plume's lengths; min reheat
+  // burns a shorter flame than max, which reaches the full length)
+  let reach = select(1.0, mix(0.55, 1.0, sat((ab - 0.3) / 0.7)), ab > 0.01);
+  let z = (L.z - nozzle_at(L).z) / select(plume_scale(), SR71_PLUME.y, kind() == 7u) / reach;
   let V = normalize(in.P);
   let ndv = abs(dot(normalize(in.N), V));
   let t = G.time.x;
@@ -2130,19 +2132,21 @@ fn surface(in: VOut) -> Shaded {
       albedo = vec3f(0.01);
       rough = 0.05;
       let did = u32(in.mat.w + 0.5);
-      if (did >= 60u) {
+      // (a shader specialised to one kind keeps only its own cockpit's screens: the
+      // range is picked per pixel, so without the kind test every deck stays reachable.)
+      if (did >= 60u && (KIND == 99u || KIND == 9u)) {
         // The G650's PlaneView displays, SMCs, MCDUs and readouts (deck650.wgsl).
         emit = display650(did, in.uv, duv) * G.sun_dir.w * mix(0.07, 0.01, night);
         albedo = vec3f(0.010, 0.011, 0.013);
         rough = 0.1;
         ssr = 0.3;
-      } else if (did >= 40u) {
+      } else if (did >= 40u && (KIND == 99u || KIND == 2u || KIND == 3u || KIND == 4u || KIND == 7u)) {
         // The Hornet's DDIs, AMPCD, UFC windows and IFEI (pit18.wgsl).
         emit = display18(did, in.uv, duv) * G.sun_dir.w * mix(0.06, 0.009, night);
         albedo = vec3f(0.010, 0.012, 0.012);
         rough = 0.1;
         ssr = 0.3;
-      } else if (did >= 20u) {
+      } else if (did >= 20u && (KIND == 99u || KIND == 1u)) {
         // The 747's CRTs: bright enough by day, turned down at night.
         emit = display747(did, in.uv, duv) * G.sun_dir.w * mix(0.07, 0.01, night);
         albedo = vec3f(0.012, 0.014, 0.016);
@@ -2234,7 +2238,8 @@ fn surface(in: VOut) -> Shaded {
   let spec = l.sun * ggx(max(dot(N, H), 0.0), a) * vis(ndv, ndl, a) * Fs * ndl * sh * spec_k;
   // Inside the cabin, light bounces around off every surface: a fill that the
   // occlusion term alone would miss.
-  var inside = step(abs(L.x), 0.58) * step(-1.42, L.z) * step(L.z, 1.5) * step(L.y, 0.62) * select(0.0, 1.0, id != M_LIVERY && pt != P_FUSE && pt != P_COWL);
+  // (a box round the cessna's cabin; kinds 10 and up are not shaped like it)
+  var inside = step(abs(L.x), 0.58) * step(-1.42, L.z) * step(L.z, 1.5) * step(L.y, 0.62) * select(0.0, 1.0, id != M_LIVERY && pt != P_FUSE && pt != P_COWL && kind() < 10u);
   if (kind() == 1u) { inside = step(abs(L.x), 2.2) * step(-29.0, L.z) * step(L.z, -22.4) * step(1.9, L.y) * select(0.0, 1.0, id != M_LIVERY && pt != P_FUSE); }
   // The Hornet's cockpit tub, under its canopy.
   if (kind() == 2u) { inside = step(abs(L.x), 0.56) * step(-6.2, L.z) * step(L.z, -3.1) * step(0.0, L.y) * select(0.0, 1.0, pt != P_HORNET); }

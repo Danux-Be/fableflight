@@ -202,10 +202,17 @@ pub struct Graphics {
     pub dynamic: bool,
     /// the frame rate dynamic quality aims for (0: the display's refresh rate)
     pub dyn_fps: u16,
+    /// lowers the render resolution while the gpu cant hold the frame rate (main.rs dyn_res).
+    pub dynamic_res: bool,
+    /// shows a generated frame between each two drawn ones (framegen.rs).
+    pub framegen: bool,
 }
 
 /// The frame rates dynamic quality can aim for (0: the display's).
 pub const DYN_FPS: [u16; 7] = [0, 30, 45, 60, 90, 120, 144];
+
+/// lowest share of the render resolution dynamic resolution goes to.
+pub const DYN_MIN: f32 = 0.6;
 
 impl Default for Graphics {
     fn default() -> Self {
@@ -220,7 +227,7 @@ pub const SCALE_MAX: f32 = 2.0;
 impl Graphics {
     /// One of the presets (taa and vsync on).
     pub fn preset(p: Preset) -> Self {
-        let mut g = Graphics { scale: 1.0, shadows: Level::High, clouds: Level::High, cloud_shadows: true, storms: Level::High, contrails: true, terrain: Level::High, scenery: Level::High, city: Level::High, trees: Level::High, cars: Level::High, birds: Level::High, balloons: Level::High, turbines: Level::High, ao: true, water: Level::High, msaa: 4, taa: true, upscaler: Upscaler::Bilinear, vsync: true, fps_cap: 0, dynamic: false, dyn_fps: 0 };
+        let mut g = Graphics { scale: 1.0, shadows: Level::High, clouds: Level::High, cloud_shadows: true, storms: Level::High, contrails: true, terrain: Level::High, scenery: Level::High, city: Level::High, trees: Level::High, cars: Level::High, birds: Level::High, balloons: Level::High, turbines: Level::High, ao: true, water: Level::High, msaa: 4, taa: true, upscaler: Upscaler::Bilinear, vsync: true, fps_cap: 0, dynamic: false, dyn_fps: 0, dynamic_res: false, framegen: false };
         g.apply(p);
         g
     }
@@ -301,6 +308,9 @@ impl Graphics {
         g.fps_cap = j["fps_cap"].as_u64().map(|v| v as u16).filter(|v| [0, 30, 60, 90, 120, 144, 165, 240].contains(v)).unwrap_or(0);
         g.dynamic = j["dynamic"].as_bool().unwrap_or(false);
         g.dyn_fps = j["dynamic_fps"].as_u64().map(|v| v as u16).filter(|v| DYN_FPS.contains(v)).unwrap_or(0);
+        // off unless turned on in the settings.
+        g.dynamic_res = j["dynamic_res"].as_bool().unwrap_or(false);
+        g.framegen = j["framegen"].as_bool().unwrap_or(false);
         // a saved preset follows the code, so retuned presets reach old saves.
         if let Some(l) = j["preset"].as_str().and_then(Preset::parse) {
             g.apply(l);
@@ -361,6 +371,8 @@ impl Graphics {
             "fps_cap": self.fps_cap,
             "dynamic": self.dynamic,
             "dynamic_fps": self.dyn_fps,
+            "dynamic_res": self.dynamic_res,
+            "framegen": self.framegen,
         })
     }
 
