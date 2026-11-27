@@ -11,6 +11,7 @@
 // 3.14 m, -6.28 m) that trip clippy::approx_constant.
 #![allow(clippy::approx_constant)]
 pub mod b747;
+pub mod bonanza;
 pub mod c130;
 pub mod c172;
 pub mod concorde;
@@ -86,7 +87,8 @@ pub fn cockpit_controls(spec: &Spec, pieces: &[crate::airframe::Piece]) -> Vec<(
             }));
         (*h, index)
     }).collect();
-    if BUILTIN.iter().any(|s| std::ptr::eq(*s, spec)) {
+    // (any model built from our own pieces: a downloaded model has none with a hotspot)
+    {
         controls.extend(pieces.iter().enumerate().filter_map(|(i, p)| {
             let mut h = p.hotspot?;
             h.at = (p.pivot + Vec3::from(h.at)).to_array();
@@ -106,7 +108,7 @@ pub fn animated_hotspots(controls: &[(Hotspot, Option<usize>)], pose: &[glam::Ma
 }
 
 /// The types built into the game, in the order the menu lists them.
-pub static BUILTIN: [&Spec; 11] = [&c172::SPEC, &dr400::SPEC, &b747::SPEC, &c130::SPEC, &fa18::SPEC, &f4::SPEC, &f22::SPEC, &starship::SPEC, &concorde::SPEC, &sr71::SPEC, &g650::SPEC];
+pub static BUILTIN: [&Spec; 12] = [&c172::SPEC, &dr400::SPEC, &bonanza::SPEC, &b747::SPEC, &c130::SPEC, &fa18::SPEC, &f4::SPEC, &f22::SPEC, &starship::SPEC, &concorde::SPEC, &sr71::SPEC, &g650::SPEC];
 
 /// Types added while the game runs: JSBSim aircraft the player downloaded
 /// (see hangar.rs), each flying with a stand-in from `BUILTIN` as its body.
@@ -235,7 +237,30 @@ pub struct Tail {
     pub stab_tip: DVec3,
 }
 
-/// A piston engine turning a fixed-pitch propeller.
+/// A propeller governor: past the revs the propeller lever selects it turns
+/// the blades coarser, which loads the engine more, until the revs come back
+/// down; below them it runs the blades back to the fine stop. The blade
+/// setting `coarse` (0 at the fine stop, up to `coarse_max`) scales the
+/// propeller's thrust and power coefficients and its advance ratios by
+/// 1 + gain × coarse (`ct`, `cp`, `j`): a coarser blade bites at a higher
+/// advance ratio, its thrust and power running out further along.
+#[derive(Clone)]
+pub struct Governor {
+    /// the revs (rpm) it holds with the lever right back and fully forward
+    pub rpm: [f64; 2],
+    /// true: a constant-speed propeller, governing with the lever fully
+    /// forward too; false: fully forward is the fine stop and it turns as a
+    /// fixed-pitch propeller there, governing only once the lever comes back
+    pub at_full: bool,
+    pub coarse_max: f64,
+    pub ct: f64,
+    pub cp: f64,
+    pub j: f64,
+    /// how fast the blades move: `coarse` per second per rad/s off the revs selected
+    pub rate: f64,
+}
+
+/// A piston engine turning a fixed-pitch propeller, or one with a governor.
 #[derive(Clone)]
 pub struct Piston {
     /// rated power (W) at rated revs (rad/s)
@@ -257,6 +282,9 @@ pub struct Piston {
     pub fric1: f64,
     /// height of the propeller hub and where a broken blade snaps (body y)
     pub blade_break_y: f32,
+    /// the propeller lever's governor (None: a fixed-pitch propeller, the
+    /// lever does nothing); `ct0` to `j_p` above are then the fine stop's
+    pub governor: Option<Governor>,
 }
 
 /// High-bypass turbofans.
@@ -467,6 +495,7 @@ pub struct Livery {
 pub fn liveries(spec: &Spec) -> &'static [Livery] {
     if std::ptr::eq(spec, &c172::SPEC) { c172::LIVERIES }
     else if std::ptr::eq(spec, &dr400::SPEC) { dr400::LIVERIES }
+    else if std::ptr::eq(spec, &bonanza::SPEC) { bonanza::LIVERIES }
     else if std::ptr::eq(spec, &b747::SPEC) { b747::LIVERIES }
     else if std::ptr::eq(spec, &g650::SPEC) { g650::LIVERIES }
     else if std::ptr::eq(spec, &c130::SPEC) { c130::paint::LIVERIES }
@@ -637,6 +666,9 @@ pub struct Spec {
     pub lever: Option<Lever>,
     /// how fast the gear goes up or down (fraction per second; 0: fixed gear)
     pub gear_rate: f64,
+    /// the flaps and gear run on electric motors: without power on the bus
+    /// (master off, battery flat and no alternator) they stay where they are
+    pub electric_actuators: bool,
     /// never-exceed speed (m/s indicated) and Mach limit (0: none); flutter sets in at `flutter_v`
     pub vne: f64,
     pub mmo: f64,
@@ -668,7 +700,30 @@ pub struct Spec {
     /// chase camera distance and the size of its own fine shadow map (m)
     pub cam_dist: f64,
     pub shadow_r: f32,
+    /// a helicopter's rotors (plane/heli.rs flies it instead of the wing)
+    pub rotor: Option<Rotor>,
+    /// floats instead of wheels: its legs are pontoons that ride on water and slide on land
+    pub floats: bool,
     pub sound: Sound,
+}
+
+/// A helicopter's rotors (plane/heli.rs).
+#[derive(Clone, Debug)]
+pub struct Rotor {
+    /// main rotor radius (m) and its governed speed (rpm)
+    pub radius: f64,
+    pub rpm: f64,
+    /// the most thrust it gives at sea level, full collective, governed speed (N)
+    pub thrust: f64,
+    /// the main rotor's hub and the tail rotor's, body frame
+    pub hub: DVec3,
+    pub tail: DVec3,
+    /// the fuselage's drag area (m²), the cyclic's authority (rad/s² at full stick), the pedals' torque (N m)
+    pub drag_area: f64,
+    pub cyclic: f64,
+    pub pedal: f64,
+    /// never exceed, true airspeed (m/s)
+    pub vne: f64,
 }
 
 /// A downloaded JSBSim aircraft behind a `Spec`.

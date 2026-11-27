@@ -458,6 +458,7 @@ pub static SPEC: Spec = Spec {
     slats_at: 0,
     lever: Some(Lever { name: "lever.concorde.nose", notches: &["lever.concorde.nose_up", "lever.concorde.visor_down", "lever.concorde.nose_5", "lever.concorde.nose_12_5"], parts: ["NOSE", "VISOR"] }),
     gear_rate: 1.0 / 12.0,
+    electric_actuators: false,
     // VMO 530 kt, Mach 2.04 (set by how hot the nose gets: 127 C).
     vne: 530.0 * KT,
     mmo: 2.04,
@@ -507,6 +508,8 @@ pub static SPEC: Spec = Spec {
     approach: (82.0, 3),
     cam_dist: 76.0,
     shadow_r: 34.0,
+    rotor: None,
+    floats: false,
     sound: Sound::Turbojet,
 };
 

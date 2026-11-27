@@ -1615,6 +1615,7 @@ pub static SPEC: Spec = Spec {
     slats_at: 1,
     lever: None,
     gear_rate: 1.0 / 16.0,
+    electric_actuators: false,
     // VMO 365 kt, MMO 0.92.
     vne: 365.0 * KT,
     mmo: 0.92,
@@ -1657,6 +1658,8 @@ pub static SPEC: Spec = Spec {
     approach: (80.0, 6),
     cam_dist: 85.0,
     shadow_r: 38.0,
+    rotor: None,
+    floats: false,
     sound: Sound::Jet,
 };
 

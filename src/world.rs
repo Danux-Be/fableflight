@@ -61,12 +61,22 @@ struct BTile {
     /// distance scale of its tallest height class (buildings::HCLASS)
     tall: f32,
 }
+/// How far from the camera a floodlight still lights the ground (m).
+const FLOOD_REACH: f64 = 3000.0;
+/// A mast's floodlights: about 1e5 cd on the beam's axis (Globals units, as
+/// the landing lights: cd / 1e4 / pi, times 60), and the beam's half-angle.
+const FLOOD_I: f32 = 1.0e5 / 1.0e4 / std::f32::consts::PI * 60.0;
+const FLOOD_COS: f32 = 0.42;
 /// An airfield near enough to be drawn and to be busy.
 pub struct Field {
     pub geo: std::sync::Arc<crate::airports::Geo>,
     gpu: crate::render::FieldGpu,
     props: Vec<crate::airfield::Prop>,
     socks: Vec<Vec3>,
+    /// a hand-made scenery pack's objects (scenery.rs)
+    scenery: Vec<crate::scenery::Placed>,
+    /// floodlights that light the ground: lamp (relative to `geo.center`), beam direction
+    floods: Vec<(Vec3, Vec3)>,
     pub traffic: crate::traffic::Traffic,
     last_used: u64,
 }
@@ -93,6 +103,12 @@ struct Upload {
 /// consumed it, a few frames later; on cards without resizable BAR that is a
 /// 246 MiB heap, and overflowing it slows every upload to a crawl.
 const UPLOAD_BUDGET: usize = 24 << 20;
+/// lowest scenery reach under memory pressure.
+const MEM_K_MIN: f32 = 0.55;
+/// least building reach the building budget goes down to.
+const BUILD_K_MIN: f32 = 0.5;
+/// frames before a failed building upload is retried, about 10 s.
+const BUILD_RETRY: u64 = 600;
 /// Largest single write into a building buffer.
 const UPLOAD_CHUNK: usize = 8 << 20;
 
@@ -234,6 +250,8 @@ const LOD_FINE: f32 = 700.0;
 pub struct World {
     /// flat ground everywhere tiles have not loaded, at this height (for tests)
     pub flat: Option<f64>,
+    /// a gate whose fixed jet bridge gives way to the player's own (ground.rs)
+    pub hide_bridge: Option<DVec3>,
     loader: Loader,
     tiles: HashMap<TileId, Slot>,
     builds: HashMap<TileId, BSlot>,
@@ -251,6 +269,19 @@ pub struct World {
     /// each building tile is 50-170 MB of geometry, which an integrated GPU
     /// takes out of the system's memory)
     pub tile_cap: usize,
+    /// a lower terrain cap after the gpu ran out of memory (`make_room`).
+    mem_cap: Option<usize>,
+    /// building tiles that did not fit and the frame to retry them.
+    build_retry: HashMap<TileId, u64>,
+    /// scenery reach while the gpu is short of memory.
+    mem_k: f32,
+    /// frame mem_k last went down.
+    mem_t: u64,
+    /// gpu memory building tiles may hold (small cards), and the reach that keeps them in it.
+    pub build_budget: u64,
+    build_k: f32,
+    /// frame build_k last went down.
+    build_t: u64,
     pub spare_builds: usize,
     /// building tiles made (or waiting to go to the GPU) at once
     pub max_build_jobs: usize,
@@ -300,7 +331,7 @@ impl Frustum {
 impl World {
     pub fn new(loader: Loader, max_zoom: u8) -> Self {
         let photo = Some(Box::new(crate::tiles3d::Photo::new(loader.src.google.clone(), Some(loader.src.clone()))));
-        Self { photo, flat: None, loader, tiles: HashMap::default(), builds: HashMap::default(), frame: 0, in_flight: 0, max_zoom, lod_k: 0.62, reach_k: 1.0, city_k: 1.0, tile_cap: 700, spare_builds: 12, max_build_jobs: 12, tree_far: 3200.0, tree_imp_k: 1.0, cars: (1.0, 2200.0, 1100.0), buildings_on: true, draw: Vec::new(), draw_shore: Vec::new(), draw_b: Vec::new(), wanted: Vec::new(), in_view: Vec::new(), frustum: None, craters: Vec::new(), tree_dims: Vec::new(), tick: 0, stats: (0, 0, 0), last_update: None, uploads: VecDeque::new(), fields: HashMap::default(), ocean: crate::ocean::Ocean::new() }
+        Self { photo, flat: None, hide_bridge: None, loader, tiles: HashMap::default(), builds: HashMap::default(), frame: 0, in_flight: 0, max_zoom, lod_k: 0.62, reach_k: 1.0, city_k: 1.0, tile_cap: 700, mem_cap: None, build_retry: HashMap::default(), mem_k: 1.0, mem_t: 0, build_budget: u64::MAX, build_k: 1.0, build_t: 0, spare_builds: 12, max_build_jobs: 12, tree_far: 3200.0, tree_imp_k: 1.0, cars: (1.0, 2200.0, 1100.0), buildings_on: true, draw: Vec::new(), draw_shore: Vec::new(), draw_b: Vec::new(), wanted: Vec::new(), in_view: Vec::new(), frustum: None, craters: Vec::new(), tree_dims: Vec::new(), tick: 0, stats: (0, 0, 0), last_update: None, uploads: VecDeque::new(), fields: HashMap::default(), ocean: crate::ocean::Ocean::new() }
     }
 
     /// Tiles wanted but not yet asked for (at most 28 are on their way at once).
@@ -973,7 +1004,12 @@ impl World {
                     let slot = match res {
                         Ok(td) => {
                             bytes += crate::render::tile_bytes(&td);
-                            Slot::Ready(Box::new(Tile { center: td.center, radius: td.radius, gpu: r.upload_tile(&td), grid: td.verts[..GV * GV].iter().map(|v| v.pos).collect(), heights: td.heights, wet: td.water.iter().any(|w| *w), water: td.water, sea: td.sea, last_used: self.frame, generation: td.imagery_gen, refreshing: false }))
+                            let Some(gpu) = r.upload_tile(&td) else {
+                                // no room on the gpu: asked for again once some is freed.
+                                self.tiles.remove(&id);
+                                continue;
+                            };
+                            Slot::Ready(Box::new(Tile { center: td.center, radius: td.radius, gpu, grid: td.verts[..GV * GV].iter().map(|v| v.pos).collect(), heights: td.heights, wet: td.water.iter().any(|w| *w), water: td.water, sea: td.sea, last_used: self.frame, generation: td.imagery_gen, refreshing: false }))
                         }
                         Err(e) => {
                             log::debug!("tile {id:?} failed: {e}");
@@ -994,7 +1030,12 @@ impl World {
                         Ok(bd) => {
                             // The slot stays Loading until the geometry is all on the GPU.
                             bytes += bd.atlas.iter().map(|m| m.len()).sum::<usize>();
-                            let gpu = r.upload_buildings(&bd);
+                            let Some(gpu) = r.upload_buildings(&bd) else {
+                                // retry later, it would only fail again.
+                                self.builds.remove(&id);
+                                self.build_retry.insert(id, self.frame + BUILD_RETRY);
+                                continue;
+                            };
                             self.uploads.push_back(Upload { id, data: Box::new(bd), gpu, part: 0, off: 0 });
                         }
                         Err(_) => {
@@ -1008,10 +1049,13 @@ impl World {
                     match res {
                         Ok((geo, mesh)) => {
                             bytes += Renderer::field_bytes(&mesh);
-                            let gpu = r.upload_field(&mesh);
+                            let Some(gpu) = r.upload_field(&mesh) else {
+                                self.fields.remove(&i);
+                                continue;
+                            };
                             let traffic = crate::traffic::Traffic::new(&geo, i.wrapping_mul(2654435761) ^ 0x5bd1e995);
                             log::info!("airfield {} ready: {} runways, {} stands, {} lights", geo.apt().ident, geo.runways.len(), geo.stands.len(), mesh.lights.len());
-                            self.fields.insert(i, FSlot::Ready(Box::new(Field { geo, gpu, props: mesh.props, socks: mesh.socks, traffic, last_used: self.frame })));
+                            self.fields.insert(i, FSlot::Ready(Box::new(Field { geo, gpu, props: mesh.props, socks: mesh.socks, scenery: mesh.scenery, floods: mesh.floods, traffic, last_used: self.frame })));
                         }
                         Err(e) => {
                             log::debug!("airfield {i} failed: {e}");
@@ -1023,6 +1067,15 @@ impl World {
             }
         }
         self.pump_uploads(r, bytes.min(UPLOAD_BUDGET / 2));
+        // shed scenery before the gpu fills: a full card fails allocations everywhere,
+        // the ui's too, not only ours.
+        let full = self.frame % 30 == 0 && r.vram().is_some_and(|(used, budget)| used * 10 > budget * 9);
+        if r.take_out_of_memory() || full {
+            self.make_room();
+        }
+        if self.frame % 30 == 0 {
+            self.fit_builds();
+        }
 
         let (clat, clon, calt) = geo::pos_to_lla(cam);
         let gh = self.ground(clat, clon).map(|g| g.h).unwrap_or(0.0);
@@ -1043,8 +1096,10 @@ impl World {
         if self.buildings_on && agl < 7000.0 && clat.abs() < 1.45 {
             let c = TileId::at(clat, clon, DATA_ZOOM);
             let w = c.width_m();
-            let reach = (4500.0 + agl * 0.6).min(7500.0) * self.reach_k;
+            let reach = (4500.0 + agl * 0.6).min(7500.0) * self.reach_k * (self.mem_k * self.build_k) as f64;
             let n = (reach / w).ceil() as i64;
+            // at the budget only the tiles right below come in.
+            let build_full = self.build_budget != u64::MAX && self.build_bytes_ahead() >= self.build_budget;
             let size = 1i64 << DATA_ZOOM;
             for dy in -n..=n {
                 for dx in -n..=n {
@@ -1075,6 +1130,8 @@ impl World {
                             }
                         }
                         Some(BSlot::Loading) => {}
+                        None if self.build_retry.get(&id).is_some_and(|f| *f > self.frame) => {}
+                        None if build_full && d > w * 1.5 => {}
                         None => self.wanted.push((0.8 + (d / w) as f32 * 0.6, id.with_tag())),
                     }
                 }
@@ -1180,15 +1237,22 @@ impl World {
         // Evict what has not been needed for a while.
         if self.frame % 120 == 0 {
             let f = self.frame;
-            if self.tiles.len() > self.tile_cap {
+            self.build_retry.retain(|_, t| *t > f);
+            // room again after a squeeze: let the cap creep back up.
+            if f % 600 == 0 && (self.mem_k < 1.0 || self.mem_cap.is_some_and(|c| c < self.tile_cap)) && r.vram().is_none_or(|(used, budget)| used * 4 < budget * 3) {
+                self.mem_cap = self.mem_cap.map(|c| c + 10);
+                self.mem_k = (self.mem_k + 0.05).min(1.0);
+            }
+            let cap = self.cap();
+            if self.tiles.len() > cap {
                 self.tiles.retain(|id, s| id.z <= 3 || !matches!(s, Slot::Ready(t) if f - t.last_used > 600));
             }
             // Still over: the least recently used of those not drawn in the
             // last couple of seconds go too.
-            if self.tiles.len() > self.tile_cap {
+            if self.tiles.len() > cap {
                 let mut old: Vec<(u64, TileId)> = self.tiles.iter().filter_map(|(id, s)| match s { Slot::Ready(t) if id.z > 3 && f - t.last_used > 120 => Some((t.last_used, *id)), _ => None }).collect();
                 old.sort_unstable_by_key(|o| o.0);
-                for (_, id) in old.iter().take(self.tiles.len() - self.tile_cap) {
+                for (_, id) in old.iter().take(self.tiles.len() - cap) {
                     self.tiles.remove(id);
                 }
             }
@@ -1210,6 +1274,79 @@ impl World {
             });
         }
         self.stats = (self.draw.len(), self.in_flight, self.draw_b.len());
+    }
+
+    /// the terrain tile cap: the setting's, or less once the gpu ran out of memory.
+    fn cap(&self) -> usize {
+        self.mem_cap.map_or(self.tile_cap, |c| c.min(self.tile_cap))
+    }
+
+    /// the gpu is full: hold the terrain to fewer tiles than now and drop the least
+    /// recently drawn at once, with the spare building tiles behind the camera.
+    fn make_room(&mut self) {
+        let f = self.frame;
+        let ready = self.tiles.values().filter(|s| matches!(s, Slot::Ready(_))).count();
+        let cap = (ready * 85 / 100).max(64);
+        self.mem_cap = Some(self.mem_cap.map_or(cap, |c| c.min(cap)));
+        let mut old: Vec<(u64, TileId)> = self.tiles.iter().filter_map(|(id, s)| match s { Slot::Ready(t) if id.z > 3 && t.last_used + 2 < f => Some((t.last_used, *id)), _ => None }).collect();
+        old.sort_unstable_by_key(|o| o.0);
+        let n = ready.saturating_sub(cap).min(old.len());
+        for (_, id) in &old[..n] {
+            self.tiles.remove(id);
+        }
+        self.builds.retain(|_, s| !matches!(s, BSlot::Ready(b) if b.last_used + 2 < f));
+        // shrink the reach, at most every 2 s so evictions show first.
+        if f >= self.mem_t + 120 && self.mem_k > MEM_K_MIN {
+            self.mem_k = (self.mem_k - 0.06).max(MEM_K_MIN);
+            self.mem_t = f;
+        }
+        log::warn!("gpu memory full: terrain held to {} tiles, {n} dropped, scenery reach {:.0}%", self.cap(), self.mem_k * 100.0);
+    }
+
+    /// gpu memory of the building tiles, drawn and still uploading.
+    fn build_bytes(&self) -> u64 {
+        let ready: u64 = self.builds.values().filter_map(|s| match s { BSlot::Ready(b) => b.gpu.as_ref().map(|g| g.bytes()), _ => None }).sum();
+        ready + self.uploads.iter().map(|u| u.gpu.bytes()).sum::<u64>()
+    }
+
+    /// building memory once the tiles still being made are in, at the average tile's size.
+    fn build_bytes_ahead(&self) -> u64 {
+        let (mut n, mut loading) = (0u64, 0u64);
+        for s in self.builds.values() {
+            match s {
+                BSlot::Ready(b) if b.gpu.is_some() => n += 1,
+                BSlot::Loading => loading += 1,
+                _ => {}
+            }
+        }
+        let bytes = self.build_bytes();
+        // a city tile when none is in yet.
+        let each = if n > 0 { bytes / n } else { 25 << 20 };
+        bytes + loading * each
+    }
+
+    /// holds building tiles to the budget: over it the reach shrinks and the tiles out of
+    /// reach go at once, well under it the reach creeps back. tiles cost about reach squared.
+    fn fit_builds(&mut self) {
+        if self.build_budget == u64::MAX {
+            return;
+        }
+        let f = self.frame;
+        let bytes = self.build_bytes();
+        let (k, budget) = (self.build_k, self.build_budget as f64);
+        if bytes as f64 > budget {
+            // the tiles out of reach go first, spares included.
+            self.builds.retain(|_, s| !matches!(s, BSlot::Ready(b) if b.last_used + 2 < f));
+        }
+        // at most every 4 s, so the tiles let go show in the count first.
+        if bytes as f64 > budget && k > BUILD_K_MIN && f >= self.build_t + 240 {
+            let k2 = k * (budget * 0.9 / bytes as f64).sqrt() as f32;
+            self.build_k = k2.clamp(k - 0.15, k - 0.03).max(BUILD_K_MIN);
+            self.build_t = f;
+            log::info!("buildings over their {} MB: {} MB, reach {:.0}%", self.build_budget >> 20, bytes >> 20, self.build_k * 100.0);
+        } else if bytes as f64 <= budget && k < 1.0 && f % 600 == 0 && (bytes as f64 * ((k + 0.05) / k).powi(2) as f64) < budget * 0.9 {
+            self.build_k = (k + 0.05).min(1.0);
+        }
     }
 
     fn drop_loading(&mut self, job: Job) {
@@ -1280,6 +1417,15 @@ impl World {
         (2..=self.max_zoom).rev().find(|z| matches!(self.tiles.get(&TileId::at_merc(mx, my, *z)), Some(Slot::Ready(_))))
     }
 
+    /// (count, bytes) of terrain and building tiles on the gpu.
+    #[cfg(feature = "mem-stats")]
+    pub fn gpu_usage(&self) -> ((usize, usize), (usize, usize)) {
+        let t = self.tiles.values().filter_map(|s| if let Slot::Ready(t) = s { Some(t.gpu.bytes) } else { None });
+        let b = self.builds.values().filter_map(|s| if let BSlot::Ready(b) = s { b.gpu.as_ref().map(|g| g.bytes() as usize) } else { None });
+        let sum = |i: &mut dyn Iterator<Item = usize>| i.fold((0, 0), |(n, s), x| (n + 1, s + x));
+        (sum(&mut { t }), sum(&mut { b }))
+    }
+
     /// The nearest airfield that is loaded, within `r` metres.
     pub fn airfield_near(&self, p: DVec3, r: f64) -> Option<&Field> {
         self.fields.values().filter_map(|s| if let FSlot::Ready(f) = s { Some(f.as_ref()) } else { None }).filter(|f| (f.geo.center - p).length() < r + f.geo.radius as f64).min_by(|a, b| (a.geo.center - p).length().total_cmp(&(b.geo.center - p).length()))
@@ -1344,7 +1490,33 @@ impl World {
     }
 
     /// Fixed airport objects, parked and moving aircraft and their lights.
-    pub fn airport_instances(&self, cam: DVec3, wind_from: f32, wind_kt: f32, t: f64, out: &mut Vec<(u32, Inst)>, lights: &mut Vec<crate::airfield::Light>) {
+    /// `scenery` takes the hand-made scenery packs' objects (scenery.rs).
+    /// `wind`: where it blows from (degrees) and how hard (knots).
+    /// The eight floodlights nearest the camera within 3 km, for Globals
+    /// `flood` (common.wgsl `flood_light`), `on` 0..1 as they come on at dusk.
+    pub fn flood_globals(&self, cam: DVec3, on: f32, out: &mut [[f32; 4]; 16]) {
+        let mut near: Vec<(f64, DVec3, Vec3)> = Vec::new();
+        for s in self.fields.values() {
+            let FSlot::Ready(f) = s else { continue };
+            for (p, d) in &f.floods {
+                let o = f.geo.center - cam + p.as_dvec3();
+                let r = o.length();
+                if r < FLOOD_REACH {
+                    near.push((r, o, *d));
+                }
+            }
+        }
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (k, (r, o, d)) in near.iter().take(out.len() / 2).enumerate() {
+            // fading out toward the edge of the reach, so none pops in or out
+            let fade = (((FLOOD_REACH - r) / 500.0) as f32).clamp(0.0, 1.0);
+            out[2 * k] = [o.x as f32, o.y as f32, o.z as f32, FLOOD_I * on * fade];
+            out[2 * k + 1] = [d.x, d.y, d.z, FLOOD_COS];
+        }
+    }
+
+    pub fn airport_instances(&self, cam: DVec3, wind: (f32, f32), t: f64, out: &mut Vec<(u32, Inst)>, scenery: &mut Vec<(u32, Inst)>, lights: &mut Vec<crate::airfield::Light>) {
+        let (wind_from, wind_kt) = wind;
         let fr = self.frustum.as_ref();
         for s in self.fields.values() {
             let FSlot::Ready(f) = s else { continue };
@@ -1355,6 +1527,10 @@ impl World {
             }
             let base = g.center - cam;
             for p in &f.props {
+                // the player's own jet bridge stands in for the fixed one at its stand (ground.rs).
+                if self.hide_bridge.is_some_and(|h| matches!(p.mesh, crate::airmodels::M_BRIDGE | crate::airmodels::M_BRIDGE_HEAD) && (g.center + p.pos.as_dvec3() - h).length() < 80.0) {
+                    continue;
+                }
                 let o = base + p.pos.as_dvec3();
                 if o.length() > 6000.0 || !fr.map(|f| f.sphere(o, 40.0)).unwrap_or(true) {
                     continue;
@@ -1371,15 +1547,37 @@ impl World {
                 if o.length() > 5000.0 {
                     continue;
                 }
-                let wob = (t as f32 * (2.3 + k as f32 * 0.4)).sin() * 0.05 * (wind_kt / 10.0).min(1.5);
-                let droop = (1.0 - (wind_kt / 15.0).clamp(0.0, 1.0)) * 1.25 + wob;
-                let fwd = hd * droop.cos() - up * droop.sin();
-                let fwd = (fwd + hd.cross(up) * wob).normalize();
+                let fwd = sock_dir(hd, up, wind_kt, t, k);
                 let upv = (up - fwd * fwd.dot(up)).normalize();
                 let x = fwd.cross(upv);
                 let z = -fwd;
                 let o = o.as_vec3();
                 out.push((crate::airmodels::M_SOCK, Inst { m: [[x.x, upv.x, z.x, o.x], [x.y, upv.y, z.y, o.y], [x.z, upv.z, z.z, o.z]], tint: [1.0, 1.0, 1.0, 0.0], ext: [0.0; 4] }));
+            }
+            // The scenery pack's objects, each as far as its class reaches; its
+            // windsocks turn with the wind like the procedural ones. They give
+            // way to the 3D tiles (ext.w).
+            let mut ks = 0;
+            for (pi, p) in f.scenery.iter().enumerate() {
+                let o = base + DVec3::new(p.m[0][3] as f64, p.m[1][3] as f64, p.m[2][3] as f64);
+                let r = p.radius as f64;
+                if o.length() > crate::scenery::reach(p.class) as f64 + r || !fr.map(|f| f.sphere(o, r)).unwrap_or(true) {
+                    if p.class == crate::scenery::C_SOCK {
+                        ks += 1;
+                    }
+                    continue;
+                }
+                let o = o.as_vec3();
+                let mut m = p.m;
+                if p.class == crate::scenery::C_SOCK {
+                    let (x, y, z) = crate::scenery::sock_axes(sock_dir(hd, p.up, wind_kt, t, ks), p.up);
+                    ks += 1;
+                    m = [[x.x, y.x, z.x, 0.0], [x.y, y.y, z.y, 0.0], [x.z, y.z, z.z, 0.0]];
+                }
+                (m[0][3], m[1][3], m[2][3]) = (o.x, o.y, o.z);
+                // ext.y: a steady random number per object (scenery.wgsl varies its wear by it)
+                let rnd = ((pi as u32).wrapping_mul(2_654_435_761) >> 8) as f32 / 16_777_216.0;
+                scenery.push((p.mesh, Inst { m, tint: [p.tint[0], p.tint[1], p.tint[2], 0.0], ext: [0.0, rnd, 0.0, 1.0] }));
             }
             f.traffic.draw(g, cam, t, out, lights);
         }
@@ -1429,7 +1627,7 @@ impl World {
             }
         };
         let width = id.width_m();
-        if id.z < self.max_zoom && width / dist > self.lod_k {
+        if id.z < self.max_zoom && width / dist > self.lod_k / self.mem_k as f64 {
             let kids = id.children();
             let mut all = true;
             for k in kids {
@@ -1807,4 +2005,13 @@ impl Tag for TileId {
     fn with_refresh(self) -> Self {
         TileId::new(self.z | 0x40, self.x, self.y)
     }
+}
+
+/// Which way a windsock hangs: downwind (`hd`, horizontal), drooping in a
+/// light breeze and stirring a little; `k` staggers neighbouring socks.
+pub fn sock_dir(hd: Vec3, up: Vec3, wind_kt: f32, t: f64, k: usize) -> Vec3 {
+    let wob = (t as f32 * (2.3 + k as f32 * 0.4)).sin() * 0.05 * (wind_kt / 10.0).min(1.5);
+    let droop = (1.0 - (wind_kt / 15.0).clamp(0.0, 1.0)) * 1.25 + wob;
+    let fwd = hd * droop.cos() - up * droop.sin();
+    (fwd + hd.cross(up) * wob).normalize()
 }

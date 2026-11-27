@@ -238,6 +238,7 @@ pub static SPEC: Spec = Spec {
     slats_at: 0,
     lever: None,
     gear_rate: 1.0,
+    electric_actuators: false,
     vne: 1e9,
     mmo: 0.0,
     flutter_v: 1e9,
@@ -278,6 +279,8 @@ pub static SPEC: Spec = Spec {
     approach: (100.0, 0),
     cam_dist: 230.0,
     shadow_r: 70.0,
+    rotor: None,
+    floats: false,
     sound: Sound::Rocket,
 };
 

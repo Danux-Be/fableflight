@@ -453,6 +453,7 @@ pub static SPEC: Spec = Spec {
     slats_at: 1,
     lever: None,
     gear_rate: 1.0 / 5.0,
+    electric_actuators: false,
     // 750 kt, Mach 1.8.
     vne: 750.0 * KT,
     mmo: 1.8,
@@ -495,6 +496,8 @@ pub static SPEC: Spec = Spec {
     approach: (70.0, 2),
     cam_dist: 26.0,
     shadow_r: 11.0,
+    rotor: None,
+    floats: false,
     sound: Sound::Fighter,
 };
 

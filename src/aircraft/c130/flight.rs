@@ -215,7 +215,7 @@ const fn main_leg(x: f32, z: f32, name: &'static str, kick: f64) -> Leg {
 }
 
 pub static SPEC: Spec = Spec {
-    id: 10,
+    id: 11,
     name: "Lockheed C-130H Hercules",
     keys: &["c130", "c130h", "hercules"],
     blurb: "Four-engine turboprop military transport, 70 t. Heavy, but its boosted controls are light and quick; about 280 kt cruise, 50% flaps to take off, 100% and about 130 kt on final. Z reverses the propellers, canopy key: cargo ramp.",
@@ -367,6 +367,8 @@ pub static SPEC: Spec = Spec {
     slats_at: 0,
     lever: None,
     gear_rate: 1.0 / 18.0,
+    // (hydraulic gear and flaps, not electric)
+    electric_actuators: false,
     // VD 320 KIAS to 15,000 ft, Mach 0.64 above (S8, see `VNE_KT`).
     vne: VNE_KT * KT,
     mmo: 0.64,
@@ -425,5 +427,7 @@ pub static SPEC: Spec = Spec {
     approach: (130.0 * KT, 2),
     cam_dist: 52.0,
     shadow_r: 24.0,
+    rotor: None,
+    floats: false,
     sound: Sound::Turboprop,
 };

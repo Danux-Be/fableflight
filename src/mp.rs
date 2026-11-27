@@ -162,6 +162,19 @@ impl Drop for Mp {
     }
 }
 
+/// A pilot name for someone who has not chosen one: two English words and
+/// a number ("SwiftKestrel27"), at most 17 bytes, well under `NAME_MAX`.
+pub fn random_name() -> String {
+    const ADJ: &[&str] = &["Swift", "Silent", "Brave", "Lucky", "Steady", "Bold", "Quiet", "Rapid", "Sunny", "Stormy", "Misty", "Polar", "Golden", "Silver", "Crimson", "Azure", "Wild", "Calm", "Clever", "Happy", "Noble", "Rusty", "Gentle", "Proud"];
+    const NOUN: &[&str] = &["Kestrel", "Falcon", "Heron", "Swallow", "Albatros", "Condor", "Osprey", "Petrel", "Gannet", "Merlin", "Harrier", "Skylark", "Puffin", "Pelican", "Raven", "Swift", "Comet", "Glider", "Zephyr", "Pilot", "Aviator", "Nomad", "Voyager", "Navigator"];
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+    h.write_u32(std::process::id());
+    let r = h.finish();
+    format!("{}{}{:02}", ADJ[(r % ADJ.len() as u64) as usize], NOUN[((r >> 16) % NOUN.len() as u64) as usize], (r >> 32) % 100)
+}
+
 fn v3(a: [f64; 3]) -> DVec3 {
     DVec3::new(a[0], a[1], a[2])
 }
@@ -313,9 +326,6 @@ pub struct ServerEntry {
 
 struct DirShared {
     servers: Mutex<Vec<ServerEntry>>,
-    error: Mutex<Option<String>>,
-    /// the list is the last one received, no list server answering
-    stale: AtomicBool,
     now: AtomicBool,
     stop: AtomicBool,
 }
@@ -330,7 +340,7 @@ impl Directory {
     /// Reads the list from `urls` (the first that answers), keeping a copy
     /// in `cache` for when none does.
     pub fn start(src: Arc<crate::sources::Sources>, urls: Vec<String>, cache: Option<std::path::PathBuf>) -> Self {
-        let shared = Arc::new(DirShared { servers: Mutex::new(Vec::new()), error: Mutex::new(None), stale: AtomicBool::new(false), now: AtomicBool::new(true), stop: AtomicBool::new(false) });
+        let shared = Arc::new(DirShared { servers: Mutex::new(Vec::new()), now: AtomicBool::new(true), stop: AtomicBool::new(false) });
         let sh = shared.clone();
         std::thread::Builder::new()
             .name("server list".into())
@@ -339,12 +349,10 @@ impl Directory {
                 while !sh.stop.load(Ordering::Relaxed) {
                     if sh.now.swap(false, Ordering::Relaxed) || last.elapsed() > Duration::from_secs(30) {
                         last = Instant::now();
-                        let (list, error) = read_list(&urls, |u| src.fetch.get(u).map_err(|e| e.to_string()), cache.as_deref());
-                        sh.stale.store(list.as_ref().is_some_and(|l| l.1), Ordering::Relaxed);
+                        let (list, _) = read_list(&urls, |u| src.fetch.get(u).map_err(|e| e.to_string()), cache.as_deref());
                         if let Some((list, _)) = list {
                             *sh.servers.lock().unwrap() = list;
                         }
-                        *sh.error.lock().unwrap() = error;
                     }
                     std::thread::sleep(Duration::from_millis(250));
                 }
@@ -352,19 +360,8 @@ impl Directory {
             .ok();
         Directory { shared }
     }
-    /// The list is the last one received (no list server answers now).
-    pub fn stale(&self) -> bool {
-        self.shared.stale.load(Ordering::Relaxed)
-    }
     pub fn servers(&self) -> Vec<ServerEntry> {
         self.shared.servers.lock().unwrap().clone()
-    }
-    pub fn error(&self) -> Option<String> {
-        self.shared.error.lock().unwrap().clone()
-    }
-    /// Reads the list again now.
-    pub fn refresh(&self) {
-        self.shared.now.store(true, Ordering::Relaxed);
     }
     /// The server that answers us fastest.
     pub fn best(&self) -> Option<ServerEntry> {
@@ -475,7 +472,7 @@ pub fn size_of(aircraft: u8) -> u8 {
         0 | 8 => 0,
         1 => 4,
         6 => 2,
-        10 => 3,
+        11 => 3,
         _ => 1,
     }
 }
@@ -548,6 +545,15 @@ mod tests {
         assert!((at(1, &p, 1.05).unwrap().pos.y - 2.5).abs() < 1e-6, "halfway");
         assert!((at(1, &p, 1.3).unwrap().pos.y - 15.0).abs() < 1e-6, "flown on at 50 m/s");
         assert!((at(1, &p, 9.0).unwrap().pos.y - 55.0).abs() < 1e-6, "for a second at most");
+    }
+
+    #[test]
+    fn random_names_are_valid_and_vary() {
+        let names: std::collections::HashSet<String> = (0..50).map(|_| random_name()).collect();
+        assert!(names.len() > 40, "{names:?}");
+        for n in &names {
+            assert!(n.len() <= proto::NAME_MAX && proto::clean_name(n) == *n && n.chars().all(|c| c.is_ascii_alphanumeric()), "{n}");
+        }
     }
 
     #[test]
