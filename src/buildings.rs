@@ -135,6 +135,13 @@ pub fn point_in_ring(p: [f32; 2], r: &[[f32; 2]]) -> bool {
     inside
 }
 
+/// Inside a polygon given as all its rings (outlines and holes, several
+/// polygons in one: a map tile's feature), by the even-odd rule as the
+/// masks fill them.
+pub fn in_rings(p: [f32; 2], rings: &[Vec<[f32; 2]>]) -> bool {
+    rings.iter().filter(|r| r.len() >= 3 && point_in_ring(p, r)).count() % 2 == 1
+}
+
 pub fn hash(a: u32, b: u32) -> f32 {
     let mut h = a.wrapping_mul(0x9e3779b1) ^ b.wrapping_mul(0x85ebca6b).rotate_left(13);
     h ^= h >> 15;

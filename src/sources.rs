@@ -111,6 +111,9 @@ pub struct VecTile {
     pub extent: f32,
     /// (class, rings): 1 ocean, 2 lake/pond, 3 river
     pub water: Vec<(u8, Vec<Vec<[f32; 2]>>)>,
+    /// each of `water`'s OpenStreetMap id (the same in every tile and at
+    /// every zoom; 0 none)
+    pub water_ids: Vec<u64>,
     pub buildings: Vec<BuildingPoly>,
     pub roads: Vec<RoadLine>,
     pub landcover: Vec<(u8, Vec<Vec<[f32; 2]>>)>,
@@ -198,6 +201,9 @@ pub struct Sources {
     pub imagery_url: String,
     /// optional Google satellite imagery, used in place of `imagery_url` when on
     pub google: Arc<crate::gmaps::Google>,
+    /// the surface of each lake (by its OpenStreetMap id) and the zoom it
+    /// was worked out at (`lake_level`)
+    lakes: Mutex<HashMap<u64, (u8, f32)>>,
 }
 
 impl Sources {
@@ -206,7 +212,161 @@ impl Sources {
     }
 
     pub fn with_google(fetch: Fetcher, imagery_url: String, google: Arc<crate::gmaps::Google>) -> Self {
-        Self { fetch, elev: Mutex::new(Lru::new(96)), raw: Mutex::new(Lru::new(160)), fields: Mutex::new(HashMap::new()), vec: Mutex::new(Lru::new(96)), vec_url: Mutex::new(None), imagery_url, google }
+        Self { fetch, elev: Mutex::new(Lru::new(96)), raw: Mutex::new(Lru::new(160)), fields: Mutex::new(HashMap::new()), vec: Mutex::new(Lru::new(96)), vec_url: Mutex::new(None), imagery_url, google, lakes: Mutex::new(HashMap::new()) }
+    }
+
+    /// The surface of lake `lake` (its OpenStreetMap id), as seen from tile
+    /// `t`: flat, the same for every tile and level of detail.
+    ///
+    /// The elevation data is older than many reservoirs: under a lake
+    /// filled since, it holds the drowned valley, while the lake's shore
+    /// (drawn from today's imagery) runs along the valley sides at the
+    /// water's level. So the ground is sampled along the shore and under
+    /// the water, over the tile and its eight neighbours: where the shore
+    /// stands well above the bottom, the lake is newer than the data and
+    /// lies at its shore; otherwise the data holds the water already and
+    /// the lake is levelled at it. Worked out once per lake (at the data's
+    /// zoom where it can be, which then stands for the coarser tiles too).
+    ///
+    /// `near` (radians) is a point of the lake's shore: a coarse tile asks
+    /// with one, and the level is worked out round it at the data's zoom
+    /// all the same (the coarse tiles' outlines are simplified, their shores
+    /// off by a long way), so every tile and level of detail agrees.
+    pub fn lake_level(&self, near: (f64, f64), lake: u64) -> Option<f32> {
+        if lake == 0 {
+            return None;
+        }
+        if let Some(&(_, l)) = self.lakes.lock().get(&lake) {
+            return (!l.is_nan()).then_some(l);
+        }
+        let want = DATA_ZOOM;
+        let tz = TileId::at(near.0, near.1, DATA_ZOOM);
+        let size = 1i64 << tz.z;
+        let (mut shore, mut under) = (Vec::new(), Vec::new());
+        for dy in -1..=1i64 {
+            for dx in -1..=1i64 {
+                let (x, y) = ((tz.x as i64 + dx).rem_euclid(size), tz.y as i64 + dy);
+                if y < 0 || y >= size {
+                    continue;
+                }
+                let nt = TileId::new(tz.z, x as u32, y as u32);
+                let (Ok(vt), Ok(e)) = (self.vector(nt), self.elev(nt)) else { continue };
+                let ext = vt.extent;
+                // (Samples some 30 m apart along the shore, 90 m apart under the water.)
+                let step = (ext as f64 * 30.0 / nt.width_m()) as f32;
+                let inside = |p: [f32; 2]| p[0] >= 0.0 && p[1] >= 0.0 && p[0] < ext && p[1] < ext;
+                let at = |p: [f32; 2]| e.sample((p[0] / ext) as f64, (p[1] / ext) as f64);
+                for (k, (class, rings)) in vt.water.iter().enumerate() {
+                    if *class != 2 || vt.water_ids.get(k) != Some(&lake) {
+                        continue;
+                    }
+                    let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+                    for r in rings {
+                        for w in r.windows(2) {
+                            let (a, b) = (w[0], w[1]);
+                            // (Not the cut along the tile's edge: that is no shore.)
+                            let edge = |i: usize| (a[i] <= 1.0 && b[i] <= 1.0) || (a[i] >= ext - 1.0 && b[i] >= ext - 1.0);
+                            if edge(0) || edge(1) {
+                                continue;
+                            }
+                            let len = (b[0] - a[0]).hypot(b[1] - a[1]);
+                            let n = (len / step).ceil().max(1.0) as usize;
+                            for j in 0..n {
+                                let t = j as f32 / n as f32;
+                                let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+                                if inside(p) {
+                                    shore.push(at(p));
+                                }
+                            }
+                        }
+                        for p in r {
+                            lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+                            hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+                        }
+                    }
+                    let (x0, y0, x1, y1) = (lo[0].max(0.0), lo[1].max(0.0), hi[0].min(ext), hi[1].min(ext));
+                    let g = step * 3.0;
+                    let mut y = y0 + g * 0.5;
+                    while y < y1 {
+                        let mut x = x0 + g * 0.5;
+                        while x < x1 {
+                            let p = [x, y];
+                            if crate::buildings::in_rings(p, rings) {
+                                under.push(at(p));
+                            }
+                            x += g;
+                        }
+                        y += g;
+                    }
+                }
+            }
+        }
+        if shore.len() < 6 {
+            return None;
+        }
+        let median = |v: &mut Vec<f32>| {
+            v.sort_by(f32::total_cmp);
+            v[v.len() / 2]
+        };
+        let s = median(&mut shore);
+        let u = if under.is_empty() { s } else { median(&mut under) };
+        // (A pond, a lock's chamber newer than the data: too narrow for
+        // the terrain's cells to hold it up; left as the data has it.)
+        if s - u > 6.0 && under.len() < 20 {
+            self.lakes.lock().insert(lake, (want, f32::NAN));
+            return None;
+        }
+        let level = if s - u > 6.0 { s } else { u };
+        let mut lakes = self.lakes.lock();
+        let e = lakes.entry(lake).or_insert((want, level));
+        if e.0 < want {
+            *e = (want, level);
+        }
+        Some(e.1)
+    }
+
+    /// A coarse tile's guess at a lake's surface while the lake's own is not
+    /// worked out yet (no download): the ground at its outline's corners,
+    /// which lie on the shore however much the outline is simplified.
+    fn rough_level(&self, t: TileId, ext: f32, rings: &[Vec<[f32; 2]>]) -> Option<f32> {
+        let e = self.elev(t).ok()?;
+        let mut v: Vec<f32> = rings
+            .iter()
+            .flatten()
+            .filter(|p| p[0] > 1.0 && p[1] > 1.0 && p[0] < ext - 1.0 && p[1] < ext - 1.0)
+            .map(|p| e.sample((p[0] / ext) as f64, (p[1] / ext) as f64))
+            .collect();
+        if v.len() < 4 {
+            return None;
+        }
+        v.sort_by(f32::total_cmp);
+        Some(v[v.len() / 2])
+    }
+
+    /// The lakes of vector tile `t` with their surfaces: (level, rings).
+    /// The coarse tiles (far off) do not wait for a lake's surface to be
+    /// worked out (that downloads the data round it): they take it if it is
+    /// known, else their own rough guess.
+    pub fn lakes_of(&self, t: TileId, vt: &VecTile) -> Vec<(f32, Vec<Vec<[f32; 2]>>)> {
+        vt.water
+            .iter()
+            .zip(vt.water_ids.iter())
+            .filter(|((c, _), _)| *c == 2)
+            .filter_map(|((_, rings), id)| {
+                // (A point of its shore inside this tile.)
+                let ext = vt.extent;
+                let p = rings.iter().flatten().find(|p| p[0] > 0.0 && p[1] > 0.0 && p[0] < ext && p[1] < ext).or_else(|| rings.first()?.first())?;
+                let near = t.lat_lon((p[0] / ext).clamp(0.0, 1.0) as f64, (p[1] / ext).clamp(0.0, 1.0) as f64);
+                let known = (*id != 0).then(|| self.lakes.lock().get(id).map(|e| e.1)).flatten();
+                let level = match known {
+                    Some(l) if l.is_nan() => return None,
+                    Some(l) => l,
+                    None if t.z < 13 => self.rough_level(t, ext, rings)?,
+                    None => self.lake_level(near, *id)?,
+                };
+                Some((level, rings.clone()))
+            })
+            .collect()
     }
 
     /// Satellite image for a tile: Google's when that is on (and has the
@@ -290,6 +450,7 @@ impl Sources {
                     _ => 2,
                 };
                 vt.water.push((class, f.rings));
+                vt.water_ids.push(f.props.get("id").and_then(|v| v.num()).map_or(0, |n| n.max(0.0) as u64));
             }
         }
         if let Some(l) = layers.remove("building") {
@@ -1125,6 +1286,18 @@ pub fn build_tile(src: &Sources, id: TileId) -> Result<TileData> {
         }
         elev.as_ref().map(|t| t.sample(ox + u * sc, oy + v * sc)).unwrap_or(0.0)
     };
+    // The lakes, each flat at its own surface (Sources::lake_level), in the data tile's units.
+    let (lake_ext, lakes) = src.vector(did).map(|vt| (vt.extent, src.lakes_of(did, &vt))).unwrap_or((4096.0, Vec::new()));
+    let lake_boxes: Vec<([f32; 2], [f32; 2])> = lakes
+        .iter()
+        .map(|(_, rings)| rings.iter().flatten().fold(([f32::MAX; 2], [f32::MIN; 2]), |(lo, hi), p| ([lo[0].min(p[0]), lo[1].min(p[1])], [hi[0].max(p[0]), hi[1].max(p[1])])))
+        .collect();
+    let lake_at = |u: f64, v: f64| -> Option<f32> {
+        let p = [((ox + u * sc) * lake_ext as f64) as f32, ((oy + v * sc) * lake_ext as f64) as f32];
+        lakes.iter().zip(lake_boxes.iter()).filter(|(_, (lo, hi))| p[0] >= lo[0] && p[1] >= lo[1] && p[0] <= hi[0] && p[1] <= hi[1]).find_map(|((l, rings), _)| {
+            crate::buildings::in_rings(p, rings).then_some(*l)
+        })
+    };
     let mask = match src.vector(did) {
         Ok(vt) => ground_mask(&vt, ox, oy, sc, id.width_m()),
         // No vector data: fall back to "below sea level is ocean".
@@ -1152,6 +1325,25 @@ pub fn build_tile(src: &Sources, id: TileId) -> Result<TileData> {
     let e = GV + 2;
     let mut pts = vec![DVec3::ZERO; e * e];
     let mut hs = vec![(0f32, 0f32, false); e * e]; // surface height, raw elevation, water
+    // First what each point is: its ground, water, the lake it is in, or a dam.
+    let dams: Vec<Vec<Vec<[f32; 2]>>> = src.vector(did).map(|vt| vt.landuse.iter().filter(|l| l.0 == LU_DAM).map(|l| l.1.clone()).collect()).unwrap_or_default();
+    // Each dam's lake: the highest that comes up against it anywhere.
+    let lake_pt = |p: [f32; 2]| lakes.iter().filter(|(_, r)| crate::buildings::in_rings(p, r)).map(|(l, _)| *l).reduce(f32::max);
+    let reach = (lake_ext as f64 * 30.0 / did.width_m()) as f32;
+    let held: Vec<f32> = dams
+        .iter()
+        .map(|rings| {
+            rings.iter().flatten().flat_map(|p| (0..8).map(move |k| {
+                let a = k as f32 * std::f32::consts::FRAC_PI_4;
+                [p[0] + a.cos() * reach, p[1] + a.sin() * reach]
+            })).filter_map(lake_pt).fold(f32::NEG_INFINITY, f32::max)
+        })
+        .collect();
+    let dam_at = |u: f64, v: f64| -> Option<f32> {
+        let p = [((ox + u * sc) * lake_ext as f64) as f32, ((oy + v * sc) * lake_ext as f64) as f32];
+        dams.iter().zip(held.iter()).filter(|(r, _)| crate::buildings::in_rings(p, r)).map(|(_, h)| *h).reduce(f32::max)
+    };
+    let mut what = vec![(0f32, false, None::<f32>, None::<f32>); e * e];
     for j in 0..e {
         for i in 0..e {
             let (u, v) = ((i as f64 - 1.0) / GRID as f64, (j as f64 - 1.0) / GRID as f64);
@@ -1159,7 +1351,45 @@ pub fn build_tile(src: &Sources, id: TileId) -> Result<TileData> {
             let raw = height_at(uc, vc);
             let (mx, my) = (((uc * MASK as f64) as usize).min(MASK - 1), ((vc * MASK as f64) as usize).min(MASK - 1));
             let water = mask[(my * MASK + mx) * 4] > 127;
-            let h = if water { raw.max(0.0) } else { raw };
+            let lake = lake_at(uc, vc);
+            what[j * e + i] = (raw, water, lake, if lake.is_none() && !dams.is_empty() { dam_at(uc, vc) } else { None });
+        }
+    }
+    // Then its height. A lake is flat at its surface; where the shore next
+    // to it is lower (the data's banks, a river's), its edge comes down to
+    // the bank rather than standing as a wall of water; but not against the
+    // dam that holds it back (dams.rs raises its walls): that lake stays up
+    // to its face, the drop hidden inside it.
+    let near = |i: usize, j: usize, r: i64| {
+        let mut out = Vec::new();
+        for dj in -r..=r {
+            for di in -r..=r {
+                let (x, y) = (i as i64 + di, j as i64 + dj);
+                if (di != 0 || dj != 0) && x >= 0 && y >= 0 && (x as usize) < e && (y as usize) < e {
+                    out.push(y as usize * e + x as usize);
+                }
+            }
+        }
+        out
+    };
+    for j in 0..e {
+        for i in 0..e {
+            let (raw, water, lake, _) = what[j * e + i];
+            let h = match lake {
+                // (Ground well above the water inside a lake's outline is the
+                // outline's error, a coarse tile's simplified shore: a lake
+                // fills a valley up to it, never digs the ground down to it.)
+                Some(level) if raw > level + 3.0 => raw,
+                Some(level) => {
+                    // (A dam next to it counts as a bank unless this is the
+                    // lake it holds back: the highest that reaches it.)
+                    let low = near(i, j, 1).into_iter().filter(|&k| what[k].2.is_none() && what[k].3.is_none_or(|h| level < h - 3.0)).map(|k| what[k].0).fold(f32::MAX, f32::min);
+                    if low < level { low.max(raw).min(level) } else { level }
+                }
+                None if water => raw.max(0.0),
+                None => raw,
+            };
+            let (u, v) = ((i as f64 - 1.0) / GRID as f64, (j as f64 - 1.0) / GRID as f64);
             let (lat, lon) = id.lat_lon(u, v);
             pts[j * e + i] = geo::lla_to_pos(lat, lon, h as f64) - center;
             hs[j * e + i] = (h, raw, water);
@@ -1410,3 +1640,4 @@ mod night_lights_tests {
         assert!(loader.queue.0.lock().len() <= 10);
     }
 }
+

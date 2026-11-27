@@ -580,6 +580,8 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
     let yellow = cx.lon < -30.0;
     let mut out = Roads { verts: Vec::new(), idx: Vec::new(), net: RoadNet { left: drives_left(cx.lat, cx.lon), ..Default::default() }, mask: vec![0u8; RASTER * RASTER], radius: 0.0 };
     let own_bridges = bridge_pieces(vt);
+    // The lakes, at their surfaces.
+    let lakes = src.lakes_of(cx.id, vt);
     // Roads that only repeat another one are not laid a second time.
     let dup = redundant(vt, urban, um);
     let mut mids: Vec<(u64, u32, f32)> = Vec::new();
@@ -720,6 +722,12 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
                     let t = (ea + cum[i]) / total;
                     let clear = (std::f32::consts::PI * t).sin().max(0.0) * 6.0;
                     zs[i] = (za + (zb - za) * t + camber * 4.0 * t * (1.0 - t)).max(zs[i] + clear);
+                    // Over a lake: clear of its water (a reservoir filled since
+                    // the elevation data, sources::lake_level, stands well over
+                    // the valley floor the bridge was laid on).
+                    if let Some(l) = lakes.iter().filter(|(_, r)| crate::buildings::in_rings(pts[i], r)).map(|(l, _)| *l).reduce(f32::max) {
+                        zs[i] = zs[i].max(l + 8.0);
+                    }
                 }
             } else {
                 let grade = match line.class { RC_MOTORWAY => 0.06, RC_TRUNK => 0.08, RC_PRIMARY | RC_SECONDARY => 0.09, _ => 0.12 };
@@ -996,7 +1004,7 @@ mod tests {
         RoadLine { pts, class, brunnel: 0, oneway: false, ramp: false, layer: 0, sub: 0 }
     }
     fn tile(roads: Vec<RoadLine>) -> VecTile {
-        VecTile { extent: 1024.0, water: vec![], buildings: vec![], roads, landcover: vec![], landuse: vec![], aero_lines: vec![], aero_polys: vec![], gates: vec![] }
+        VecTile { extent: 1024.0, water: vec![], water_ids: vec![], buildings: vec![], roads, landcover: vec![], landuse: vec![], aero_lines: vec![], aero_polys: vec![], gates: vec![] }
     }
 
     #[test]

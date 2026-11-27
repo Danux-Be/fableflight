@@ -16,7 +16,7 @@
 //! concrete (buildings.wgsl, plain surface 9) is poured in lifts between
 //! contraction joints and streaked where water has run down it.
 
-use crate::buildings::{point_in_ring, Ctx, Footprint, Mesh, K_PLAIN};
+use crate::buildings::{in_rings, point_in_ring, Ctx, Footprint, Mesh, K_PLAIN};
 use crate::geo::TileId;
 use crate::sources::{Sources, VecTile, DATA_ZOOM};
 use std::collections::HashMap;
@@ -72,7 +72,9 @@ pub fn parse(gz: &[u8]) -> Vec<Dam> {
 /// The table's dam nearest (lat, lon) (degrees), within `reach` metres.
 pub fn nearest(lat: f64, lon: f64, reach: f64) -> Option<&'static Dam> {
     let t = table();
-    let dlat = reach / 111_000.0;
+    // (Long dams reach further than `reach` from their middle: look as far
+    // as the longest might, then by each one's own length.)
+    let dlat = reach.max(4_000.0) / 111_000.0;
     let lo = t.partition_point(|d| d.lat < lat - dlat);
     let coslat = lat.to_radians().cos().max(0.05);
     t[lo..]
@@ -114,7 +116,10 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &Sources, mesh: &mut Mesh, footprints:
     let ext = cx.ext;
     let um = cx.unit_m;
     let waters: Vec<&Vec<Vec<[f32; 2]>>> = vt.water.iter().filter(|w| w.0 >= 2).map(|w| &w.1).collect();
-    let in_water = |p: [f32; 2]| waters.iter().any(|rings| point_in_ring(p, &rings[0]) && !rings[1..].iter().any(|h| point_in_ring(p, h)));
+    let in_water = |p: [f32; 2]| waters.iter().any(|rings| in_rings(p, rings));
+    // The lakes, at their surfaces (Sources::lake_level).
+    let lakes = src.lakes_of(cx.id, vt);
+    let lake_at = |p: [f32; 2]| lakes.iter().filter(|(_, r)| in_rings(p, r)).map(|(l, _)| *l).reduce(f32::max);
     for (_, rings) in vt.landuse.iter().filter(|l| l.0 == crate::sources::LU_DAM) {
         let Some(outer) = rings.first() else { continue };
         let mut ring: Vec<[f32; 2]> = outer.clone();
@@ -172,7 +177,7 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &Sources, mesh: &mut Mesh, footprints:
         if let Some(f) = rec_foot.filter(|f| *f < f32::MAX) {
             foot = f;
         }
-        let crest = match rec {
+        let mut crest = match rec {
             Some(d) if d.height > 0.0 => foot + d.height,
             Some(Dam { crest: Some(e), .. }) if *e > foot + 3.0 && *e < foot + 400.0 => *e,
             _ => top_g,
@@ -204,37 +209,70 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &Sources, mesh: &mut Mesh, footprints:
         }
         let axis = (Vec2::from(ring[ib]) - Vec2::from(ring[ia])).normalize_or_zero();
         let across = Vec2::new(-axis.y, axis.x);
+        // How much water each side, and the highest lake there.
         let wet = |sgn: f32| {
-            let mut k = 0;
+            let (mut k, mut lv) = (0, None::<f32>);
             for t in [0.3f32, 0.5, 0.7] {
                 let p = Vec2::from(ring[ia]).lerp(Vec2::from(ring[ib]), t);
                 for m in (2..=12).map(|j| j as f32 * 50.0) {
-                    k += in_water(at(p, across * sgn, m)) as i32;
+                    let q = at(p, across * sgn, m);
+                    k += in_water(q) as i32;
+                    if let Some(l) = lake_at(q) {
+                        lv = Some(lv.map_or(l, |v: f32| v.max(l)));
+                    }
                 }
             }
-            k
+            (k, lv)
         };
-        let (wp, wm) = (wet(1.0), wet(-1.0));
-        // (Clearly more on one side, or it is a wall in the river, a quay
-        // or a lock's side: one the table knows is then left on the
-        // ground rather than raised the wrong way.)
-        let up_dir = if wp as f32 > wm as f32 * 1.5 + 2.0 { across } else if wm as f32 > wp as f32 * 1.5 + 2.0 { -across } else { Vec2::ZERO };
-        if up_dir == Vec2::ZERO && rec.is_some() {
+        let ((wp, lp), (wm, lm)) = (wet(1.0), wet(-1.0));
+        // Edge by edge, the lake just before it (if any).
+        let edge_lv: Vec<Option<f32>> = (0..n)
+            .map(|i| {
+                let mid = Vec2::from(ring[i]).lerp(Vec2::from(ring[(i + 1) % n]), 0.5);
+                [20.0f32, 45.0].iter().filter_map(|m| lake_at(at(mid, out_n(i), *m))).reduce(f32::max)
+            })
+            .collect();
+        let top_lake = edge_lv.iter().flatten().copied().reduce(f32::max);
+        let (up_edge, up_level): (Vec<bool>, Option<f32>) = if let Some(top) = top_lake {
+            // The upstream faces are the edges the highest lake it touches
+            // comes up against, whatever the outline's shape. Round a lake
+            // on every side, it is a mole or a breakwater: left alone.
+            let up: Vec<bool> = (0..n).map(|i| edge_lv[i].is_some_and(|l| l >= top - 1.0) && !border(ring[i], ring[(i + 1) % n])).collect();
+            let below = (0..n).any(|i| !border(ring[i], ring[(i + 1) % n]) && edge_lv[i].is_none_or(|l| l < top - 3.0));
+            if below { (up, Some(top)) } else { (vec![false; n], None) }
+        } else {
+            // No lake: the side with clearly more water (a river) is upstream,
+            // and the edges facing it with nothing of the outline before them.
+            let up_dir = if wp as f32 > wm as f32 * 1.5 + 2.0 { across } else if wm as f32 > wp as f32 * 1.5 + 2.0 { -across } else { Vec2::ZERO };
+            if up_dir == Vec2::ZERO {
+                (vec![false; n], None)
+            } else {
+                let front = |i: usize| {
+                    let mid = Vec2::from(ring[i]).lerp(Vec2::from(ring[(i + 1) % n]), 0.5);
+                    !(1..=30).any(|k| point_in_ring(at(mid, up_dir, k as f32 * 15.0), &ring))
+                };
+                ((0..n).map(|i| out_n(i).dot(up_dir) > 0.3 && !border(ring[i], ring[(i + 1) % n]) && front(i)).collect(), None)
+            }
+        };
+        let _ = (lp, lm);
+        let sectioned = up_edge.iter().any(|b| *b);
+        // One the table knows that none of this can place is left on the
+        // ground rather than raised wrong.
+        if !sectioned && rec.is_some() {
             continue;
         }
-        if up_dir != Vec2::ZERO {
-            // A section along the upstream edge (the dam's axis): what else
-            // the outline holds downstream (training walls, powerhouses,
-            // aprons) stays on the ground.
-            // (Only the edges that face the lake with nothing of the dam's
-            // outline before them: a training wall's side downstream faces
-            // the same way, but the dam stands between it and the water.)
-            let front = |i: usize| {
-                let mid = Vec2::from(ring[i]).lerp(Vec2::from(ring[(i + 1) % n]), 0.5);
-                !(1..=30).any(|k| point_in_ring(at(mid, up_dir, k as f32 * 15.0), &ring))
-            };
-            let up_edge: Vec<bool> = (0..n).map(|i| out_n(i).dot(up_dir) > 0.3 && !border(ring[i], ring[(i + 1) % n]) && front(i)).collect();
-            // Runs of consecutive upstream edges, as their vertices.
+        // The crest stands clear of the lake it holds back. (One the table
+        // does not know: as high as the lake and its freeboard, not as the
+        // hillsides its outline runs onto.)
+        if let Some(l) = up_level {
+            let free = (0.06 * (crest - foot)).clamp(3.0, 12.0);
+            crest = if rec.is_some() { crest.max(l + free) } else { l + free };
+        }
+        if sectioned {
+            // A section along the upstream faces: what else the outline
+            // holds downstream (training walls, powerhouses, aprons) stays
+            // on the ground.
+                // Runs of consecutive upstream edges, as their vertices.
             let start = (0..n).find(|&i| !up_edge[i]).unwrap_or(0);
             let mut runs: Vec<Vec<usize>> = Vec::new();
             let mut cur: Vec<usize> = Vec::new();
@@ -276,17 +314,31 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &Sources, mesh: &mut Mesh, footprints:
                     let g = cx.ground(q);
                     (at(p, d, s * (crest - g).max(0.0)), g - 2.0)
                 };
+                // Every 15 m or so along the run, so the faces' feet follow the
+                // ground (a valley between two corners on the hillsides).
+                let mut dense: Vec<(Vec2, Vec2, f32)> = Vec::new();
+                for k in 0..m - 1 {
+                    let (p0, p1) = (Vec2::from(ring[run[k]]), Vec2::from(ring[run[k + 1]]));
+                    let len = p0.distance(p1) * um;
+                    let steps = (len / 15.0).ceil().max(1.0) as usize;
+                    let d0 = dense.last().map_or(0.0, |l| l.2);
+                    for j in 0..steps {
+                        let t = j as f32 / steps as f32;
+                        dense.push((p0.lerp(p1, t), if j == 0 { dn[k] } else { -out_n(run[k]) }, d0 + len * t));
+                    }
+                    if k + 2 == m {
+                        dense.push((p1, dn[m - 1], d0 + len));
+                    }
+                }
+                let m = dense.len();
                 let mut sec = Vec::with_capacity(m);
                 let mut dist = vec![0.0f32; m];
-                for k in 0..m {
-                    let p = Vec2::from(ring[run[k]]);
-                    if k > 0 {
-                        dist[k] = dist[k - 1] + p.distance(Vec2::from(ring[run[k - 1]])) * um;
-                    }
-                    let ce: [f32; 2] = at(p, dn[k], cw);
-                    let (ub, uz) = reach(p, -dn[k], up_s);
-                    let (db, dz) = reach(Vec2::from(ce), dn[k], down_s);
-                    sec.push((ring[run[k]], ce, ub, uz, db, dz));
+                for (k, &(p, d, l)) in dense.iter().enumerate() {
+                    dist[k] = l;
+                    let ce: [f32; 2] = at(p, d, cw);
+                    let (ub, uz) = reach(p, -d, up_s);
+                    let (db, dz) = reach(Vec2::from(ce), d, down_s);
+                    sec.push((<[f32; 2]>::from(p), ce, ub, uz, db, dz));
                 }
                 for k in 0..m - 1 {
                     let (s0, s1) = (sec[k], sec[k + 1]);
@@ -330,11 +382,9 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &Sources, mesh: &mut Mesh, footprints:
                 continue;
             }
             let nrm = out_n(i);
-            // How far the face runs out for each metre down: the upstream
-            // face plumb (an embankment's sloping), the downstream one
-            // battered, the ends (against the valley sides) plumb.
-            let side = nrm.dot(up_dir);
-            let slope = if side > 0.5 { if fill { 2.5 } else { 0.0 } } else if side < -0.5 { if fill { 2.0 } else { 0.75 } } else { 0.0 };
+            // (Which way is upstream is not known here: an embankment's
+            // faces slope, a concrete dam's stand plumb.)
+            let slope = if fill { 2.0 } else { 0.0 };
             // Each end down to the ground where the face meets it (one
             // step of refinement: the ground out there, then that far).
             let base = |p: [f32; 2]| {
@@ -398,4 +448,16 @@ mod tests {
         assert!(d.length > 2000.0 && d.material == 1, "{d:?}");
         assert!(nearest(0.0, -30.0, 400.0).is_none(), "in the middle of the Atlantic");
     }
+
+    #[test]
+    fn a_feature_with_two_polygons_and_a_hole_is_read_even_odd() {
+        // Two squares, the first with an island: as a map tile's feature has them.
+        let sq = |x0: f32, y0: f32, s: f32| vec![[x0, y0], [x0 + s, y0], [x0 + s, y0 + s], [x0, y0 + s], [x0, y0]];
+        let rings = vec![sq(0.0, 0.0, 10.0), sq(4.0, 4.0, 2.0), sq(20.0, 0.0, 5.0)];
+        assert!(in_rings([1.0, 1.0], &rings));
+        assert!(!in_rings([5.0, 5.0], &rings), "the island");
+        assert!(in_rings([22.0, 2.0], &rings), "the second polygon");
+        assert!(!in_rings([15.0, 2.0], &rings));
+    }
 }
+
