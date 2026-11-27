@@ -181,6 +181,9 @@ pub struct Graphics {
     /// wind turbines where OpenStreetMap has them (turbines.rs; Off, or Low
     /// to High: how far they are drawn; Ultra is High)
     pub turbines: Level,
+    /// power lines where OpenStreetMap has them (power.rs; Off, or Low to
+    /// High: how far they are drawn; Ultra is High)
+    pub power: Level,
     /// ambient occlusion (GTAO)
     pub ao: bool,
     /// water: Low plain (a flat sea bed, simple foam, one reflected cloud
@@ -220,7 +223,7 @@ pub const SCALE_MAX: f32 = 2.0;
 impl Graphics {
     /// One of the presets (taa and vsync on).
     pub fn preset(p: Preset) -> Self {
-        let mut g = Graphics { scale: 1.0, shadows: Level::High, clouds: Level::High, cloud_shadows: true, storms: Level::High, contrails: true, terrain: Level::High, scenery: Level::High, city: Level::High, trees: Level::High, cars: Level::High, birds: Level::High, balloons: Level::High, turbines: Level::High, ao: true, water: Level::High, msaa: 4, taa: true, upscaler: Upscaler::Bilinear, vsync: true, fps_cap: 0, dynamic: false, dyn_fps: 0 };
+        let mut g = Graphics { scale: 1.0, shadows: Level::High, clouds: Level::High, cloud_shadows: true, storms: Level::High, contrails: true, terrain: Level::High, scenery: Level::High, city: Level::High, trees: Level::High, cars: Level::High, birds: Level::High, balloons: Level::High, turbines: Level::High, power: Level::High, ao: true, water: Level::High, msaa: 4, taa: true, upscaler: Upscaler::Bilinear, vsync: true, fps_cap: 0, dynamic: false, dyn_fps: 0 };
         g.apply(p);
         g
     }
@@ -249,6 +252,7 @@ impl Graphics {
         self.birds = if very_low { Level::Off } else { capped };
         self.balloons = if very_low { Level::Low } else { capped };
         self.turbines = if very_low { Level::Low } else { capped };
+        self.power = if very_low { Level::Low } else { capped };
         self.ao = matches!(l, Level::High | Level::Ultra);
         // (Low has always gone without the reflections on screen)
         self.water = match p {
@@ -324,6 +328,7 @@ impl Graphics {
         g.trees = lvl("trees", g.trees);
         g.cars = j["cars"].as_str().and_then(Level::parse).map(|l| if l == Level::Ultra { Level::High } else { l }).unwrap_or(g.cars);
         g.birds = j["birds"].as_str().and_then(Level::parse).map(|l| if l == Level::Ultra { Level::High } else { l }).unwrap_or(g.birds);
+        g.power = j["power_lines"].as_str().and_then(Level::parse).map(|l| if l == Level::Ultra { Level::High } else { l }).unwrap_or(g.power);
         g.turbines = j["turbines"].as_str().and_then(Level::parse).map(|l| if l == Level::Ultra { Level::High } else { l }).unwrap_or(g.turbines);
         g.balloons = j["balloons"].as_str().and_then(Level::parse).map(|l| if l == Level::Ultra { Level::High } else { l }).unwrap_or(g.balloons);
         g.ao = j["ao"].as_bool().unwrap_or(g.ao);
@@ -352,6 +357,7 @@ impl Graphics {
             "birds": self.birds.name(),
             "balloons": self.balloons.name(),
             "turbines": self.turbines.name(),
+            "power_lines": self.power.name(),
             "ao": self.ao,
             "water": self.water.name(),
             "msaa": self.msaa,

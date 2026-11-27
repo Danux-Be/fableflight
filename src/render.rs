@@ -27,6 +27,7 @@ const MAX_INST: usize = 16384;
 /// scenery instances drawn in a frame, and materials in all the packs together
 const MAX_SCENERY: usize = 8192;
 const MAX_PEOPLE: usize = 1024;
+const MAX_WIRES: usize = 32768;
 const SC_MATS: usize = 128;
 const MAX_FALL: usize = 4096;
 /// trees and undergrowth close enough to the camera for their leaf cards
@@ -1096,6 +1097,8 @@ pub struct Frame<'a> {
     pub scenery: Vec<(u32, Inst)>,
     /// (mesh, instance) of the people in the balloon baskets (`set_people`)
     pub people: Vec<(u32, Inst)>,
+    /// spans of power line wire (power.rs)
+    pub wires: Vec<crate::power::Wire>,
     /// (tree mesh, instance) for trees that have been knocked loose, camera-relative
     pub fall: Vec<(u32, TreeInst)>,
     /// trees (for their leaf cards) and undergrowth near the camera, relative to their tiles
@@ -1278,6 +1281,9 @@ pub struct Renderer {
     /// textures (group 1), its meshes and this frame's instances
     p_scenery: wgpu::RenderPipeline,
     p_scenery_shadow: wgpu::RenderPipeline,
+    /// power line wires (power.rs, wires.wgsl) and their spans this frame
+    p_wires: wgpu::RenderPipeline,
+    wires_buf: wgpu::Buffer,
     l_scenery: wgpu::BindGroupLayout,
     scenery_buf: wgpu::Buffer,
     scenery_lib: Option<MeshLib>,
@@ -2621,7 +2627,7 @@ impl Renderer {
         let (
             (p_cshadow_in, p_cshadow_out, p_cshadow_in_plain, p_cshadow_out_plain, p_cshadow_mix, (p_ap_build, p_sky_build, p_cloud_refl, p_cloud_refl_plain), (p_comp_cls, p_comp_sky, p_comp_opaque, p_comp_glass, p_comp_water, p_comp_edge, p_composite, p_composite_edge), p_cloud, p_cloud_plain, p_cloud_classify, p_cloud_plain_cls, p_cloud_storm_cls, p_cloud_rain, p_cloud_temporal, p_cloud_apply),
             (p_terrain, p_terrain_far, p_terrain_water, p_terrain_tess, p_terrain_cells, p_terrain_photo, p_terrain_tess_photo, p_terrain_cells_photo, p_build, p_build_whole, p_build_shadow, p_photo, p_skin, p_photo_shadow, p_photo_shadow_fast, p_photo_mask, p_water_top, p_shore_cover),
-            (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_veil, p_contrails, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow, p_scenery, p_scenery_shadow),
+            (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_veil, p_contrails, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow, p_scenery, p_scenery_shadow, p_wires),
             (p_trans, p_ms, p_sky, p_gtao, p_ao_blur, p_taa, p_down, p_up, p_final, p_final_taa, p_blit, p_particles, p_psim, p_vol, p_dres),
         ) = std::thread::scope(|s| {
 
@@ -2881,8 +2887,12 @@ impl Renderer {
                 let p_scenery = geom("scenery", Some(&l_scenery), &m_scenery, &[vb(32, false, &A_SCENERY), vb(80, true, &A_INST)], 0);
                 // (mode 4: the shadow with its fragment stage, for the fence's cut-out wires)
                 let p_scenery_shadow = geom("scenery shadow", Some(&l_scenery), &m_scenery, &[vb(32, false, &A_SCENERY), vb(80, true, &A_INST)], 4);
+                // Power line wires (power.rs): an instance per span, its ribbon made in the vertex stage.
+                const A_WIRE: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4];
+                let m_wires = module("wires", include_str!("shaders/wires.wgsl"));
+                let p_wires = geom("wires", None, &m_wires, &[vb(48, true, &A_WIRE)], 0);
                 crate::progress::step("shaders-part");
-                (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_veil, p_contrails, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow, p_scenery, p_scenery_shadow)
+                (p_road, p_field, p_lights, p_lamp_top, p_rain, p_bolt, p_veil, p_contrails, p_tree, imp, p_tree_near, p_tree_shadow, p_tree_shadow_fixed, p_card, p_inst, p_inst_shadow, p_scenery, p_scenery_shadow, p_wires)
             });
 
             let p_trans = full("trans", &pl0, &m_lut, "fs_trans", HDR, None);
@@ -3005,6 +3015,7 @@ impl Renderer {
         let near_buf = dynbuf("near trees", MAX_NEAR as u64 * 36);
         let scenery_buf = dynbuf("scenery instances", MAX_SCENERY as u64 * 80);
         let people_buf = dynbuf("people instances", MAX_PEOPLE as u64 * 80);
+        let wires_buf = dynbuf("wire spans", MAX_WIRES as u64 * 48);
         let dyn_lights = dynbuf("aircraft lights", MAX_DYN_LIGHTS as u64 * 40);
         let bolt_buf = dynbuf("lightning", crate::storm::MAX_SEGS as u64 * 32);
         let contrail_nodes = d.create_buffer(&wgpu::BufferDescriptor {
@@ -3089,7 +3100,7 @@ impl Renderer {
         Ok(Self {
             ground_mats,
             casc_ub, bg_casc, bg_tileu, l_dres, l_ao, p_gtao, p_ao_blur, p_dres, p_road, p_field, p_lights, dyn_lights, p_rain, p_veil, p_bolt, bolt_buf, p_contrails, bg_contrails, contrail_nodes, contrail_segs, p_tree, p_tree_near, imp, p_tree_shadow, p_tree_shadow_fixed, p_card, near_buf, p_inst, p_inst_shadow, inst_buf, fall_buf, tree_lib: None, inst_lib: None,
-            p_scenery, p_scenery_shadow, l_scenery, scenery_buf, scenery_lib: None, bg_scenery: None, people_buf, people_lib: None, bg_people: None,
+            p_scenery, p_scenery_shadow, l_scenery, scenery_buf, scenery_lib: None, bg_scenery: None, people_buf, people_lib: None, bg_people: None, p_wires, wires_buf,
             gpu_timer: crate::gputime::GpuTimer::new(&device, &queue),
             frame_clock: crate::gputime::FrameClock::new(&device, &queue),
             globals_ub, bg0, bg0_pre, bg0_shadow, lut_sky, shadow, shadow_res: SHADOW_RES, bg0_src, scale: 1.0, ao: true, cloud_step: 1.0, l_tile, l_build, l_comp_cls, l_comp_main, l_comp_edge, l_comp_globe, l_hiz, ap_l, ap_t, cloud_refl, bg_atmlut, bg_comp_sky, p_hiz_build, p_ap_build, p_sky_build, p_cloud_refl, p_cloud_refl_plain, l_cloud, l_cloud_storm, l_cloud_rain, l_cloud_apply, l_cloud_temporal, l_post, l_pdraw, l_glass,
@@ -3974,6 +3985,10 @@ impl Renderer {
             q.write_buffer(&self.people_buf, 0, bytemuck::cast_slice(&data));
             people_ranges = ranges;
         }
+        let n_wires = f.wires.len().min(MAX_WIRES) as u32;
+        if n_wires > 0 {
+            q.write_buffer(&self.wires_buf, 0, bytemuck::cast_slice(&f.wires[..n_wires as usize]));
+        }
         let mut fall_ranges = Vec::new();
         if let Some(lib) = &self.tree_lib {
             let n = f.fall.len().min(MAX_FALL);
@@ -4382,6 +4397,12 @@ impl Renderer {
                         rp.draw_indexed(first..first + count, base, r.0..r.1);
                     }
                 }
+            }
+            // (No shadows for wires: a few centimetres across.)
+            if part & 2 != 0 && !shadow && n_wires > 0 {
+                rp.set_pipeline(&self.p_wires);
+                rp.set_vertex_buffer(0, self.wires_buf.slice(..));
+                rp.draw(0..16 * 6, 0..n_wires);
             }
             let fast = self.obj_fast.as_ref().filter(|_| !shadow);
             // Depth prepass of the whole pieces the specialised shader draws

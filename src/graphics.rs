@@ -318,6 +318,15 @@ impl Graphics {
             let km = crate::turbines::reach(self.turbines) / 1000.0;
             dim(ui, if km > 0.0 { t!("graphics.turbines_caps", km) } else { t!("graphics.no_turbines").to_string() });
         });
+        row(ui, t!("graphics.power_lines"), t!("graphics.power_lines_hint"), |ui| {
+            menu::segments(ui, |ui| {
+                for l in [Level::Off, Level::Low, Level::Medium, Level::High] {
+                    menu::seg(ui, &mut self.power, l, l.label());
+                }
+            });
+            let km = crate::power::reach(self.power) / 1000.0;
+            dim(ui, if km > 0.0 { t!("graphics.power_lines_caps", km) } else { t!("graphics.no_power_lines").to_string() });
+        });
         row(ui, t!("graphics.ambient_occlusion"), t!("graphics.ambient_occlusion_hint"), |ui| {
             menu::switch(ui, &mut self.ao);
         });
