@@ -253,9 +253,10 @@ pub fn atmosphere_at(pos: DVec3, wx: &Weather, doy: f64, eta: f64, ei_h2o: f64) 
     let clim_sfc_c = 28.0 - 44.0 * smoothstep(5.0, 78.0, abs_lat) + (12.0 * smoothstep(15.0, 65.0, abs_lat)) * (warm_season * 2.0 - 1.0);
     let mut dt_sfc = (clim_sfc_c - 15.0).clamp(-32.0, 16.0);
     if let Some(frz) = wx.freezing {
-        // Live METAR / Open-Meteo freezing level (ISA freezing level is ~2308 m).
+        // Live METAR / Open-Meteo freezing level (ISA freezing level is ~2308 m),
+        // less the day's warmth `t_isa` already has (plane::set_air).
         let live_dt = ((frz - 2307.7) * 0.0065).clamp(-48.0, 18.0);
-        dt_sfc = live_dt;
+        dt_sfc = live_dt - plane::air_now().1;
     }
     // Surface anomaly attenuates smoothly toward the tropopause; in winter polar air
     // the whole troposphere is noticeably colder, allowing lower contrails.
@@ -426,6 +427,17 @@ pub fn spec_engines(spec: &Spec, stage: usize) -> Vec<EngineMount> {
                     let (x, y, z) = (e[0], e[1] - yg, e[2] + 6.0 - zn);
                     out.push(EngineMount { pos: Vec3::new(-x, y, z), scale, eta, ei_h2o, group: G_LWING });
                     out.push(EngineMount { pos: Vec3::new(x, y, z), scale, eta, ei_h2o, group: G_RWING });
+                }
+                return out;
+            }
+            if key == "c130" {
+                // Four T56 turboprops: each tailpipe out of its nacelle under the wing's lower
+                // skin (c130::dims::exhaust); a turboprop's overall efficiency about a turbojet's [est].
+                let mut out = Vec::with_capacity(4);
+                for e in 0..2 {
+                    let p = crate::aircraft::c130::dims::exhaust(e);
+                    out.push(EngineMount { pos: Vec3::new(-p.x, p.y, p.z), scale, eta: 0.30, ei_h2o, group: G_LWING });
+                    out.push(EngineMount { pos: p, scale, eta: 0.30, ei_h2o, group: G_RWING });
                 }
                 return out;
             }
@@ -899,7 +911,8 @@ impl Contrails {
             if spd < 35.0 {
                 continue;
             }
-            let spec = crate::aircraft::nth(r.aircraft as usize);
+            // (`r.aircraft` is the sender's `Spec::id`, not a place in `list()`.)
+            let spec = crate::aircraft::BUILTIN.iter().copied().find(|s| s.id == r.aircraft as u32).unwrap_or(crate::aircraft::BUILTIN[0]);
             let mounts = spec_engines(spec, 0);
             let env = atmosphere_at(r.pos, wx, doy, mounts[0].eta, mounts[0].ei_h2o);
             if env.strength <= 0.02 {

@@ -12,6 +12,7 @@
 #![allow(clippy::approx_constant)]
 pub mod b747;
 pub mod bonanza;
+pub mod c130;
 pub mod c172;
 pub mod concorde;
 pub mod dr400;
@@ -86,7 +87,8 @@ pub fn cockpit_controls(spec: &Spec, pieces: &[crate::airframe::Piece]) -> Vec<(
             }));
         (*h, index)
     }).collect();
-    if BUILTIN.iter().any(|s| std::ptr::eq(*s, spec)) {
+    // (any model built from our own pieces: a downloaded model has none with a hotspot)
+    {
         controls.extend(pieces.iter().enumerate().filter_map(|(i, p)| {
             let mut h = p.hotspot?;
             h.at = (p.pivot + Vec3::from(h.at)).to_array();
@@ -106,7 +108,7 @@ pub fn animated_hotspots(controls: &[(Hotspot, Option<usize>)], pose: &[glam::Ma
 }
 
 /// The types built into the game, in the order the menu lists them.
-pub static BUILTIN: [&Spec; 11] = [&c172::SPEC, &dr400::SPEC, &bonanza::SPEC, &b747::SPEC, &fa18::SPEC, &f4::SPEC, &f22::SPEC, &starship::SPEC, &concorde::SPEC, &sr71::SPEC, &g650::SPEC];
+pub static BUILTIN: [&Spec; 12] = [&c172::SPEC, &dr400::SPEC, &bonanza::SPEC, &b747::SPEC, &c130::SPEC, &fa18::SPEC, &f4::SPEC, &f22::SPEC, &starship::SPEC, &concorde::SPEC, &sr71::SPEC, &g650::SPEC];
 
 /// Types added while the game runs: JSBSim aircraft the player downloaded
 /// (see hangar.rs), each flying with a stand-in from `BUILTIN` as its body.
@@ -452,6 +454,9 @@ pub enum Sound {
     Turbojet,
     /// a cluster of rocket engines (audio.rs `Rocket`)
     Rocket,
+    /// four turboprops: the propellers' drone at their blade-passing
+    /// frequency and the turbines' whine (audio.rs `Turboprop`)
+    Turboprop,
 }
 
 /// A heat-seeking missile on a hardpoint: the model piece that is the loaded
@@ -493,6 +498,7 @@ pub fn liveries(spec: &Spec) -> &'static [Livery] {
     else if std::ptr::eq(spec, &bonanza::SPEC) { bonanza::LIVERIES }
     else if std::ptr::eq(spec, &b747::SPEC) { b747::LIVERIES }
     else if std::ptr::eq(spec, &g650::SPEC) { g650::LIVERIES }
+    else if std::ptr::eq(spec, &c130::SPEC) { c130::paint::LIVERIES }
     else { &[] }
 }
 
@@ -694,7 +700,30 @@ pub struct Spec {
     /// chase camera distance and the size of its own fine shadow map (m)
     pub cam_dist: f64,
     pub shadow_r: f32,
+    /// a helicopter's rotors (plane/heli.rs flies it instead of the wing)
+    pub rotor: Option<Rotor>,
+    /// floats instead of wheels: its legs are pontoons that ride on water and slide on land
+    pub floats: bool,
     pub sound: Sound,
+}
+
+/// A helicopter's rotors (plane/heli.rs).
+#[derive(Clone, Debug)]
+pub struct Rotor {
+    /// main rotor radius (m) and its governed speed (rpm)
+    pub radius: f64,
+    pub rpm: f64,
+    /// the most thrust it gives at sea level, full collective, governed speed (N)
+    pub thrust: f64,
+    /// the main rotor's hub and the tail rotor's, body frame
+    pub hub: DVec3,
+    pub tail: DVec3,
+    /// the fuselage's drag area (m²), the cyclic's authority (rad/s² at full stick), the pedals' torque (N m)
+    pub drag_area: f64,
+    pub cyclic: f64,
+    pub pedal: f64,
+    /// never exceed, true airspeed (m/s)
+    pub vne: f64,
 }
 
 /// A downloaded JSBSim aircraft behind a `Spec`.
@@ -717,6 +746,14 @@ impl Spec {
     /// them modelled; other types get an empty list.)
     pub fn missiles(&self) -> &'static [MissileStation] {
         if self.keys.contains(&"fa18") { &fa18::MISSILES } else { &[] }
+    }
+
+    /// A turboprop flown as `Engine::Fan` (the C-130's T56s): each engine's
+    /// rated shaft power (hp), for what the hangar and the panels say about
+    /// it; None for every other type.
+    pub fn turboprop_shp(&self) -> Option<f64> {
+        // T56-A-15: 4,591 shp (c130/flight.rs).
+        if self.keys.contains(&"c130") { Some(4591.0) } else { None }
     }
 
     /// Gear that never retracts (no fold rate): always down, the gear key does nothing.

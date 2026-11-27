@@ -49,6 +49,9 @@ holding pattern inbound outbound course final base downwind crosswind upwind leg
 extend make three sixty traffic in sight not number sequence behind company
 continue approved request requested present position airborne
 fable please check stop immediately
+able advise below call cancel change departed departing deviation deviations favoured filed
+flights following landed minutes off out pilot possible reported shortly taxiing taxiways this
+took use vacate vfr am over your time zulu degrees by ready niner
 norcal socal potomac chicago new york boston jacksonville
 """
 

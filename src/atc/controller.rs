@@ -14,10 +14,12 @@
 //! the air, or after a jump to another place, the machine picks up where the
 //! flight is: on a final approach the tower clears it to land.
 //!
-//! The world has no real ATC frequencies, so each station gets made-up but
-//! plausible ones, always the same for the same station. Names follow the
-//! airport's town ("San Francisco Tower"); the centre is named after the
-//! nearest large airport's town, "Center" in North America and "Control"
+//! The stations are the airport's real ones where OurAirports lists them
+//! (`atc::stations`, the same the COM radio tunes), named as the text ATC
+//! names them ("San Francisco Tower"). An airport without one for the job
+//! gets a made-up but plausible frequency, always the same for the same
+//! station. The centre is always made up (the data has too few): named after
+//! the nearest large airport's town, "Center" in North America and "Control"
 //! elsewhere.
 
 use super::phrase::Phrase;
@@ -121,12 +123,6 @@ const DEPARTURE_TOP: f64 = 12_000.0;
 impl Controller {
     pub fn new(callsign: &str) -> Self {
         Controller { callsign: callsign.to_owned(), state: State::Start, t: 0.0, since: 0.0, last: None }
-    }
-
-    /// Forget the flight (a new one starts).
-    pub fn reset(&mut self) {
-        self.state = State::Start;
-        self.last = None;
     }
 
     /// The phase, for the radio page ("Taxi", "Approach").
@@ -477,12 +473,23 @@ pub fn runway_for(apt: u32, s: &Situation) -> String {
 }
 
 /// What a station at `apt` is called ("San Francisco Tower"), and its
-/// made-up frequency (kHz).
+/// frequency (kHz): the real one when the airport lists it (departure falls
+/// back on approach and the other way round), else a made-up one.
 pub fn station(apt: u32, fac: Facility) -> (String, u32) {
+    use super::Kind;
+    let want: &[Kind] = match fac {
+        Facility::Ground => &[Kind::Gnd],
+        Facility::Tower => &[Kind::Twr],
+        Facility::Departure => &[Kind::Dep, Kind::App],
+        Facility::Approach => &[Kind::App, Kind::Dep],
+        Facility::Center => &[],
+    };
+    let real = super::stations(apt);
+    if let Some(f) = want.iter().find_map(|k| real.iter().find(|f| f.kind == *k)) {
+        return (f.name(), (f.mhz * 1000.0).round() as u32);
+    }
     let a = &Db::get().apts[apt as usize];
-    let town = if a.city.trim().is_empty() { a.name.as_str() } else { a.city.as_str() };
-    // "Paris / Roissy" and the like: the first name of it
-    let town = town.split(['/', ',', '(']).next().unwrap_or(town).trim();
+    let town = super::place_name(a);
     let what = match fac {
         Facility::Ground => "Ground",
         Facility::Tower => "Tower",

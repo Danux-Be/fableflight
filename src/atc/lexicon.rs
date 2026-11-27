@@ -19,7 +19,7 @@ pub struct Lexicon {
     words: FxHashMap<String, String>,
 }
 
-const DIGITS: [&str; 10] = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "niner"];
+pub(crate) const DIGITS: [&str; 10] = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "niner"];
 
 impl Lexicon {
     pub fn get() -> &'static Lexicon {
@@ -52,7 +52,7 @@ impl Lexicon {
     }
 
     #[cfg(test)]
-    pub fn knows(&self, word: &str) -> bool {
+    fn knows(&self, word: &str) -> bool {
         self.words.contains_key(&word.to_lowercase())
     }
 

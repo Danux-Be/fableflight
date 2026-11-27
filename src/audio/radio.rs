@@ -20,12 +20,10 @@
 //! Voices come in at their own sample rate (Kokoro speaks at 24 kHz) and are
 //! resampled linearly; the channel filter's 3 kHz top hides the artefacts.
 
-// Wired into the mixer by the ATC module; for now the tests drive it.
-#![allow(dead_code)]
-
 use super::{Bq, DT, RATE, Rng, Slow, kf};
 
 /// The rate `Transmission` plays at: the mixer's.
+#[cfg(test)]
 pub const OUT_RATE: u32 = RATE;
 
 /// A controller's mic and transmitter: the character of one voice on the air.
@@ -200,6 +198,7 @@ impl Transmission {
     }
 
     /// All of it, rendered.
+    #[cfg(test)]
     pub fn render(mut self) -> Vec<f32> {
         (0..self.len()).map(|_| self.sample()).collect()
     }
