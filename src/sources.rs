@@ -84,6 +84,8 @@ pub const LU_RESIDENTIAL: u8 = 1;
 pub const LU_COMMERCIAL: u8 = 2;
 pub const LU_INDUSTRIAL: u8 = 3;
 pub const LU_OPEN: u8 = 4; // pitches, playgrounds: nothing grows or gets built here
+/// a dam's outline (dams.rs raises it)
+pub const LU_DAM: u8 = 5;
 
 /// A runway or taxiway centreline.
 pub struct AeroLine {
@@ -392,6 +394,7 @@ impl Sources {
                         "commercial" | "retail" => LU_COMMERCIAL,
                         "industrial" | "railway" | "garages" => LU_INDUSTRIAL,
                         "pitch" | "playground" | "track" | "stadium" => LU_OPEN,
+                        "dam" => LU_DAM,
                         _ => continue,
                     }
                 };

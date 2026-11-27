@@ -434,6 +434,24 @@ fn shade_building(in: VOut) -> GOut {
     } else if (sub == 8u) {
       // Balcony: concrete slab, and a railing with glass or bars.
       albedo = base * (0.8 + 0.2 * n);
+    } else if (sub == 9u) {
+      // Dam (dams.rs): uv metres along the face and down from the crest.
+      if (top) {
+        // The crest road: worn asphalt, a dashed white line down the middle.
+        albedo = base * (0.85 + 0.3 * n);
+      } else {
+        // Mass concrete poured in lifts (a fine line every 1.5 m) between
+        // contraction joints (every 18 m), each block a shade of its own,
+        // darker streaks running down from the crest where water has
+        // seeped and stained it, fading further down.
+        let blk = floor(in.uv.x / 18.0);
+        let tone = 0.86 + 0.18 * hash1(blk * 3.7 + seed * 17.0);
+        let joint = box(fract(in.uv.x / 18.0) - 0.5, 0.494, fwm.x / 18.0);
+        let lift = box(fract(in.uv.y / 1.5) - 0.5, 0.47, fwm.y / 1.5);
+        let st = textureSample(t_wave, s_repeat, vec2f(in.uv.x / 6.0 + seed, in.uv.y / 120.0)).a;
+        let wet = smoothstep(0.5, 0.85, st) * (0.35 + 0.65 * exp(-in.uv.y / 70.0));
+        albedo = base * tone * (0.85 + 0.25 * n) * mix(0.72, 1.0, joint) * mix(0.9, 1.0, lift) * (1.0 - 0.4 * wet);
+      }
     }
   }
   if (sh < 0.0) { sh = shadow_at(in.P, N); }

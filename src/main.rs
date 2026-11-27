@@ -14,6 +14,7 @@ mod balloons;
 mod turbines;
 mod birds;
 mod buildings;
+mod dams;
 mod aircraft;
 mod cockpit;
 mod copilot;

@@ -2208,6 +2208,10 @@ pub fn build(src: &Sources, id: TileId) -> Result<BuildingData> {
     }
     let bld_end = [m.main.len(), m.det.len(), m.fine.len(), m.far.len()];
 
+    // Dams before the roads: nothing is laid or grown over them.
+    for ring in crate::dams::build(&cx, &vt, src, &mut m, &mut footprints) {
+        raster(&mut built, RASTER, ext, &[ring], 1);
+    }
     let mut roads = crate::roads::build(&cx, &vt, src, &mut m, &mut footprints, &built);
     let parked = crate::roads::park_cars(&cx, &roads.net, &hoods, &built);
     let grown = crate::trees::place(&cx, &vt, &hoods, &built, &roads.mask);
