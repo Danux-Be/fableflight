@@ -573,7 +573,60 @@ pub fn surface_mask(vt: &VecTile, ext: f32, um: f32) -> Vec<u8> {
     mask
 }
 
+/// The terrain as the game draws it at the coarser levels of detail
+/// (sources::build_tile: GRID cells a tile from the elevation data, each
+/// split along one diagonal). Roads follow the finest elevation, which the
+/// near terrain (zoom 16 and finer) matches; further off the terrain is a
+/// coarser mesh that rises over them in hollows and on cross-slopes. Each
+/// road vertex carries how far the terrain drawn at zooms 13, 14 and 15
+/// stands from the fine ground there, and roads.wgsl moves it by the one
+/// drawn at its distance, so it lies on whichever terrain is showing.
+pub struct DrawnGround<'a> {
+    src: &'a Sources,
+    cache: HashMap<TileId, Option<std::sync::Arc<ElevTile>>>,
+}
+
+/// The coarser levels whose offsets a road vertex carries.
+pub const LOD_ZOOMS: [u8; 3] = [13, 14, 15];
+
+impl<'a> DrawnGround<'a> {
+    pub fn new(src: &'a Sources) -> Self {
+        DrawnGround { src, cache: HashMap::new() }
+    }
+
+    /// The drawn terrain's height at zoom `z`, at (lat, lon) radians.
+    pub fn at(&mut self, z: u8, lat: f64, lon: f64) -> Option<f32> {
+        let t = TileId::at(lat, lon, z);
+        let (did, ox, oy, sc) = t.ancestor(DATA_ZOOM);
+        let src = self.src;
+        let e = self.cache.entry(did).or_insert_with(|| src.elev(did).ok()).clone()?;
+        let (u, v) = t.frac(lat, lon);
+        let g = GRID as f64;
+        let (gx, gy) = ((u * g).clamp(0.0, g - 1e-9), (v * g).clamp(0.0, g - 1e-9));
+        let (i, j) = (gx.floor(), gy.floor());
+        let (fx, fy) = ((gx - i) as f32, (gy - j) as f32);
+        let h = |i: f64, j: f64| e.sample(ox + (i / g).clamp(0.0, 1.0) * sc, oy + (j / g).clamp(0.0, 1.0) * sc);
+        let (a, b, c, d) = (h(i, j), h(i + 1.0, j), h(i, j + 1.0), h(i + 1.0, j + 1.0));
+        // (The cell's two triangles: (i, j) (i, j+1) (i+1, j) and (i+1, j) (i, j+1) (i+1, j+1).)
+        Some(if fx + fy <= 1.0 { a + (b - a) * fx + (c - a) * fy } else { d + (c - d) * (1.0 - fx) + (b - d) * (1.0 - fy) })
+    }
+
+    /// How far the terrain drawn at each of `LOD_ZOOMS` stands above the fine
+    /// ground `fine` at tile point `p`.
+    pub fn offsets(&mut self, cx: &Ctx, p: [f32; 2], fine: f32) -> [f32; 3] {
+        let (lat, lon) = cx.id.lat_lon((p[0] / cx.ext) as f64, (p[1] / cx.ext) as f64);
+        LOD_ZOOMS.map(|z| self.at(z, lat, lon).map_or(0.0, |h| h - fine))
+    }
+
+    /// The highest the ground under `p` is drawn at any level of detail.
+    pub fn top(&mut self, cx: &Ctx, p: [f32; 2]) -> f32 {
+        let fine = cx.ground(p);
+        fine + self.offsets(cx, p, fine).iter().fold(0.0f32, |m, o| m.max(*o))
+    }
+}
+
 pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut Mesh, footprints: &mut Vec<Footprint>, built: &[u8]) -> Roads {
+    let mut dg = DrawnGround::new(src);
     let ext = cx.ext;
     let um = cx.unit_m;
     let urban = vt.buildings.len() > 150;
@@ -615,18 +668,21 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
         }
     }
     for (p, radius, class) in pads.into_iter().take(2048) {
-        let center = cx.pos(p.into(), cx.ground(p.into()) + 0.15);
+        let g0 = cx.ground(p.into());
+        let center = cx.pos(p.into(), g0 + 0.15);
         let start = out.verts.len() as u32;
         let kind = class as u32 | (yellow as u32) << 5 | (left as u32) << 13;
-        let vertex = |position: Vec3, across: f32| RoadVertex { pos: position.into(), q: [across, 0.0, radius, 1e4], kind: kind as f32 };
-        out.verts.push(vertex(center, 0.0));
+        let vertex = |position: Vec3, across: f32, lod: [f32; 3]| RoadVertex { pos: position.into(), q: [across, 0.0, radius, 1e4], kind: kind as f32, lod };
+        out.verts.push(vertex(center, 0.0, dg.offsets(cx, p.into(), g0)));
         let count = 16u32;
         for i in 0..=count {
             let a = i as f32 / count as f32 * std::f32::consts::TAU;
             let offset = Vec2::new(a.cos(), a.sin()) * radius;
-            let position = cx.pos((p + offset / um).into(), cx.ground((p + offset / um).into()) + 0.15);
+            let q: [f32; 2] = (p + offset / um).into();
+            let g = cx.ground(q);
+            let position = cx.pos(q, g + 0.15);
             out.radius = out.radius.max(position.length());
-            out.verts.push(vertex(position, offset.x));
+            out.verts.push(vertex(position, offset.x, dg.offsets(cx, q, g)));
         }
         for i in 0..count {
             out.idx.extend([start, start + i + 1, start + i + 2]);
@@ -720,6 +776,16 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
                     let t = (ea + cum[i]) / total;
                     let clear = (std::f32::consts::PI * t).sin().max(0.0) * 6.0;
                     zs[i] = (za + (zb - za) * t + camber * 4.0 * t * (1.0 - t)).max(zs[i] + clear);
+                    // Clear of the ground however coarsely it is drawn (a
+                    // valley's coarse terrain rises over the fine ground it
+                    // was made from), except near the ends, which meet the
+                    // roads leading on.
+                    let from_end = (ea + cum[i]).min(eb + len - cum[i]);
+                    let w = ((from_end - 8.0) / 20.0).clamp(0.0, 1.0);
+                    if w > 0.0 {
+                        let top = [0.0f32, 1.0, -1.0].iter().map(|s| dg.top(cx, side(i, *s, half))).fold(f32::MIN, f32::max);
+                        zs[i] = zs[i].max(zs[i] + (top + 0.6 - zs[i]) * w);
+                    }
                 }
             } else {
                 let grade = match line.class { RC_MOTORWAY => 0.06, RC_TRUNK => 0.08, RC_PRIMARY | RC_SECONDARY => 0.09, _ => 0.12 };
@@ -777,7 +843,7 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
                             let p = side(i, side_sign, half);
                             let pos = cx.pos(p, zs[i] + 0.08);
                             out.radius = out.radius.max(pos.length());
-                            out.verts.push(RoadVertex { pos: pos.into(), q: [-side_sign * half, pre + cum[i], half, endd], kind: kind as f32 });
+                            out.verts.push(RoadVertex { pos: pos.into(), q: [-side_sign * half, pre + cum[i], half, endd], kind: kind as f32, lod: [0.0; 3] });
                         }
                     }
                     for i in 0..n as u32 - 1 {
@@ -785,21 +851,30 @@ pub fn build(cx: &Ctx, vt: &VecTile, src: &crate::sources::Sources, mesh: &mut M
                         out.idx.extend([a, a + 1, a + 2, a + 1, a + 3, a + 2]);
                     }
                 } else {
-                    // Ribbon on the ground: each edge takes its own height so it lies on slopes.
+                    // Ribbon on the ground: each edge (and the middle of a wide
+                    // road) at least as high as the ground under it, so the
+                    // uphill side of a road across a slope is not buried; each
+                    // vertex knows the coarser terrain round it (DrawnGround).
+                    let rows: &[f32] = if half > 4.0 { &[1.0, 0.0, -1.0] } else { &[1.0, -1.0] };
+                    let nr = rows.len() as u32;
                     let v0 = out.verts.len() as u32;
                     for i in 0..n {
                         // Measured so that the junction's edge is always at `half`.
                         let endd = stops.iter().fold(1e4f32, |m, (s, j)| m.min((cum[i] - s).abs() - (j.half - half)));
-                        for s in [1.0f32, -1.0] {
+                        for &s in rows {
                             let p = side(i, s, half);
-                            let pos = cx.pos(p, zs[i] + 0.12);
+                            let g = cx.ground(p);
+                            let pos = cx.pos(p, zs[i].max(g) + 0.12);
                             out.radius = out.radius.max(pos.length());
-                            out.verts.push(RoadVertex { pos: pos.into(), q: [-s * half, cum[i], half, endd], kind: kind as f32 });
+                            out.verts.push(RoadVertex { pos: pos.into(), q: [-s * half, cum[i], half, endd], kind: kind as f32, lod: dg.offsets(cx, p, g) });
                         }
                     }
                     for i in 0..n as u32 - 1 {
-                        let a = v0 + i * 2;
-                        out.idx.extend([a, a + 1, a + 2, a + 1, a + 3, a + 2]);
+                        for r in 0..nr - 1 {
+                            let a = v0 + i * nr + r;
+                            let b = a + nr;
+                            out.idx.extend([a, a + 1, b, a + 1, b + 1, b]);
+                        }
                     }
                 }
                 // Street furniture: lights along the road, signals where it meets a big one.

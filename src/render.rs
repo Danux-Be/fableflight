@@ -569,6 +569,9 @@ pub struct RoadVertex {
     /// across, along, half width, distance to the nearest end (all metres)
     pub q: [f32; 4],
     pub kind: f32,
+    /// how far the terrain drawn at zooms 13, 14, 15 stands above the fine
+    /// ground here (roads::DrawnGround; roads.wgsl follows the one showing)
+    pub lod: [f32; 3],
 }
 
 #[repr(C)]
@@ -2481,7 +2484,7 @@ impl Renderer {
             ],
         );
         let skin_slots = d.create_buffer(&wgpu::BufferDescriptor { label: Some("skin slots"), size: ((SKIN_SLOT_BUF + SKIN_SLOTS) * 64) as u64, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
-        let l_tileu = layout("tile offset", &[ub_entry(0, true, 48)]);
+        let l_tileu = layout("tile offset", &[ub_entry(0, true, 64)]);
         let l_casc = layout("cascade", &[ub_entry(0, true, 64)]);
         let l_dres = layout(
             "depth resolve",
@@ -2660,7 +2663,7 @@ impl Renderer {
             wgpu::VertexAttribute { format: VF::Uint8x4, offset: 28, shader_location: 4 },
         ];
         const A_MESH: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4];
-        const A_ROAD: [wgpu::VertexAttribute; 3] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32];
+        const A_ROAD: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x4, 2 => Float32, 3 => Float32x3];
         const A_TREEV: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 6 => Float32x4, 7 => Float32x4];
         const A_TREE: [wgpu::VertexAttribute; 3] = [
             wgpu::VertexAttribute { format: VF::Float32x4, offset: 0, shader_location: 3 },
@@ -2842,7 +2845,7 @@ impl Renderer {
             });
 
             let t_misc = s.spawn(|| {
-                let p_road = geom("road", Some(&l_tileu), &m_road, &[vb(32, false, &A_ROAD)], 2);
+                let p_road = geom("road", Some(&l_tileu), &m_road, &[vb(44, false, &A_ROAD)], 2);
                 let p_field = geom("airfield", Some(&l_tileu), &m_field, &[vb(56, false, &A_AIR)], 2);
                 let p_lights = d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("lights"),
@@ -2871,7 +2874,7 @@ impl Renderer {
                 let p_lamp_top = d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("lamp top"),
                     layout: Some(&d.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[Some(&l0), Some(&l_tileu), Some(&l_casc)], immediate_size: 0 })),
-                    vertex: wgpu::VertexState { module: &m_road, entry_point: Some("vs_top"), compilation_options: Default::default(), buffers: &[vb(32, false, &A_ROAD)] },
+                    vertex: wgpu::VertexState { module: &m_road, entry_point: Some("vs_top"), compilation_options: Default::default(), buffers: &[vb(44, false, &A_ROAD)] },
                     primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
                     depth_stencil: None,
                     multisample: Default::default(),
@@ -3064,7 +3067,7 @@ impl Renderer {
         let pool = |label: &str, n: u64| d.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size: n * UB_ALIGN, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let (tile_ub, build_ub, obj_ub, casc_ub) = (pool("tiles", MAX_TILES), pool("builds", MAX_BUILDS + 1 + MAX_FIELDS as u64), pool("objs", MAX_OBJS * OBJ_STRIDE / UB_ALIGN), pool("cascades", CASCADES as u64 + 4));
         let photo_ub = pool("photo tiles", MAX_PHOTO);
-        let bg_tileu = d.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &l_tileu, entries: &[buf_res(0, &build_ub, 48)] });
+        let bg_tileu = d.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &l_tileu, entries: &[buf_res(0, &build_ub, 64)] });
         let bg_casc = d.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &l_casc, entries: &[buf_res(0, &casc_ub, 64)] });
         let dynbuf = |label: &str, size: u64| d.create_buffer(&wgpu::BufferDescriptor { label: Some(label), size, usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let (inst_buf, fall_buf) = (dynbuf("instances", MAX_INST as u64 * 80), dynbuf("loose trees", MAX_FALL as u64 * 36));

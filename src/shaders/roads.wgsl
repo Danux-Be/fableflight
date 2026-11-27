@@ -1,7 +1,33 @@
 // Roads: ribbons laid over the terrain and blended onto it, with lanes,
 // markings, kerbs and sidewalks drawn procedurally.
-struct BTile { offset: vec4f, ax: vec4f, ay: vec4f };
+// lod.w: the terrain's level of detail factor (world.rs: a tile is split
+// while its width over its distance is over this).
+struct BTile { offset: vec4f, ax: vec4f, ay: vec4f, lod: vec4f };
 @group(1) @binding(0) var<uniform> T: BTile;
+
+// How far to move a road vertex so it lies on the terrain as drawn at its
+// distance: `lod` is how far the terrain drawn at zooms 13, 14 and 15 stands
+// from the fine ground the road was laid on (roads.rs DrawnGround); finer
+// zooms draw that ground itself. A tile is drawn at width W if W is under
+// k x its distance and its parent was split, which puts W between about
+// k d / 5.5 and k d: every zoom in that range may be showing there, and the
+// road keeps over the highest of them.
+fn lod_lift(P: vec3f, lod: vec3f) -> f32 {
+  let k = T.lod.w;
+  if (k <= 0.0) { return 0.0; }
+  let d = max(length(P), 1.0);
+  let up = normalize(P - G.planet.xyz);
+  // a tile's width at zoom 0 at this latitude
+  let w0 = 6.2831853 * G.planet.w * sqrt(max(1.0 - up.z * up.z, 4e-4));
+  let zc = log2(w0 / (k * d));
+  var lift = -1e9;
+  for (var z = i32(ceil(zc)); f32(z) <= zc + 2.46; z++) {
+    var o = 0.0;
+    if (z <= 13) { o = lod.x; } else if (z == 14) { o = lod.y; } else if (z == 15) { o = lod.z; }
+    lift = max(lift, o);
+  }
+  return select(lift, 0.0, lift < -1e8);
+}
 
 struct VOut {
   @builtin(position) clip: vec4f,
@@ -10,8 +36,9 @@ struct VOut {
   @location(2) @interpolate(flat) kind: u32,
 };
 
-@vertex fn vs(@location(0) pos: vec3f, @location(1) q: vec4f, @location(2) kind: f32) -> VOut {
+@vertex fn vs(@location(0) pos: vec3f, @location(1) q: vec4f, @location(2) kind: f32, @location(3) lod: vec3f) -> VOut {
   var P = pos + T.offset.xyz;
+  P += normalize(P - G.planet.xyz) * lod_lift(P, lod);
   P += normalize(P - G.planet.xyz) * crater_field(P).w;
   var clip = G.view_proj * vec4f(P, 1.0);
   // Pull slightly toward the eye so the ribbon wins against the terrain it lies on.
@@ -85,8 +112,9 @@ struct TopOut {
   @location(2) @interpolate(flat) kind: u32,
   @location(3) dist: f32,
 };
-@vertex fn vs_top(@location(0) pos: vec3f, @location(1) q: vec4f, @location(2) kind: f32) -> TopOut {
-  let P = pos + T.offset.xyz;
+@vertex fn vs_top(@location(0) pos: vec3f, @location(1) q: vec4f, @location(2) kind: f32, @location(3) lod: vec3f) -> TopOut {
+  var P = pos + T.offset.xyz;
+  P += normalize(P - G.planet.xyz) * lod_lift(P, lod);
   return TopOut(CS.vp * vec4f(P, 1.0), q, height_of(P), u32(kind + 0.5), length(P));
 }
 @fragment fn fs_top(in: TopOut) -> @location(0) vec4f {

@@ -1927,7 +1927,7 @@ impl World {
             let reach = [buildings::BFAR[1], LOD_MID, LOD_FINE].map(|r| buildings::HCLASS.iter().take_while(|c| dist < r * c.1 * ck).count() as u8);
             details.push(DetailDraw {
                 gpu: g,
-                u: [o.x, o.y, o.z, 0.0, b.ax[0], b.ax[1], b.ax[2], b.ax[3], b.ay[0], b.ay[1], b.ay[2], b.ay[3], lod[0], lod[1], lod[2], 0.0],
+                u: [o.x, o.y, o.z, 0.0, b.ax[0], b.ax[1], b.ax[2], b.ax[3], b.ay[0], b.ay[1], b.ay[2], b.ay[3], lod[0], lod[1], lod[2], (self.lod_k / self.mem_k as f64) as f32],
                 view: *view,
                 near: dist < 3000.0,
                 far: if o.length() + (b.radius as f32) < buildings::BFAR[0] * ck { 0 } else if reach[0] == 0 { 2 } else { 1 },
